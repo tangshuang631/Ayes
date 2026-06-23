@@ -8,6 +8,7 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import re
 from typing import Callable, List, Optional
 from io import BytesIO
 from uuid import uuid4
@@ -548,7 +549,62 @@ class WatchRunner:
                 )
                 self._record_event(match_event)
                 emitted.append(match_event)
+        extracted_numbers = self._extract_numeric_candidates(event.text.ocr_text)
+        for rule in self.spec.watch_intent.rules:
+            if rule.type != "numeric_threshold":
+                continue
+            for candidate in extracted_numbers:
+                if not self._compare_numeric_rule(candidate, rule.operator or "eq", rule.value or 0.0):
+                    continue
+                match_event = replace(
+                    build_event(
+                        task_id=self.task_id,
+                        spec_version=self.spec.spec_version,
+                        task_mode=self.spec.mode,
+                        timestamp=event.timestamp,
+                        source="semantic_match",
+                        event_type="semantic_match",
+                        priority="high",
+                        confidence=0.92,
+                        target=event.target,
+                        observability=event.observability,
+                        summary=(
+                            f"命中数值阈值规则: {rule.field or 'numeric_field'} "
+                            f"{rule.operator} {rule.value}，当前识别值 {candidate:g}"
+                        ),
+                    ),
+                    related_event_ids=[event.event_id],
+                    tags=["watch_match", "numeric_threshold", rule.field or "numeric_field"],
+                )
+                self._record_event(match_event)
+                emitted.append(match_event)
+                break
         return emitted
+
+    def _extract_numeric_candidates(self, text: str) -> List[float]:
+        if not text:
+            return []
+        normalized = text.replace(",", "").replace("，", "")
+        candidates: List[float] = []
+        for raw in re.findall(r"(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?", normalized):
+            try:
+                candidates.append(float(raw))
+            except ValueError:
+                continue
+        return candidates
+
+    def _compare_numeric_rule(self, candidate: float, operator: str, threshold: float) -> bool:
+        if operator == "lt":
+            return candidate < threshold
+        if operator == "lte":
+            return candidate <= threshold
+        if operator == "gt":
+            return candidate > threshold
+        if operator == "gte":
+            return candidate >= threshold
+        if operator == "eq":
+            return candidate == threshold
+        return False
 
     def _maybe_emit_alert_events(self, match_events):
         if not match_events:
