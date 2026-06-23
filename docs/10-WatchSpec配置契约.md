@@ -267,6 +267,10 @@ OCR 频率由 `ocr_interval_ms` 控制。
 - `cooldown_sec`
 - `dedupe_window_sec`
 
+完整告警策略见：
+
+- [14-企业微信Webhook告警策略.md](/Users/apple/Desktop/2026/Ayes/docs/14-企业微信Webhook告警策略.md)
+
 ## 10. 受控刷新点击
 
 `refresh_click` 是受控辅助动作，只服务于监控任务。
