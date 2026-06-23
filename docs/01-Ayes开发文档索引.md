@@ -59,6 +59,7 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - [10-WatchSpec配置契约.md](/Users/apple/Desktop/2026/Ayes/docs/10-WatchSpec配置契约.md)
 - [11-事件模型契约.md](/Users/apple/Desktop/2026/Ayes/docs/11-事件模型契约.md)
 - [12-记忆存储设计.md](/Users/apple/Desktop/2026/Ayes/docs/12-记忆存储设计.md)
+- [13-问答检索路径.md](/Users/apple/Desktop/2026/Ayes/docs/13-问答检索路径.md)
 
 ## 5. 文档维护规则
 
@@ -73,6 +74,7 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - 调整 watch spec、任务模式、采样频率、OCR 频率、记忆策略、webhook 策略、受控动作策略时，优先修改 [10-WatchSpec配置契约.md](/Users/apple/Desktop/2026/Ayes/docs/10-WatchSpec配置契约.md)
 - 调整事件字段、事件类型、证据引用、优先级、可观测性和告警/动作审计事件时，优先修改 [11-事件模型契约.md](/Users/apple/Desktop/2026/Ayes/docs/11-事件模型契约.md)
 - 调整短期详细记忆、长期轻量记忆、保留时间、清理策略和查询边界时，优先修改 [12-记忆存储设计.md](/Users/apple/Desktop/2026/Ayes/docs/12-记忆存储设计.md)
+- 调整问答链路、关键词检索、向量检索、混合检索、回答结构和重启后记忆接续策略时，优先修改 [13-问答检索路径.md](/Users/apple/Desktop/2026/Ayes/docs/13-问答检索路径.md)
 
 ## 6. 临时文档位置
 

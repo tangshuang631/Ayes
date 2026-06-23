@@ -94,6 +94,7 @@
     "long_term": {
       "enabled": true,
       "retain_hours": 24,
+      "max_retain_hours": 72,
       "summary_interval_minutes": 5,
       "detail_level": "summary"
     }
@@ -220,9 +221,11 @@ OCR 频率由 `ocr_interval_ms` 控制。
 
 - 默认开启
 - 默认保留 24 小时
+- 最高可配置到 72 小时
 - 每 5 分钟生成一次摘要
 - 只保存关键事件、告警、阶段摘要和状态变化
 - 不保存与短期详细记忆同等密度的细节
+- 必须持久化，服务或 skill 重启后不能清零
 
 长期轻量记忆用于回答：
 
@@ -289,6 +292,7 @@ OCR 频率由 `ocr_interval_ms` 控制。
 - `mode` 必须是 `triggered` 或 `observe`
 - `target.type` 必须是 `process`、`window` 或 `screen`
 - `short_term.retain_minutes` 不能超过 15
+- `long_term.retain_hours` 不能超过 72
 - `screenshot_interval_ms` 必须大于 0
 - `ocr_interval_ms` 必须大于 0
 - `triggered` 模式下 `watch_intent.enabled` 必须为 true
