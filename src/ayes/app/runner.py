@@ -20,7 +20,7 @@ from ayes.capture.ticker import SamplingTicker
 from ayes.config.models import TargetRegion, WatchSpec
 from ayes.detect.diff import ByteDiffDetector
 from ayes.events.factory import build_event
-from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region
+from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, WatchMatch
 from ayes.memory.short_term import QueryResult, ShortTermMemoryStore
 from ayes.ocr.models import ImageInput
 from ayes.ocr.service import OCRService
@@ -543,6 +543,12 @@ class WatchRunner:
                         target=event.target,
                         observability=event.observability,
                         summary=f"命中监控关键词: {query}",
+                        watch_match=WatchMatch(
+                            matched=True,
+                            score=0.9,
+                            matched_query=query,
+                            matched_rule="query_contains",
+                        ),
                     ),
                     related_event_ids=[event.event_id],
                     tags=["watch_match", query],
@@ -571,6 +577,14 @@ class WatchRunner:
                         summary=(
                             f"命中数值阈值规则: {rule.field or 'numeric_field'} "
                             f"{rule.operator} {rule.value}，当前识别值 {candidate:g}"
+                        ),
+                        watch_match=WatchMatch(
+                            matched=True,
+                            score=1.0,
+                            matched_rule=f"numeric_threshold:{rule.field or 'numeric_field'}:{rule.operator}:{rule.value}",
+                            matched_value=candidate,
+                            matched_unit=rule.unit or "",
+                            matched_field=rule.field or "numeric_field",
                         ),
                     ),
                     related_event_ids=[event.event_id],

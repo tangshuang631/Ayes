@@ -70,6 +70,27 @@ function buildEventDetailLines(item) {
   const lines = [];
   lines.push(`${formatTimestamp(item.timestamp)} | ${item.source || "-"} | ${item.priority || "-"}`);
   lines.push(buildRegionMeta(item));
+  if (item.watch_match?.matched) {
+    const parts = [];
+    if (item.watch_match.matched_field) {
+      parts.push(`字段=${item.watch_match.matched_field}`);
+    }
+    if (item.watch_match.matched_value !== null && item.watch_match.matched_value !== undefined) {
+      parts.push(`值=${item.watch_match.matched_value}`);
+    }
+    if (item.watch_match.matched_unit) {
+      parts.push(`单位=${item.watch_match.matched_unit}`);
+    }
+    if (item.watch_match.matched_rule) {
+      parts.push(`规则=${item.watch_match.matched_rule}`);
+    }
+    if (item.watch_match.matched_query) {
+      parts.push(`查询=${item.watch_match.matched_query}`);
+    }
+    if (parts.length) {
+      lines.push(`命中: ${parts.join(" | ")}`);
+    }
+  }
   if (item.visual?.summary) {
     lines.push(`视觉: ${item.visual.summary}`);
   }

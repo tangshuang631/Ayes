@@ -98,6 +98,11 @@ def test_runner_emits_watch_match_event_when_numeric_threshold_rule_hits() -> No
     match_event = next(event for event in events if event.event_type == "semantic_match")
     assert "199" in match_event.summary
     assert "lt 299.0" in match_event.summary
+    assert match_event.watch_match.matched is True
+    assert match_event.watch_match.matched_rule == "numeric_threshold:price:lt:299.0"
+    assert match_event.watch_match.matched_field == "price"
+    assert match_event.watch_match.matched_value == 199.0
+    assert match_event.watch_match.matched_unit == "cny"
 
 
 def test_runner_does_not_emit_watch_match_event_when_numeric_threshold_rule_misses() -> None:

@@ -26,3 +26,5 @@ def test_build_event_sets_defaults_and_ids() -> None:
     assert event.event_id.startswith("evt_")
     assert event.watch_match.matched_rule == "price_lt_299"
     assert event.summary == "检测到价格变化"
+    assert event.watch_match.matched_value is None
+    assert event.watch_match.matched_field == ""

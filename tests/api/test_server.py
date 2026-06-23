@@ -243,3 +243,47 @@ def test_timeline_recent_exposes_region_visual_and_text_blocks() -> None:
         assert "visual" in item
         assert "text" in item
         assert "blocks" in (item.get("text") or {})
+
+
+def test_timeline_recent_exposes_structured_watch_match_fields() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_numeric_watch_match",
+            "mode": "triggered",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {
+                "enabled": True,
+                "summary": "价格低于 299 时提醒",
+                "queries": [],
+                "rules": [
+                    {
+                        "type": "numeric_threshold",
+                        "field": "price",
+                        "operator": "lt",
+                        "value": 299.0,
+                        "unit": "cny",
+                    }
+                ],
+            },
+        },
+    )
+    response = client.post("/api/watch/run-once")
+    assert response.status_code == 200
+    timeline_response = client.get("/api/timeline/recent", params={"task_id": "task_numeric_watch_match", "minutes": 5, "limit": 20})
+    assert timeline_response.status_code == 200
+    items = timeline_response.json()["items"]
+    match_item = next((item for item in items if item.get("event_type") == "semantic_match"), None)
+    if match_item is not None:
+        watch_match = match_item.get("watch_match") or {}
+        assert watch_match.get("matched") is True
+        assert watch_match.get("matched_field") == "price"
+        assert watch_match.get("matched_value") == 199.0
+        assert watch_match.get("matched_unit") == "cny"

@@ -71,6 +71,9 @@ class WatchMatch:
     score: float = 0.0
     matched_query: str = ""
     matched_rule: str = ""
+    matched_value: Optional[float] = None
+    matched_unit: str = ""
+    matched_field: str = ""
 
 
 @dataclass(frozen=True)
