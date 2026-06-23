@@ -66,10 +66,20 @@ function buildRegionMeta(item) {
   return `${label} | ${region.coordinate_space || "target"} | x=${region.x ?? 0}, y=${region.y ?? 0}, w=${region.w ?? 0}, h=${region.h ?? 0}`;
 }
 
+function buildLocationSummary(item) {
+  if (item.location_summary) {
+    return item.location_summary;
+  }
+  return "";
+}
+
 function buildEventDetailLines(item) {
   const lines = [];
   lines.push(`${formatTimestamp(item.timestamp)} | ${item.source || "-"} | ${item.priority || "-"}`);
   lines.push(buildRegionMeta(item));
+  if (buildLocationSummary(item)) {
+    lines.push(`位置: ${buildLocationSummary(item)}`);
+  }
   if (item.watch_match?.matched) {
     const parts = [];
     if (item.watch_match.matched_field) {
@@ -100,7 +110,18 @@ function buildEventDetailLines(item) {
   if ((item.text?.blocks || []).length) {
     const blockPreview = item.text.blocks
       .slice(0, 3)
-      .map((block) => `${block.text} [${(block.bbox || []).join(", ")}]`)
+      .map((block) => {
+        const rectNorm = block.rect_norm || {};
+        const rect = block.rect || {};
+        const rectNormText = Object.keys(rectNorm).length
+          ? `norm x=${Number(rectNorm.x ?? 0).toFixed(2)}, y=${Number(rectNorm.y ?? 0).toFixed(2)}, w=${Number(rectNorm.w ?? 0).toFixed(2)}, h=${Number(rectNorm.h ?? 0).toFixed(2)}`
+          : "";
+        const rectText = Object.keys(rect).length
+          ? `px x=${Number(rect.x ?? 0).toFixed(1)}, y=${Number(rect.y ?? 0).toFixed(1)}, w=${Number(rect.w ?? 0).toFixed(1)}, h=${Number(rect.h ?? 0).toFixed(1)}`
+          : "";
+        const detail = [rectNormText, rectText].filter(Boolean).join(" | ");
+        return detail ? `${block.text} [${detail}]` : `${block.text} [${(block.bbox || []).join(", ")}]`;
+      })
       .join("\n");
     lines.push(`块:\n${blockPreview}`);
   }
@@ -535,7 +556,7 @@ function renderSnippets(items) {
     node.className = "timeline-item";
     node.innerHTML = `
       <div class="timeline-title">${item.preview || "无可用文本"}</div>
-      <div class="timeline-meta">${item.summary || ""}\n${item.ocr_text || ""}\n${formatTimestamp(item.timestamp)}</div>
+      <div class="timeline-meta">${item.summary || ""}\n${item.location_summary ? `位置: ${item.location_summary}\n` : ""}${item.ocr_text || ""}\n${formatTimestamp(item.timestamp)}</div>
     `;
     container.appendChild(node);
   });

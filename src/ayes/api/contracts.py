@@ -11,6 +11,21 @@ from ayes.config.models import WatchSpec
 from ayes.memory.short_term import QueryResult
 
 
+def describe_location_summary(event: Dict[str, Any]) -> str:
+    region = event.get("region") or {}
+    region_label = region.get("name") or region.get("region_id") or ""
+    blocks = ((event.get("text") or {}).get("blocks") or [])
+    direction = ""
+    if blocks:
+        rect_norm = blocks[0].get("rect_norm") or {}
+        direction = _describe_direction(rect_norm)
+    if region_label and direction:
+        return f"{region_label} / {direction}"
+    if region_label:
+        return str(region_label)
+    return direction
+
+
 def build_task_payload(*, task_id: str, spec: WatchSpec) -> Dict[str, Any]:
     return {
         "task_id": task_id,
@@ -23,6 +38,8 @@ def build_task_payload(*, task_id: str, spec: WatchSpec) -> Dict[str, Any]:
 
 def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: str, question: str) -> Dict[str, Any]:
     matched_events = [asdict(event) for event in result.matched_events]
+    for event in matched_events:
+        event["location_summary"] = describe_location_summary(event)
     timestamps = [event["timestamp"] for event in matched_events if "timestamp" in event]
     evidence_refs: List[str] = []
     for event in matched_events:
@@ -95,6 +112,30 @@ def _format_time_text(timestamp: Any) -> str:
     except (TypeError, ValueError):
         return str(timestamp)
     return datetime.fromtimestamp(numeric, tz=timezone.utc).strftime("%H:%M:%S")
+
+
+def _describe_direction(rect_norm: Dict[str, Any]) -> str:
+    if not rect_norm:
+        return ""
+    center_x = float(rect_norm.get("x", 0.0)) + (float(rect_norm.get("w", 0.0)) / 2.0)
+    center_y = float(rect_norm.get("y", 0.0)) + (float(rect_norm.get("h", 0.0)) / 2.0)
+    horizontal = "左"
+    vertical = "上"
+    if center_x >= 0.66:
+        horizontal = "右"
+    elif center_x >= 0.33:
+        horizontal = ""
+    if center_y >= 0.66:
+        vertical = "下"
+    elif center_y >= 0.33:
+        vertical = ""
+    if horizontal and vertical:
+        return f"{horizontal}{vertical}"
+    if vertical:
+        return f"{vertical}方"
+    if horizontal:
+        return f"{horizontal}侧"
+    return "中间"
 
 
 def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:

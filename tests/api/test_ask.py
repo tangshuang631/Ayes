@@ -232,3 +232,4 @@ def test_ask_endpoint_answers_position_question_with_region_and_direction() -> N
     assert "价格区域" in payload["answer"]
     assert "左上" in payload["answer"]
     assert payload["matched_events"]
+    assert payload["matched_events"][0]["location_summary"]

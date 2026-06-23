@@ -200,6 +200,8 @@ def test_ocr_snippets_endpoint_returns_recent_text_fragments() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert "items" in payload
+    if payload["items"]:
+        assert "location_summary" in payload["items"][0]
 
 
 def test_ask_endpoint_returns_time_range_and_evidence_fields() -> None:
@@ -267,6 +269,7 @@ def test_timeline_recent_exposes_region_visual_and_text_blocks() -> None:
         assert "visual" in item
         assert "text" in item
         assert "blocks" in (item.get("text") or {})
+        assert "location_summary" in item
         blocks = (item.get("text") or {}).get("blocks") or []
         if blocks:
             assert "rect" in blocks[0]

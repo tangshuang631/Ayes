@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ayes.app.state import AppState
-from ayes.api.contracts import build_agent_contract_payload, build_query_result_payload
+from ayes.api.contracts import build_agent_contract_payload, build_query_result_payload, describe_location_summary
 from ayes.cli.spec_builder import build_window_observe_spec
 from ayes.config.models import WatchSpec
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, TimelineEvent, WatchMatch
@@ -402,6 +402,7 @@ def get_ocr_snippets(
                 "summary": summary,
                 "ocr_text": text,
                 "preview": (text or summary)[:120],
+                "location_summary": describe_location_summary(item),
                 "tags": item.get("tags") or [],
             }
         )
@@ -441,7 +442,10 @@ def timeline_recent(
     if not resolved_task_id:
         return JSONResponse({"items": []})
     since_timestamp = time.time() - (minutes * 60)
-    return JSONResponse({"items": state.sqlite_store.list_events(task_id=resolved_task_id, since_timestamp=since_timestamp, limit=limit)})
+    items = state.sqlite_store.list_events(task_id=resolved_task_id, since_timestamp=since_timestamp, limit=limit)
+    for item in items:
+        item["location_summary"] = describe_location_summary(item)
+    return JSONResponse({"items": items})
 
 
 @app.get("/api/timeline/long-term")
