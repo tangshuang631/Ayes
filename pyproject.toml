@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ayes"
+version = "0.1.0"
+description = "Ayes: visual monitoring, memory, and question answering tool."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "apple" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+ayes = "ayes.cli.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
