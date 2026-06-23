@@ -117,6 +117,15 @@ Web 工作台是 Ayes 当前阶段的人类主入口。
 - 用户能直接发起一次问答
 - 用户能直接查看近期日志
 
+当前实现还应至少包括：
+
+- 当前截图预览
+- 运行状态面板
+- 屏幕目标一键加载
+- 窗口目标点击加载
+- 一次执行采样按钮
+- 停止监控按钮
+
 ## 6. 与后续 Agent 接入的关系
 
 Web 工作台只是人类入口。
@@ -129,3 +138,24 @@ Web 工作台只是人类入口。
 - agent
 
 复用。
+
+## 7. 当前实现校准
+
+当前代码已落地第一版本地 Web 工作台：
+
+- [web/index.html](/Users/apple/Desktop/2026/Ayes/web/index.html)
+- [web/static/app.css](/Users/apple/Desktop/2026/Ayes/web/static/app.css)
+- [web/static/app.js](/Users/apple/Desktop/2026/Ayes/web/static/app.js)
+- [src/ayes/api/server.py](/Users/apple/Desktop/2026/Ayes/src/ayes/api/server.py)
+
+当前已验证可用的页面链路：
+
+- 加载屏幕监控任务
+- 加载窗口监控任务
+- 执行一次监控采样
+- 查看近期事件
+- 查看问答与短期记忆
+- 查看近期日志
+- 查看当前截图预览
+
+这意味着当前阶段已经不再只有 CLI，而是具备了可直接人工测试的本地工作台入口。

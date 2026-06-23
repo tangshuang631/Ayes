@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ayes Workbench</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="left-panel">
+        <section class="panel-section">
+          <h1>Ayes</h1>
+          <p class="muted">视觉监控工作台</p>
+        </section>
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>监控目标</h2>
+            <button id="refreshWindowsBtn" class="text-button">刷新</button>
+          </div>
+          <div class="inline-actions">
+            <button id="loadScreenBtn">监控整个屏幕</button>
+          </div>
+          <div id="windowList" class="window-list"></div>
+        </section>
+      </aside>
+
+      <main class="center-panel">
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>运行状态</h2>
+            <div class="inline-actions compact">
+              <button id="runOnceBtn">执行一次</button>
+              <button id="stopWatchBtn" class="text-button">停止</button>
+            </div>
+          </div>
+          <pre id="statusView" class="status-box"></pre>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>当前截图预览</h2>
+            <button id="refreshScreenshotBtn" class="text-button">刷新</button>
+          </div>
+          <div class="preview-shell">
+            <img id="screenshotPreview" alt="当前截图预览" />
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>近期事件</h2>
+            <button id="refreshEventsBtn" class="text-button">刷新</button>
+          </div>
+          <div id="eventList" class="timeline-list"></div>
+        </section>
+      </main>
+
+      <aside class="right-panel">
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>问答与短期记忆</h2>
+            <button id="askBtn" class="text-button">提问</button>
+          </div>
+          <div class="query-row">
+            <input id="memoryKeyword" placeholder="输入问题或关键词，例如 Codex" />
+            <input id="memoryMinutes" type="number" min="1" max="15" value="5" />
+          </div>
+          <pre id="memoryView" class="result-box"></pre>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>近期日志</h2>
+            <button id="refreshLogsBtn" class="text-button">刷新</button>
+          </div>
+          <div id="logList" class="log-list"></div>
+        </section>
+      </aside>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

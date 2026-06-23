@@ -69,3 +69,34 @@ PYTHONPATH=src python3 -m ayes.cli.main check-watch runtime/mvp-triggered-screen
 ```
 
 当前内置样例使用关键词 `Codex`，便于在当前开发环境下更稳定命中。
+
+## 当前 Web 工作台测试步骤
+
+1. 启动本地服务
+
+```bash
+cd /Users/apple/Desktop/2026/Ayes
+PYTHONPATH=src python3 -m uvicorn ayes.api.server:app --host 127.0.0.1 --port 8765
+```
+
+2. 浏览器打开：
+
+```text
+http://127.0.0.1:8765/
+```
+
+3. 在页面中测试以下链路：
+
+- 点击“监控整个屏幕”
+- 点击“执行一次”
+- 查看运行状态是否出现 `has_runner: true`
+- 查看“近期事件”是否出现 `text_change`
+- 查看“问答与短期记忆”是否返回最近结果
+- 查看“近期日志”是否追加 `执行一次监控采样`
+- 查看“当前截图预览”是否出现最近截图
+
+4. 窗口目标测试：
+
+- 在左侧窗口列表中点击某个窗口
+- 点击“执行一次”
+- 观察状态、事件、记忆和日志是否更新
