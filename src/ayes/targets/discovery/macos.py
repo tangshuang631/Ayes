@@ -25,6 +25,12 @@ class MacOSWindowDiscovery:
         raw_windows = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
         return self._convert_raw_windows(raw_windows or [])
 
+    def get_window_by_id(self, window_id: int) -> Optional[WindowCandidate]:
+        for candidate in self.list_windows():
+            if candidate.window_id == window_id:
+                return candidate
+        return None
+
     def _convert_raw_windows(self, raw_windows: Iterable[Dict[str, Any]]) -> List[WindowCandidate]:
         candidates: List[WindowCandidate] = []
         for item in raw_windows:

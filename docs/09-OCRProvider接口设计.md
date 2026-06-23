@@ -190,3 +190,30 @@ OCR Provider 不负责：
 - 默认优先实现 PaddleOCR Provider
 - 允许后续补充 RapidOCR Provider 和 Tesseract Provider
 - 平台专属 OCR 只能作为可替换实现，不得成为唯一接口基础
+
+## 11. 当前 MVP 实现校准
+
+当前代码层已先落地两条 OCR provider 路径：
+
+- `VisionOCRProvider`
+- `RapidOCRProvider`
+
+对应实现：
+
+- [src/ayes/ocr/vision.py](/Users/apple/Desktop/2026/Ayes/src/ayes/ocr/vision.py)
+- [src/ayes/ocr/rapidocr.py](/Users/apple/Desktop/2026/Ayes/src/ayes/ocr/rapidocr.py)
+- [src/ayes/ocr/service.py](/Users/apple/Desktop/2026/Ayes/src/ayes/ocr/service.py)
+
+当前机器真实验证结果：
+
+- `Vision` 可导入
+- 主屏截图样本可通过 `Vision OCR` 识别出可用文本
+- `RapidOCR` 已安装并作为跨平台回退 provider 保留
+
+因此当前 MVP 阶段的实际策略是：
+
+1. 本机优先尝试 `VisionOCRProvider`
+2. 失败时自动回退到 `RapidOCRProvider`
+3. 后续再按正式路线补 `PaddleOCRProvider`
+
+这属于第一阶段的实现校准，不改变“上层必须只依赖统一 OCR 抽象”的正式约束。

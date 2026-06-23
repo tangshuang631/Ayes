@@ -1,0 +1,53 @@
+[
+  {
+    "event_id": "evt_f78db45fd39847bebf5cbe5a085109ad",
+    "task_id": "task_mvp",
+    "spec_version": "1.0",
+    "task_mode": "observe",
+    "timestamp": 1782207945.220945,
+    "source": "ocr",
+    "event_type": "text_change",
+    "priority": "medium",
+    "confidence": 0.88,
+    "target": {
+      "type": "screen",
+      "process_name": null,
+      "process_id": null,
+      "window_id": null,
+      "screen_id": 1,
+      "window_title": "",
+      "window_state": "unknown"
+    },
+    "observability": {
+      "has_metadata": true,
+      "has_pixels": true,
+      "is_onscreen": true,
+      "is_observable_candidate": true,
+      "capture_status": "ok"
+    },
+    "region": {
+      "x": 0,
+      "y": 0,
+      "w": 0,
+      "h": 0
+    },
+    "text": {
+      "ocr_text": "Codex File\nEdit View\nWindow\nHelp\n&Z f•56\n6R23H FJ- 17:45\nLLI tt¥-\nxf FL. IAI If*ArpJ7GEilllJiTI , ￿>￿IkTI￿AlI-jA run- Loop , X1fEJELl￿Lrrlllj￿X-\n(*\n+5,965 -552\nrun-loop (B¥1*￿(*,\":\nI ,\ndevv\nAyes\n*$47 1 1 ￿(*\nGitHub CLI TI\n/%¥1*=￿1,￿7￿￿EjJlal1, XFfFI\"E]E OCR / ia'FL I CLI ;È& MVP\nttL¥.*, (2)\nAlLI￿lji&s%￿lx*t￿)kk¥1*￿(*Y. #ie1AI'￿1J7ÈQt￿3Isrt README, WEl*￿1j- I lijip\nFortune\n*$47 6 1 ￿1$\n*B-,$llÈstara*FÉrft=É...\nunittest BiJA)klQffiÉt pytest , ￿￿-/A￿l¥l￿>S1Ill￿*.\nppt\nI￿PPT￿&yJ*￿.*£1MD\nREADME £IBJ.IIJtt-\nP 7 IR}4, 9*F*I-IA7GE\"'\n*￿￿￿(T. fiitF￿k&]g-\nElSlJ%, */AL￿(T, L.\n*$47 1 1 X(*\n2MA= tyA(*IS¥.\n.￿ljItIA, L'ÈIK CLI *\no Er*LS(T PYTHONPATH=src python3 -m ayes.cli.main run-once runtimelmvp-observe-screen.json | pyth...\nLuna\nIX315* 23 1￿1*￿￿21+844-9\ni*(T*W]ElITi t* /Users/apple/Desktopl2026/Ayes\n****PKttEIE docsl... 6m 7s\nCouple\n21 iJiHY\n) 5.4*v",
+      "normalized_text": "codex file\nedit view\nwindow\nhelp\n&z f•56\n6r23h fj- 17:45\nlli tt¥-\nxf fl. iai if*arpj7geillljiti , ￿>￿ikti￿ali-ja run- loop , x1fejell￿lrrlllj￿x-\n(*\n+5,965 -552\nrun-loop (b¥1*￿(*,\":\ni ,\ndevv\nayes\n*$47 1 1 ￿(*\ngithub cli ti\n/%¥1*=￿1,￿7￿￿ejjlal1, xfffi\"e]e ocr / ia'fl i cli ;è& mvp\nttl¥.*, (2)\nalli￿lji&s%￿lx*t￿)kk¥1*￿(*y. #ie1ai'￿1j7èqt￿3isrt readme, wel*￿1j- i lijip\nfortune\n*$47 6 1 ￿1$\n*b-,$llèstara*férft=é...\nunittest bija)klqffiét pytest , ￿￿-/a￿l¥l￿>s1ill￿*.\nppt\ni￿ppt￿&yj*￿.*£1md\nreadme £ibj.iijtt-\np 7 ir}4, 9*f*i-ia7ge\"'\n*￿￿￿(t. fiitf￿k&]g-\nelslj%, */al￿(t, l.\n*$47 1 1 x(*\n2ma= tya(*is¥.\n.￿ljitia, l'èik cli *\no er*ls(t pythonpath=src python3 -m ayes.cli.main run-once runtimelmvp-observe-screen.json | pyth...\nluna\nix315* 23 1￿1*￿￿21+844-9\ni*(t*w]eliti t* /users/apple/desktopl2026/ayes\n****pktteie docsl... 6m 7s\ncouple\n21 ijihy\n) 5.4*v",
+      "blocks": []
+    },
+    "summary": "Codex File\nEdit View\nWindow\nHelp\n&Z f•56\n6R23H FJ- 17:45\nLLI tt¥-\nxf FL. IAI If*ArpJ7GEilllJiTI , ￿>￿IkTI￿AlI-jA run- Lo",
+    "tags": [
+      "ocr",
+      "vision"
+    ],
+    "watch_match": {
+      "matched": false,
+      "score": 0.0,
+      "matched_query": "",
+      "matched_rule": ""
+    },
+    "evidence_refs": [],
+    "related_event_ids": []
+  }
+]
