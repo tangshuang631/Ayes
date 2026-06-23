@@ -62,6 +62,7 @@ class WatchRunner:
         self._last_alert_key: Optional[str] = None
         self._vision_call_timestamps: List[float] = []
         self._evidence_dir = Path("runtime/evidence")
+        self._last_evidence_cleanup_at: Optional[float] = None
         self._alert_notifier = WebhookNotifier()
 
     @property
@@ -144,6 +145,7 @@ class WatchRunner:
                         vision_match_events = self._maybe_build_watch_match_events(vision_event)
                         emitted.extend(vision_match_events)
                         emitted.extend(self._maybe_emit_alert_events(vision_match_events))
+        self._cleanup_expired_evidence(now=now)
         self._previous_frame = frame
         return emitted
 
@@ -449,6 +451,50 @@ class WatchRunner:
         cutoff = (self._last_run_at or time.time()) - 60
         self._vision_call_timestamps = [item for item in self._vision_call_timestamps if item >= cutoff]
         return len(self._vision_call_timestamps) >= self.spec.vision.max_calls_per_minute
+
+    def _cleanup_expired_evidence(self, *, now: float) -> None:
+        if self._last_evidence_cleanup_at is not None and (now - self._last_evidence_cleanup_at) < 60:
+            return
+        self._last_evidence_cleanup_at = now
+        if not self._evidence_dir.exists():
+            return
+        retain_seconds = self.spec.memory.short_term.retain_minutes * 60
+        grace_seconds = 5 * 60
+        keep_latest_files = 40
+        cutoff = now - retain_seconds - grace_seconds
+        candidates = sorted(
+            [path for path in self._evidence_dir.glob("*.png") if path.is_file()],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        removed = 0
+        for index, path in enumerate(candidates):
+            if index < keep_latest_files:
+                continue
+            if path.stat().st_mtime >= cutoff:
+                continue
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as exc:
+                self._write_log(
+                    category="system",
+                    level="warning",
+                    message=f"证据清理失败: {exc}",
+                    metadata={"path": str(path).replace('\\', "/")},
+                )
+        if removed:
+            self._write_log(
+                category="system",
+                level="info",
+                message=f"已清理过期证据文件 {removed} 个",
+                metadata={
+                    "evidence_dir": str(self._evidence_dir).replace("\\", "/"),
+                    "retain_minutes": self.spec.memory.short_term.retain_minutes,
+                    "grace_seconds": grace_seconds,
+                    "keep_latest_files": keep_latest_files,
+                },
+            )
 
     def _mark_vision_call(self, now: float) -> None:
         cutoff = now - 60

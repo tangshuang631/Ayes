@@ -143,6 +143,14 @@ function buildEvidencePreviewHtml(items) {
   `;
 }
 
+function buildTimelineEventHtml(item) {
+  return `
+    <div class="timeline-title">${item.event_type}</div>
+    <div class="timeline-meta">${item.summary || ""}\n${buildEventDetailLines(item)}</div>
+    ${buildEvidencePreviewHtmlFromRefs(item.evidence_refs || [])}
+  `;
+}
+
 function nextRegionId() {
   return `roi_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -464,10 +472,7 @@ function renderEvents(items) {
   items.slice().reverse().forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
-    node.innerHTML = `
-      <div class="timeline-title">${item.event_type}</div>
-      <div class="timeline-meta">${item.summary || ""}\n${buildEventDetailLines(item)}</div>
-    `;
+    node.innerHTML = buildTimelineEventHtml(item);
     container.appendChild(node);
   });
 }
@@ -492,10 +497,7 @@ function renderActionEvents(items) {
   items.slice().reverse().forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
-    node.innerHTML = `
-      <div class="timeline-title">${item.event_type}</div>
-      <div class="timeline-meta">${item.summary || ""}\n${buildEventDetailLines(item)}</div>
-    `;
+    node.innerHTML = buildTimelineEventHtml(item);
     container.appendChild(node);
   });
 }
@@ -506,10 +508,7 @@ function renderSimpleTimeline(id, items) {
   items.slice().reverse().forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
-    node.innerHTML = `
-      <div class="timeline-title">${item.event_type}</div>
-      <div class="timeline-meta">${item.summary || ""}\n${buildEventDetailLines(item)}</div>
-    `;
+    node.innerHTML = buildTimelineEventHtml(item);
     container.appendChild(node);
   });
 }
@@ -528,11 +527,7 @@ function renderMemoryResult(payload) {
   (payload.matched_events || []).slice().reverse().forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
-    node.innerHTML = `
-      <div class="timeline-title">${item.event_type}</div>
-      <div class="timeline-meta">${item.summary || ""}\n${buildEventDetailLines(item)}</div>
-      ${buildEvidencePreviewHtmlFromRefs(item.evidence_refs || [])}
-    `;
+    node.innerHTML = buildTimelineEventHtml(item);
     evidence.appendChild(node);
   });
 }

@@ -6,6 +6,7 @@ from ayes.vision.models import VisionResult
 from PIL import Image
 from io import BytesIO
 from pathlib import Path
+import os
 
 
 def make_png_bytes(color: str) -> bytes:
@@ -340,3 +341,57 @@ def test_runner_throttles_vision_enhancement_by_calls_per_minute() -> None:
     assert any(event.event_type == "visual_summary" for event in first_events)
     assert not any(event.event_type == "visual_summary" for event in second_events)
     assert any(item["category"] == "vision" and "速率限制" in item["message"] for item in logs)
+
+
+def test_runner_cleans_expired_evidence_files_but_keeps_recent_ones(tmp_path) -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+            "memory": {
+                "short_term": {
+                    "enabled": True,
+                    "retain_minutes": 1,
+                    "detail_level": "high",
+                }
+            },
+        }
+    )
+    logs = []
+    runner = WatchRunner(spec, log_sink=logs.append)
+    runner.capture = FakeCapture()
+    runner.ocr = FakeOCR()
+    runner._evidence_dir = tmp_path / "evidence"
+    runner._evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    old_file = runner._evidence_dir / "old.png"
+    old_file.write_bytes(make_png_bytes("red"))
+    stale_ts = 100.0 - (spec.memory.short_term.retain_minutes * 60) - 301
+    os.utime(old_file, (stale_ts, stale_ts))
+
+    # 构造足够多的新文件，覆盖“保留最新 40 个文件”的保守策略。
+    for index in range(45):
+        extra_file = runner._evidence_dir / f"fresh_{index}.png"
+        extra_file.write_bytes(make_png_bytes("green"))
+        extra_ts = 100.0 - 20 + index * 0.001
+        os.utime(extra_file, (extra_ts, extra_ts))
+
+    preserved_file = runner._evidence_dir / "fresh.png"
+    preserved_file.write_bytes(make_png_bytes("blue"))
+    fresh_ts = 100.0 - 30
+    os.utime(preserved_file, (fresh_ts, fresh_ts))
+
+    runner.run_once(now=100.0)
+
+    assert not old_file.exists()
+    assert preserved_file.exists()
+    assert any(item["category"] == "system" and "已清理过期证据文件" in item["message"] for item in logs)
