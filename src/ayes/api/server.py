@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ayes.app.state import AppState
-from ayes.api.contracts import build_agent_contract_payload, build_query_result_payload, describe_location_summary
+from ayes.api.contracts import build_agent_contract_payload, build_preview_overlay, build_query_result_payload, describe_location_summary
 from ayes.cli.spec_builder import build_window_observe_spec
 from ayes.config.models import WatchSpec
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, TimelineEvent, WatchMatch
@@ -445,6 +445,7 @@ def timeline_recent(
     items = state.sqlite_store.list_events(task_id=resolved_task_id, since_timestamp=since_timestamp, limit=limit)
     for item in items:
         item["location_summary"] = describe_location_summary(item)
+        item["preview_overlay"] = build_preview_overlay(item)
     return JSONResponse({"items": items})
 
 

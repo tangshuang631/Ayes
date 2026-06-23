@@ -174,12 +174,27 @@ function buildEvidencePreviewHtml(items) {
   return `
     <div class="evidence-preview-grid">
       ${items
-        .map((item) => `
-          <a class="evidence-preview-item" href="${item.src}" target="_blank" rel="noreferrer">
-            <img src="${item.src}" alt="${item.label || item.ref || "evidence"}" loading="lazy" />
-            <span>${item.label || item.ref || item.src}</span>
-          </a>
-        `)
+        .map((item) => {
+          const overlay = item.overlay || {};
+          const rect = overlay.rect_norm || {};
+          const hasOverlay = overlay.kind && overlay.kind !== "none" && Object.keys(rect).length;
+          return `
+            <a class="evidence-preview-item" href="${item.src}" target="_blank" rel="noreferrer">
+              <div class="evidence-preview-frame">
+                <img src="${item.src}" alt="${item.label || item.ref || "evidence"}" loading="lazy" />
+                ${
+                  hasOverlay
+                    ? `<div class="evidence-overlay-box evidence-overlay-${overlay.kind}"
+                         style="left:${Number(rect.x || 0) * 100}%;top:${Number(rect.y || 0) * 100}%;width:${Number(rect.w || 0) * 100}%;height:${Number(rect.h || 0) * 100}%;">
+                         <span>${overlay.label || buildLocationSummary({ location_summary: "" })}</span>
+                       </div>`
+                    : ""
+                }
+              </div>
+              <span>${item.label || item.ref || item.src}</span>
+            </a>
+          `;
+        })
         .join("")}
     </div>
   `;

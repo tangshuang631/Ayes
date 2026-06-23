@@ -233,3 +233,5 @@ def test_ask_endpoint_answers_position_question_with_region_and_direction() -> N
     assert "左上" in payload["answer"]
     assert payload["matched_events"]
     assert payload["matched_events"][0]["location_summary"]
+    if payload["evidence_previews"]:
+        assert payload["evidence_previews"][0]["overlay"]["kind"] in {"block", "region", "none"}

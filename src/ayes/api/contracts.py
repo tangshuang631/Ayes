@@ -26,6 +26,33 @@ def describe_location_summary(event: Dict[str, Any]) -> str:
     return direction
 
 
+def build_preview_overlay(event: Dict[str, Any]) -> Dict[str, Any]:
+    blocks = ((event.get("text") or {}).get("blocks") or [])
+    if blocks:
+        first = blocks[0]
+        rect_norm = first.get("rect_norm") or {}
+        if rect_norm:
+            return {
+                "kind": "block",
+                "label": first.get("text") or describe_location_summary(event) or "OCR block",
+                "rect_norm": rect_norm,
+            }
+    region = event.get("region") or {}
+    region_rect = {
+        "x": region.get("x_norm"),
+        "y": region.get("y_norm"),
+        "w": region.get("w_norm"),
+        "h": region.get("h_norm"),
+    }
+    if all(value is not None for value in region_rect.values()):
+        return {
+            "kind": "region",
+            "label": region.get("name") or region.get("region_id") or "ROI",
+            "rect_norm": region_rect,
+        }
+    return {"kind": "none", "label": "", "rect_norm": {}}
+
+
 def build_task_payload(*, task_id: str, spec: WatchSpec) -> Dict[str, Any]:
     return {
         "task_id": task_id,
@@ -40,6 +67,7 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
     matched_events = [asdict(event) for event in result.matched_events]
     for event in matched_events:
         event["location_summary"] = describe_location_summary(event)
+        event["preview_overlay"] = build_preview_overlay(event)
     timestamps = [event["timestamp"] for event in matched_events if "timestamp" in event]
     evidence_refs: List[str] = []
     for event in matched_events:
@@ -82,6 +110,7 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
             "ref": ref,
             "src": ref if ref.startswith("/") else f"/{ref}",
             "label": ref.split("/")[-1],
+            "overlay": build_preview_overlay(matched_events[0]) if matched_events else {"kind": "none", "label": "", "rect_norm": {}},
         }
         for ref in evidence_refs
     ]

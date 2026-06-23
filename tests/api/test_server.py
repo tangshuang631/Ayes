@@ -270,6 +270,7 @@ def test_timeline_recent_exposes_region_visual_and_text_blocks() -> None:
         assert "text" in item
         assert "blocks" in (item.get("text") or {})
         assert "location_summary" in item
+        assert "preview_overlay" in item
         blocks = (item.get("text") or {}).get("blocks") or []
         if blocks:
             assert "rect" in blocks[0]

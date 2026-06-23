@@ -334,6 +334,10 @@ textarea {
   text-decoration: none;
 }
 
+.evidence-preview-frame {
+  position: relative;
+}
+
 .evidence-preview-item img {
   width: 100%;
   aspect-ratio: 1.4 / 1;
@@ -341,6 +345,26 @@ textarea {
   border: 1px solid var(--line);
   background: #f0f2f5;
   display: block;
+}
+
+.evidence-overlay-box {
+  position: absolute;
+  border: 1.5px solid #111827;
+  background: rgba(17, 24, 39, 0.08);
+  pointer-events: none;
+}
+
+.evidence-overlay-box span {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .evidence-preview-item span {
