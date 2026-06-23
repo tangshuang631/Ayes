@@ -37,6 +37,7 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - 第一阶段产品形态：本地工具/服务
 - 第一阶段时间范围：最近 5-15 分钟短时视觉时间线
 - 第一阶段告警出口：企业微信 webhook
+- OCR/skill 方向：核心能力需按跨平台抽象设计，不能绑死单一系统 OCR
 - YOLO 作为第二阶段增强项，不作为 MVP 主线
 
 ## 4. 文档索引
@@ -53,6 +54,9 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - [05-系统架构与事件模型.md](/Users/apple/Desktop/2026/Ayes/docs/05-系统架构与事件模型.md)
 - [06-时间线问答与告警.md](/Users/apple/Desktop/2026/Ayes/docs/06-时间线问答与告警.md)
 - [07-Skill接入与后续演进.md](/Users/apple/Desktop/2026/Ayes/docs/07-Skill接入与后续演进.md)
+- [08-技术选型与运行形态.md](/Users/apple/Desktop/2026/Ayes/docs/08-技术选型与运行形态.md)
+- [09-OCRProvider接口设计.md](/Users/apple/Desktop/2026/Ayes/docs/09-OCRProvider接口设计.md)
+- [10-WatchSpec配置契约.md](/Users/apple/Desktop/2026/Ayes/docs/10-WatchSpec配置契约.md)
 
 ## 5. 文档维护规则
 
@@ -62,6 +66,9 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - 调整模块边界、事件结构、存储结构时，优先修改 [05-系统架构与事件模型.md](/Users/apple/Desktop/2026/Ayes/docs/05-系统架构与事件模型.md)
 - 调整回放问答、告警、用户交互时，优先修改 [06-时间线问答与告警.md](/Users/apple/Desktop/2026/Ayes/docs/06-时间线问答与告警.md)
 - 调整 skill / tool / MCP 接入路线和阶段规划时，优先修改 [07-Skill接入与后续演进.md](/Users/apple/Desktop/2026/Ayes/docs/07-Skill接入与后续演进.md)
+- 调整语言、依赖、运行方式、OCR 引擎、向量方案、存储方案时，优先修改 [08-技术选型与运行形态.md](/Users/apple/Desktop/2026/Ayes/docs/08-技术选型与运行形态.md)
+- 调整 OCR 抽象接口、Provider 优先级、输入输出结构时，优先修改 [09-OCRProvider接口设计.md](/Users/apple/Desktop/2026/Ayes/docs/09-OCRProvider接口设计.md)
+- 调整 watch spec、任务模式、采样频率、OCR 频率、记忆策略、webhook 策略、受控动作策略时，优先修改 [10-WatchSpec配置契约.md](/Users/apple/Desktop/2026/Ayes/docs/10-WatchSpec配置契约.md)
 
 ## 6. 临时文档位置
 
