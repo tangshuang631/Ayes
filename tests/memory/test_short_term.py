@@ -106,4 +106,4 @@ def test_short_term_query_answers_numeric_lowest_question_with_time() -> None:
     assert len(result.matched_events) == 2
     assert "最低" in result.answer
     assert "159.0" in result.answer
-    assert "180" in result.answer
+    assert "00:03:00" in result.answer

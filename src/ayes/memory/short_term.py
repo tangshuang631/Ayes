@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import re
 from typing import Iterable, List, Optional
 
@@ -170,7 +171,7 @@ class ShortTermMemoryStore:
             adjective = "最高"
         answer = (
             f"最近 {minutes} 分钟内，{field_label}{adjective}值大约是 {target.watch_match.matched_value}；"
-            f"对应时间约为 {int(target.timestamp)}。"
+            f"对应时间约为 {format_human_time(target.timestamp)}。"
         )
         return QueryResult(
             answer=answer,
@@ -194,3 +195,7 @@ def operator_label(operator: str) -> str:
     if operator == "gt":
         return "高于"
     return operator
+
+
+def format_human_time(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%H:%M:%S")
