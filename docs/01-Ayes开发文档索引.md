@@ -57,6 +57,8 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - [08-技术选型与运行形态.md](/Users/apple/Desktop/2026/Ayes/docs/08-技术选型与运行形态.md)
 - [09-OCRProvider接口设计.md](/Users/apple/Desktop/2026/Ayes/docs/09-OCRProvider接口设计.md)
 - [10-WatchSpec配置契约.md](/Users/apple/Desktop/2026/Ayes/docs/10-WatchSpec配置契约.md)
+- [11-事件模型契约.md](/Users/apple/Desktop/2026/Ayes/docs/11-事件模型契约.md)
+- [12-记忆存储设计.md](/Users/apple/Desktop/2026/Ayes/docs/12-记忆存储设计.md)
 
 ## 5. 文档维护规则
 
@@ -69,6 +71,8 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - 调整语言、依赖、运行方式、OCR 引擎、向量方案、存储方案时，优先修改 [08-技术选型与运行形态.md](/Users/apple/Desktop/2026/Ayes/docs/08-技术选型与运行形态.md)
 - 调整 OCR 抽象接口、Provider 优先级、输入输出结构时，优先修改 [09-OCRProvider接口设计.md](/Users/apple/Desktop/2026/Ayes/docs/09-OCRProvider接口设计.md)
 - 调整 watch spec、任务模式、采样频率、OCR 频率、记忆策略、webhook 策略、受控动作策略时，优先修改 [10-WatchSpec配置契约.md](/Users/apple/Desktop/2026/Ayes/docs/10-WatchSpec配置契约.md)
+- 调整事件字段、事件类型、证据引用、优先级、可观测性和告警/动作审计事件时，优先修改 [11-事件模型契约.md](/Users/apple/Desktop/2026/Ayes/docs/11-事件模型契约.md)
+- 调整短期详细记忆、长期轻量记忆、保留时间、清理策略和查询边界时，优先修改 [12-记忆存储设计.md](/Users/apple/Desktop/2026/Ayes/docs/12-记忆存储设计.md)
 
 ## 6. 临时文档位置
 
