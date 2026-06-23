@@ -43,6 +43,20 @@ function renderEvents(items) {
   });
 }
 
+function renderLongTerm(items) {
+  const container = document.getElementById("longTermList");
+  container.innerHTML = "";
+  items.forEach((item) => {
+    const node = document.createElement("div");
+    node.className = "timeline-item";
+    node.innerHTML = `
+      <div class="timeline-title">${item.summary}</div>
+      <div class="timeline-meta">事件数: ${item.event_count} | task_id=${item.task_id}</div>
+    `;
+    container.appendChild(node);
+  });
+}
+
 function renderLogs(items) {
   const container = document.getElementById("logList");
   container.innerHTML = "";
@@ -60,6 +74,12 @@ function renderLogs(items) {
 async function refreshStatus() {
   const status = await requestJson("/api/status");
   setText("statusView", status);
+  const taskInput = document.getElementById("taskIdInput");
+  if (status.task_id) {
+    taskInput.value = status.task_id;
+  } else if (!taskInput.value && status.last_task_id) {
+    taskInput.value = status.last_task_id;
+  }
 }
 
 async function refreshWindows() {
@@ -68,8 +88,16 @@ async function refreshWindows() {
 }
 
 async function refreshEvents() {
-  const data = await requestJson("/api/events");
+  const taskId = document.getElementById("taskIdInput").value;
+  const minutes = document.getElementById("memoryMinutes").value || "5";
+  const data = await requestJson(`/api/timeline/recent?limit=20${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`);
   renderEvents(data.items || []);
+}
+
+async function refreshLongTerm() {
+  const taskId = document.getElementById("taskIdInput").value;
+  const data = await requestJson(`/api/timeline/long-term?limit=20${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`);
+  renderLongTerm(data.items || []);
 }
 
 async function refreshLogs() {
@@ -117,9 +145,15 @@ document.getElementById("refreshEventsBtn").onclick = refreshEvents;
 document.getElementById("askBtn").onclick = queryMemory;
 document.getElementById("refreshLogsBtn").onclick = refreshLogs;
 document.getElementById("refreshScreenshotBtn").onclick = refreshScreenshot;
+document.getElementById("refreshTimelineBtn").onclick = async () => {
+  await refreshEvents();
+  await refreshLongTerm();
+};
+document.getElementById("refreshLongTermBtn").onclick = refreshLongTerm;
 
 refreshStatus();
 refreshWindows();
 refreshEvents();
+refreshLongTerm();
 refreshLogs();
 refreshScreenshot();

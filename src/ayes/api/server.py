@@ -119,9 +119,10 @@ def stop_watch() -> JSONResponse:
 
 @app.get("/api/events")
 def get_events() -> JSONResponse:
-    if state.current_runner is None:
+    task_id = state.current_task_id
+    if not task_id:
         return JSONResponse({"items": []})
-    return JSONResponse({"items": [asdict(event) for event in state.current_runner.events]})
+    return JSONResponse({"items": state.sqlite_store.list_events(task_id=task_id, limit=100)})
 
 
 @app.get("/api/memory/recent")
@@ -159,7 +160,7 @@ def ask_question(question: str = Query(...), minutes: int = Query(5, ge=1, le=15
 
 @app.get("/api/logs")
 def get_logs(category: Optional[str] = None) -> JSONResponse:
-    return JSONResponse({"items": state.log_store.to_dicts(category=category, task_id=state.current_task_id)})
+    return JSONResponse({"items": state.sqlite_store.list_logs(category=category, task_id=state.current_task_id, limit=100)})
 
 
 @app.get("/api/screenshot")
@@ -170,3 +171,46 @@ def get_screenshot() -> JSONResponse:
     if not path.startswith("/"):
         path = "/" + path
     return JSONResponse({"path": path})
+
+
+@app.get("/api/watch/status")
+def watch_status() -> JSONResponse:
+    return JSONResponse(state.status())
+
+
+@app.get("/api/watch/task/{task_id}")
+def get_watch_task(task_id: str) -> JSONResponse:
+    task = state.sqlite_store.get_task(task_id)
+    if task is None:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+    return JSONResponse(task)
+
+
+@app.get("/api/timeline/recent")
+def timeline_recent(task_id: Optional[str] = None, limit: int = Query(20, ge=1, le=200)) -> JSONResponse:
+    resolved_task_id = task_id or state.current_task_id
+    if not resolved_task_id:
+        return JSONResponse({"items": []})
+    return JSONResponse({"items": state.sqlite_store.list_events(task_id=resolved_task_id, limit=limit)})
+
+
+@app.get("/api/timeline/long-term")
+def timeline_long_term(task_id: Optional[str] = None, limit: int = Query(20, ge=1, le=100)) -> JSONResponse:
+    resolved_task_id = task_id or state.current_task_id
+    if not resolved_task_id:
+        return JSONResponse({"items": []})
+    return JSONResponse({"items": state.sqlite_store.list_long_term_summaries(task_id=resolved_task_id, limit=limit)})
+
+
+@app.get("/api/agent/contracts")
+def get_agent_contracts() -> JSONResponse:
+    return JSONResponse(
+        {
+            "watch.create": "/api/watch/load-screen or /api/watch/load-window/{window_id}",
+            "watch.status": "/api/watch/status",
+            "watch.stop": "/api/watch/stop",
+            "timeline.recent": "/api/timeline/recent",
+            "timeline.query": "/api/ask",
+            "logs.recent": "/api/logs",
+        }
+    )

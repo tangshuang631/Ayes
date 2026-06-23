@@ -23,6 +23,18 @@
           </div>
           <div id="windowList" class="window-list"></div>
         </section>
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>任务与时间范围</h2>
+          </div>
+          <div class="query-row">
+            <input id="taskIdInput" placeholder="任务 id，留空表示当前任务" />
+          </div>
+          <div class="query-row">
+            <input id="memoryMinutes" type="number" min="1" max="15" value="5" />
+            <button id="refreshTimelineBtn" class="text-button">刷新时间线</button>
+          </div>
+        </section>
       </aside>
 
       <main class="center-panel">
@@ -54,6 +66,14 @@
           </div>
           <div id="eventList" class="timeline-list"></div>
         </section>
+
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>长期摘要</h2>
+            <button id="refreshLongTermBtn" class="text-button">刷新</button>
+          </div>
+          <div id="longTermList" class="timeline-list"></div>
+        </section>
       </main>
 
       <aside class="right-panel">
@@ -64,7 +84,6 @@
           </div>
           <div class="query-row">
             <input id="memoryKeyword" placeholder="输入问题或关键词，例如 Codex" />
-            <input id="memoryMinutes" type="number" min="1" max="15" value="5" />
           </div>
           <pre id="memoryView" class="result-box"></pre>
         </section>

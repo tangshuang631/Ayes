@@ -11,9 +11,10 @@ from ayes.logs.models import LogEntry
 
 
 class LogStore:
-    def __init__(self, *, retain_count: int = 500) -> None:
+    def __init__(self, *, retain_count: int = 500, sink=None) -> None:
         self.retain_count = retain_count
         self._entries: List[LogEntry] = []
+        self.sink = sink
 
     def write(
         self,
@@ -37,6 +38,8 @@ class LogStore:
         self._entries.append(entry)
         if len(self._entries) > self.retain_count:
             self._entries = self._entries[-self.retain_count :]
+        if self.sink is not None:
+            self.sink(entry)
         return entry
 
     def list_entries(self, *, category: Optional[str] = None, task_id: Optional[str] = None) -> List[LogEntry]:

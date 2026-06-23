@@ -7,7 +7,7 @@ from dataclasses import asdict
 from dataclasses import replace
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from ayes.capture.models import CaptureFrame
 from ayes.capture.screen import MacOSScreenCapture
@@ -23,8 +23,10 @@ from ayes.targets.discovery.macos import MacOSWindowDiscovery
 
 
 class WatchRunner:
-    def __init__(self, spec: WatchSpec) -> None:
+    def __init__(self, spec: WatchSpec, *, task_id: str = "task_mvp", event_sink: Optional[Callable] = None) -> None:
         self.spec = spec
+        self.task_id = task_id
+        self.event_sink = event_sink
         self.capture = MacOSScreenCapture()
         self.ocr = OCRService()
         self.diff = ByteDiffDetector()
@@ -53,8 +55,7 @@ class WatchRunner:
         capture_result = self._capture_target(now)
         if not capture_result.ok or capture_result.frame is None:
             event = self._build_capture_status_event(now, capture_result.status, capture_result.message)
-            self.memory.append(event)
-            self._events.append(event)
+            self._record_event(event)
             return [event]
         frame = capture_result.frame
         if self._previous_frame is not None and self.ticker.should_run_diff(now_ms):
@@ -62,8 +63,7 @@ class WatchRunner:
             diff_stats = self.diff.compare(self._previous_frame, frame)
             if not diff_stats.changed and self.spec.sampling.skip_ocr_when_no_change:
                 event = self._build_visual_event(now, frame, "visual_change", "未检测到显著变化")
-                self.memory.append(event)
-                self._events.append(event)
+                self._record_event(event)
                 self._previous_frame = frame
                 return [event]
         ocr_result = None
@@ -79,8 +79,7 @@ class WatchRunner:
                 )
             )
             event = self._build_ocr_event(now, frame, ocr_result.full_text, ocr_result.provider)
-            self.memory.append(event)
-            self._events.append(event)
+            self._record_event(event)
             emitted.append(event)
             emitted.extend(self._maybe_build_watch_match_events(event))
         self._previous_frame = frame
@@ -112,7 +111,7 @@ class WatchRunner:
 
     def _build_capture_status_event(self, now: float, status: str, message: str):
         return build_event(
-            task_id="task_mvp",
+            task_id=self.task_id,
             spec_version=self.spec.spec_version,
             task_mode=self.spec.mode,
             timestamp=now,
@@ -141,7 +140,7 @@ class WatchRunner:
 
     def _build_visual_event(self, now: float, frame: CaptureFrame, event_type: str, summary: str):
         return build_event(
-            task_id="task_mvp",
+            task_id=self.task_id,
             spec_version=self.spec.spec_version,
             task_mode=self.spec.mode,
             timestamp=now,
@@ -163,7 +162,7 @@ class WatchRunner:
 
     def _build_ocr_event(self, now: float, frame: CaptureFrame, text: str, provider: str):
         event = build_event(
-            task_id="task_mvp",
+            task_id=self.task_id,
             spec_version=self.spec.spec_version,
             task_mode=self.spec.mode,
             timestamp=now,
@@ -200,7 +199,7 @@ class WatchRunner:
             if query.lower() in haystack:
                 match_event = replace(
                     build_event(
-                        task_id="task_mvp",
+                        task_id=self.task_id,
                         spec_version=self.spec.spec_version,
                         task_mode=self.spec.mode,
                         timestamp=event.timestamp,
@@ -215,7 +214,12 @@ class WatchRunner:
                     related_event_ids=[event.event_id],
                     tags=["watch_match", query],
                 )
-                self.memory.append(match_event)
-                self._events.append(match_event)
+                self._record_event(match_event)
                 emitted.append(match_event)
         return emitted
+
+    def _record_event(self, event) -> None:
+        self.memory.append(event)
+        self._events.append(event)
+        if self.event_sink is not None:
+            self.event_sink(event)

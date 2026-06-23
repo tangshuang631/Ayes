@@ -56,6 +56,25 @@
 
 这既是为了后续 Agent 接入，也是为了避免前后端职责混乱。
 
+## 2.2 当前实现校准
+
+当前代码已补出第一批 agent / skill 可调用接口雏形：
+
+- `/api/watch/status`
+- `/api/watch/task/{task_id}`
+- `/api/timeline/recent`
+- `/api/ask`
+- `/api/logs`
+- `/api/agent/contracts`
+
+其中：
+
+- `/api/agent/contracts` 用于直接暴露当前可用接口合同
+- `watch.*` 路径服务于任务状态查询
+- `timeline.*` 路径服务于近期事件和记忆查询
+
+这意味着当前阶段已经不再只有“给前端用的页面接口”，而是开始形成后续 Agent 可直接调用的稳定边界。
+
 ## 3. 第二阶段方向
 
 第二阶段再考虑：
