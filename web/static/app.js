@@ -167,6 +167,24 @@ function buildEvidencePreviewHtmlFromRefs(refs) {
   `;
 }
 
+function buildOverlayFrameHtml(src, label, overlay) {
+  const rect = (overlay && overlay.rect_norm) || {};
+  const hasOverlay = overlay && overlay.kind && overlay.kind !== "none" && Object.keys(rect).length;
+  return `
+    <div class="evidence-preview-frame">
+      <img src="${src}" alt="${label}" loading="lazy" />
+      ${
+        hasOverlay
+          ? `<div class="evidence-overlay-box evidence-overlay-${overlay.kind}"
+               style="left:${Number(rect.x || 0) * 100}%;top:${Number(rect.y || 0) * 100}%;width:${Number(rect.w || 0) * 100}%;height:${Number(rect.h || 0) * 100}%;">
+               <span>${overlay.label || label}</span>
+             </div>`
+          : ""
+      }
+    </div>
+  `;
+}
+
 function buildEvidencePreviewHtml(items) {
   if (!items || !items.length) {
     return "";
@@ -175,22 +193,9 @@ function buildEvidencePreviewHtml(items) {
     <div class="evidence-preview-grid">
       ${items
         .map((item) => {
-          const overlay = item.overlay || {};
-          const rect = overlay.rect_norm || {};
-          const hasOverlay = overlay.kind && overlay.kind !== "none" && Object.keys(rect).length;
           return `
             <a class="evidence-preview-item" href="${item.src}" target="_blank" rel="noreferrer">
-              <div class="evidence-preview-frame">
-                <img src="${item.src}" alt="${item.label || item.ref || "evidence"}" loading="lazy" />
-                ${
-                  hasOverlay
-                    ? `<div class="evidence-overlay-box evidence-overlay-${overlay.kind}"
-                         style="left:${Number(rect.x || 0) * 100}%;top:${Number(rect.y || 0) * 100}%;width:${Number(rect.w || 0) * 100}%;height:${Number(rect.h || 0) * 100}%;">
-                         <span>${overlay.label || buildLocationSummary({ location_summary: "" })}</span>
-                       </div>`
-                    : ""
-                }
-              </div>
+              ${buildOverlayFrameHtml(item.src, item.label || item.ref || "evidence", item.overlay)}
               <span>${item.label || item.ref || item.src}</span>
             </a>
           `;
@@ -230,10 +235,15 @@ function buildStructuredMatchesHtml(items) {
 }
 
 function buildTimelineEventHtml(item) {
+  const primaryEvidenceRef = (item.evidence_refs || [])[0];
+  const primaryEvidenceSrc = primaryEvidenceRef ? (primaryEvidenceRef.startsWith("/") ? primaryEvidenceRef : `/${primaryEvidenceRef}`) : "";
+  const previewHtml = primaryEvidenceSrc
+    ? `<div class="timeline-inline-preview">${buildOverlayFrameHtml(primaryEvidenceSrc, primaryEvidenceRef, item.preview_overlay)}</div>`
+    : buildEvidencePreviewHtmlFromRefs(item.evidence_refs || []);
   return `
     <div class="timeline-title">${item.event_type}</div>
     <div class="timeline-meta">${item.summary || ""}\n${buildEventDetailLines(item)}</div>
-    ${buildEvidencePreviewHtmlFromRefs(item.evidence_refs || [])}
+    ${previewHtml}
   `;
 }
 
@@ -569,9 +579,11 @@ function renderSnippets(items) {
   items.forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
+    const primaryEvidenceSrc = item.evidence_ref ? (item.evidence_ref.startsWith("/") ? item.evidence_ref : `/${item.evidence_ref}`) : "";
     node.innerHTML = `
       <div class="timeline-title">${item.preview || "无可用文本"}</div>
       <div class="timeline-meta">${item.summary || ""}\n${item.location_summary ? `位置: ${item.location_summary}\n` : ""}${item.ocr_text || ""}\n${formatTimestamp(item.timestamp)}</div>
+      ${primaryEvidenceSrc ? `<div class="timeline-inline-preview">${buildOverlayFrameHtml(primaryEvidenceSrc, item.preview || item.evidence_ref, item.preview_overlay)}</div>` : ""}
     `;
     container.appendChild(node);
   });

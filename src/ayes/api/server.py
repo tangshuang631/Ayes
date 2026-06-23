@@ -403,6 +403,8 @@ def get_ocr_snippets(
                 "ocr_text": text,
                 "preview": (text or summary)[:120],
                 "location_summary": describe_location_summary(item),
+                "preview_overlay": build_preview_overlay(item),
+                "evidence_ref": ((item.get("evidence_refs") or [None])[0]),
                 "tags": item.get("tags") or [],
             }
         )

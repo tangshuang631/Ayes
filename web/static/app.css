@@ -374,6 +374,20 @@ textarea {
   word-break: break-all;
 }
 
+.timeline-inline-preview {
+  margin-top: 8px;
+  max-width: 180px;
+}
+
+.timeline-inline-preview img {
+  width: 100%;
+  aspect-ratio: 1.4 / 1;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  background: #f0f2f5;
+  display: block;
+}
+
 .regions-input {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;

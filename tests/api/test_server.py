@@ -202,6 +202,7 @@ def test_ocr_snippets_endpoint_returns_recent_text_fragments() -> None:
     assert "items" in payload
     if payload["items"]:
         assert "location_summary" in payload["items"][0]
+        assert "preview_overlay" in payload["items"][0]
 
 
 def test_ask_endpoint_returns_time_range_and_evidence_fields() -> None:
