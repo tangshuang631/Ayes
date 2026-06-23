@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import time
 from dataclasses import asdict
 from typing import Any, Dict, List
@@ -28,6 +29,37 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
         for ref in event.get("evidence_refs", []):
             if ref not in evidence_refs:
                 evidence_refs.append(ref)
+    structured_matches: List[Dict[str, Any]] = []
+    seen_structured_keys: set[str] = set()
+    for event in matched_events:
+        watch_match = event.get("watch_match") or {}
+        if not watch_match.get("matched"):
+            continue
+        key = "|".join(
+            [
+                str(event.get("event_id") or ""),
+                str(watch_match.get("matched_rule") or ""),
+                str(watch_match.get("matched_field") or ""),
+                str(watch_match.get("matched_value")),
+            ]
+        )
+        if key in seen_structured_keys:
+            continue
+        seen_structured_keys.add(key)
+        region = event.get("region") or {}
+        timestamp = event.get("timestamp")
+        structured_matches.append(
+            {
+                "event_id": event.get("event_id"),
+                "field": watch_match.get("matched_field") or "",
+                "value": watch_match.get("matched_value"),
+                "unit": watch_match.get("matched_unit") or "",
+                "rule": watch_match.get("matched_rule") or "",
+                "query": watch_match.get("matched_query") or "",
+                "region_name": region.get("name") or region.get("region_id") or "",
+                "time_text": _format_time_text(timestamp),
+            }
+        )
     evidence_previews = [
         {
             "ref": ref,
@@ -48,10 +80,21 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
             "from": min(timestamps) if timestamps else None,
             "to": max(timestamps) if timestamps else None,
         },
+        "structured_matches": structured_matches,
         "evidence_refs": evidence_refs,
         "evidence_previews": evidence_previews,
         "time_scope_respected": True,
     }
+
+
+def _format_time_text(timestamp: Any) -> str:
+    if timestamp in {None, ""}:
+        return ""
+    try:
+        numeric = float(timestamp)
+    except (TypeError, ValueError):
+        return str(timestamp)
+    return datetime.fromtimestamp(numeric, tz=timezone.utc).strftime("%H:%M:%S")
 
 
 def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
@@ -94,13 +137,13 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "method": "GET",
             "path": "/api/ask",
             "query": {"task_id": "可选", "question": "必填", "minutes": "1-15"},
-            "response_keys": ["task_id", "question", "minutes", "answer", "matched_events", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
+            "response_keys": ["task_id", "question", "minutes", "answer", "matched_events", "structured_matches", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
         },
         "memory.recent": {
             "method": "GET",
             "path": "/api/memory/recent",
             "query": {"task_id": "可选", "minutes": "1-15", "keyword": "可选"},
-            "response_keys": ["task_id", "minutes", "answer", "matched_events", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
+            "response_keys": ["task_id", "minutes", "answer", "matched_events", "structured_matches", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
         },
         "logs.recent": {
             "method": "GET",

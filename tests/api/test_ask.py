@@ -93,6 +93,11 @@ def test_ask_endpoint_answers_numeric_threshold_question_from_structured_match()
     assert "低于 299" in payload["answer"]
     assert "199.0" in payload["answer"]
     assert payload["matched_events"]
+    assert payload["structured_matches"]
+    assert payload["structured_matches"][0]["field"] == "price"
+    assert payload["structured_matches"][0]["value"] == 199.0
+    assert payload["structured_matches"][0]["unit"] == "cny"
+    assert payload["structured_matches"][0]["time_text"]
 
 
 def test_ask_endpoint_answers_numeric_lowest_question_with_time() -> None:
