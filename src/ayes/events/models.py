@@ -28,10 +28,17 @@ class Observability:
 
 @dataclass(frozen=True)
 class Region:
+    region_id: str = ""
+    name: str = ""
     x: int = 0
     y: int = 0
     w: int = 0
     h: int = 0
+    coordinate_space: str = "target"
+    x_norm: float = 0.0
+    y_norm: float = 0.0
+    w_norm: float = 0.0
+    h_norm: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -48,6 +55,14 @@ class EventText:
     ocr_text: str = ""
     normalized_text: str = ""
     blocks: List[EventTextBlock] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class EventVisual:
+    summary: str = ""
+    labels: List[str] = field(default_factory=list)
+    attributes: dict = field(default_factory=dict)
+    provider: str = ""
 
 
 @dataclass(frozen=True)
@@ -73,6 +88,7 @@ class TimelineEvent:
     observability: Observability
     region: Region = field(default_factory=Region)
     text: EventText = field(default_factory=EventText)
+    visual: EventVisual = field(default_factory=EventVisual)
     summary: str = ""
     tags: List[str] = field(default_factory=list)
     watch_match: WatchMatch = field(default_factory=WatchMatch)

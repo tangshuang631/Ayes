@@ -45,6 +45,7 @@ class WatchTarget:
     screen_id: Optional[int] = None
     include_all_windows: bool = True
     only_observable_windows: bool = True
+    regions: List["TargetRegion"] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WatchTarget":
@@ -72,6 +73,35 @@ class WatchTarget:
                 data.get("only_observable_windows", True),
                 "target.only_observable_windows",
             ),
+            regions=[TargetRegion.from_dict(item) for item in data.get("regions", [])],
+        )
+
+
+@dataclass(frozen=True)
+class TargetRegion:
+    region_id: str
+    name: str
+    x: int
+    y: int
+    w: int
+    h: int
+    coordinate_space: str = "target"
+    enabled: bool = True
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TargetRegion":
+        coordinate_space = _require_str(data.get("coordinate_space", "target"), "target.regions[].coordinate_space")
+        if coordinate_space not in {"target", "screen", "window"}:
+            raise ConfigError("target.regions[].coordinate_space 必须是 target、screen 或 window")
+        return cls(
+            region_id=_require_str(data.get("region_id"), "target.regions[].region_id"),
+            name=_require_str(data.get("name"), "target.regions[].name"),
+            x=_require_int(data.get("x"), "target.regions[].x", 0),
+            y=_require_int(data.get("y"), "target.regions[].y", 0),
+            w=_require_int(data.get("w"), "target.regions[].w", 1),
+            h=_require_int(data.get("h"), "target.regions[].h", 1),
+            coordinate_space=coordinate_space,
+            enabled=_require_bool(data.get("enabled", True), "target.regions[].enabled"),
         )
 
 
@@ -98,6 +128,46 @@ class SamplingConfig:
                 data.get("skip_ocr_when_no_change", True),
                 "sampling.skip_ocr_when_no_change",
             ),
+        )
+
+
+@dataclass(frozen=True)
+class VisionConfig:
+    enabled: bool = False
+    provider: str = "ollama"
+    model: str = "Molmo-7B-D-0924"
+    trigger_when_ocr_sparse: bool = True
+    ocr_sparse_min_chars: int = 12
+    trigger_on_visual_regions: bool = True
+    trigger_on_watch_intent: bool = True
+    trigger_on_question_semantics: bool = True
+    max_calls_per_minute: int = 6
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "VisionConfig":
+        provider = _require_str(data.get("provider", "ollama"), "vision.provider")
+        return cls(
+            enabled=_require_bool(data.get("enabled", False), "vision.enabled"),
+            provider=provider,
+            model=_require_str(data.get("model", "Molmo-7B-D-0924"), "vision.model"),
+            trigger_when_ocr_sparse=_require_bool(
+                data.get("trigger_when_ocr_sparse", True),
+                "vision.trigger_when_ocr_sparse",
+            ),
+            ocr_sparse_min_chars=_require_int(data.get("ocr_sparse_min_chars", 12), "vision.ocr_sparse_min_chars", 0),
+            trigger_on_visual_regions=_require_bool(
+                data.get("trigger_on_visual_regions", True),
+                "vision.trigger_on_visual_regions",
+            ),
+            trigger_on_watch_intent=_require_bool(
+                data.get("trigger_on_watch_intent", True),
+                "vision.trigger_on_watch_intent",
+            ),
+            trigger_on_question_semantics=_require_bool(
+                data.get("trigger_on_question_semantics", True),
+                "vision.trigger_on_question_semantics",
+            ),
+            max_calls_per_minute=_require_int(data.get("max_calls_per_minute", 6), "vision.max_calls_per_minute", 1),
         )
 
 
@@ -327,6 +397,7 @@ class WatchSpec:
     mode: str
     target: WatchTarget
     sampling: SamplingConfig
+    vision: VisionConfig
     memory: MemoryConfig
     watch_intent: WatchIntentConfig
     alert: AlertConfig
@@ -343,6 +414,7 @@ class WatchSpec:
             mode=mode,
             target=WatchTarget.from_dict(data.get("target", {})),
             sampling=SamplingConfig.from_dict(data.get("sampling", {})),
+            vision=VisionConfig.from_dict(data.get("vision", {})),
             memory=MemoryConfig.from_dict(data.get("memory", {})),
             watch_intent=WatchIntentConfig.from_dict(data.get("watch_intent", {}), mode=mode),
             alert=AlertConfig.from_dict(data.get("alert", {})),

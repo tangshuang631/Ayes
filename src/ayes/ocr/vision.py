@@ -72,6 +72,7 @@ class VisionOCRProvider:
             elapsed_ms=elapsed_ms,
             full_text="\n".join(texts).strip(),
             blocks=blocks,
+            char_count=len("".join(texts).strip()),
             raw={"observation_count": len(observations)},
         )
 

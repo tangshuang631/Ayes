@@ -34,4 +34,5 @@ class OCRResult:
     full_text: str
     blocks: List[OCRTextBlock] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    char_count: int = 0
     raw: Optional[Dict[str, object]] = None

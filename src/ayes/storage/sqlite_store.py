@@ -129,32 +129,91 @@ class SQLiteStore:
             )
             connection.commit()
 
-    def list_events(self, *, task_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    def list_events(
+        self,
+        *,
+        task_id: Optional[str] = None,
+        source: Optional[str] = None,
+        since_timestamp: Optional[float] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
         query = "SELECT payload_json FROM events"
         params: list[Any] = []
+        conditions: list[str] = []
         if task_id:
-            query += " WHERE task_id = ?"
+            conditions.append("task_id = ?")
             params.append(task_id)
+        if source:
+            conditions.append("json_extract(payload_json, '$.source') = ?")
+            params.append(source)
+        if since_timestamp is not None:
+            conditions.append("timestamp >= ?")
+            params.append(since_timestamp)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
         return [json.loads(row[0]) for row in rows]
 
-    def list_logs(self, *, task_id: Optional[str] = None, category: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-        query = "SELECT payload_json FROM logs WHERE 1=1"
+    def list_logs(
+        self,
+        *,
+        task_id: Optional[str] = None,
+        category: Optional[str] = None,
+        since_timestamp: Optional[float] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        query = "SELECT payload_json FROM logs"
         params: list[Any] = []
+        conditions: list[str] = []
         if task_id:
-            query += " AND task_id = ?"
+            conditions.append("task_id = ?")
             params.append(task_id)
         if category:
-            query += " AND category = ?"
+            conditions.append("category = ?")
             params.append(category)
+        if since_timestamp is not None:
+            conditions.append("timestamp >= ?")
+            params.append(since_timestamp)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def query_events(
+        self,
+        *,
+        task_id: str,
+        minutes: int,
+        keyword: Optional[str] = None,
+        now: Optional[float] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        import time
+
+        current_now = now if now is not None else time.time()
+        since_timestamp = current_now - (minutes * 60)
+        items = self.list_events(task_id=task_id, since_timestamp=since_timestamp, limit=limit)
+        if not keyword:
+            return list(reversed(items))
+        lowered = keyword.lower()
+        matched = []
+        for item in reversed(items):
+            text = item.get("text") or {}
+            tags = item.get("tags") or []
+            if (
+                lowered in (item.get("summary") or "").lower()
+                or lowered in (text.get("ocr_text") or "").lower()
+                or lowered in (text.get("normalized_text") or "").lower()
+                or any(lowered in str(tag).lower() for tag in tags)
+            ):
+                matched.append(item)
+        return matched
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         with self._connect() as connection:

@@ -92,3 +92,63 @@ def test_triggered_mode_requires_watch_intent_enabled() -> None:
                 "watch_intent": {"enabled": False},
             }
         )
+
+
+def test_process_target_can_bind_by_process_name() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Safari"},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    assert spec.target.type == "process"
+    assert spec.target.process_name == "Safari"
+
+
+def test_watch_spec_supports_multi_regions_and_vision_config() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_main",
+                        "name": "价格区",
+                        "x": 120,
+                        "y": 240,
+                        "w": 300,
+                        "h": 120,
+                        "coordinate_space": "target",
+                        "enabled": True,
+                    },
+                    {
+                        "region_id": "roi_chart",
+                        "name": "图表区",
+                        "x": 450,
+                        "y": 240,
+                        "w": 280,
+                        "h": 180,
+                        "coordinate_space": "target",
+                        "enabled": True,
+                    },
+                ],
+            },
+            "vision": {
+                "enabled": True,
+                "provider": "ollama",
+                "model": "Molmo-7B-D-0924",
+                "trigger_when_ocr_sparse": True,
+                "ocr_sparse_min_chars": 10,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    assert len(spec.target.regions) == 2
+    assert spec.target.regions[0].region_id == "roi_main"
+    assert spec.vision.enabled is True
+    assert spec.vision.model == "Molmo-7B-D-0924"

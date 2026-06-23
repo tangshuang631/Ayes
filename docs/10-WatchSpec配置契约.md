@@ -77,7 +77,19 @@
     "window_id": null,
     "screen_id": null,
     "include_all_windows": true,
-    "only_observable_windows": true
+    "only_observable_windows": true,
+    "regions": [
+      {
+        "region_id": "roi_main",
+        "name": "价格区域",
+        "x": 120,
+        "y": 240,
+        "w": 360,
+        "h": 180,
+        "coordinate_space": "target",
+        "enabled": true
+      }
+    ]
   },
   "sampling": {
     "screenshot_interval_ms": 1000,
@@ -85,6 +97,17 @@
     "change_detection_interval_ms": 1000,
     "max_fps": 2,
     "skip_ocr_when_no_change": true
+  },
+  "vision": {
+    "enabled": false,
+    "provider": "ollama",
+    "model": "Molmo-7B-D-0924",
+    "trigger_when_ocr_sparse": true,
+    "ocr_sparse_min_chars": 12,
+    "trigger_on_visual_regions": true,
+    "trigger_on_watch_intent": true,
+    "trigger_on_question_semantics": true,
+    "max_calls_per_minute": 6
   },
   "memory": {
     "short_term": {
@@ -152,6 +175,29 @@
 - `window`
 - `screen`
 
+### 4.4 多 ROI 区域监控
+
+v1 正式支持：
+
+- 单任务多框选区域
+
+即一个任务可以绑定多个 ROI 区域，并对这些区域做优先监控。
+
+要求：
+
+- ROI 必须跟随已选 `screen / process / window` 目标存在
+- ROI 使用矩形框选
+- ROI 必须保存 `region_id`
+- ROI 必须保存名称，便于问答和日志展示
+- ROI 坐标必须落入统一坐标体系
+- 没有配置 ROI 时，默认监控整个目标画面
+
+第一阶段建议先采用：
+
+- `coordinate_space = target`
+
+即相对所选屏幕、窗口或进程代表画面的坐标，而不是全局桌面绝对坐标
+
 ### 4.1 process
 
 监控指定进程下的窗口。
@@ -207,6 +253,38 @@ OCR 频率由 `ocr_interval_ms` 控制。
 - `ocr_interval_ms = 1000`
 - `max_fps = 2`
 - `skip_ocr_when_no_change = true`
+
+补充要求：
+
+- 如果配置了 ROI，则高频 OCR 和变化检测优先在 ROI 内执行
+- 如果配置了多个 ROI，则可按 ROI 顺序或批次执行 OCR
+- 全目标截图仍可保留为低频证据或问答回溯输入
+
+## 5.1 视觉增强开关
+
+第一阶段默认主链路仍然是 OCR。
+
+`vision` 只作为可选增强层。
+
+正式策略：
+
+- 默认只跑 OCR
+- 如果 OCR 结果太少，可触发视觉增强
+- 如果 ROI 被判定为图表/图片区，可触发视觉增强
+- 如果 `watch spec` 明确要求视觉理解，可触发视觉增强
+- 如果用户提问需要图像语义，可触发视觉增强
+
+建议字段：
+
+- `vision.enabled`
+- `vision.provider`
+- `vision.model`
+- `vision.trigger_when_ocr_sparse`
+- `vision.ocr_sparse_min_chars`
+- `vision.trigger_on_visual_regions`
+- `vision.trigger_on_watch_intent`
+- `vision.trigger_on_question_semantics`
+- `vision.max_calls_per_minute`
 
 ## 6. 短期详细记忆
 

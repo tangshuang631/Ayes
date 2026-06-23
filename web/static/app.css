@@ -79,12 +79,18 @@ h2 {
   margin-bottom: 10px;
 }
 
+.two-columns > * {
+  flex: 1 1 0;
+}
+
 .compact {
   margin-bottom: 0;
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -104,11 +110,18 @@ button:hover {
   color: var(--accent);
 }
 
-input {
+input,
+select,
+textarea {
   width: 100%;
   border: 1px solid var(--line);
   padding: 8px 10px;
   background: var(--panel);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 92px;
 }
 
 .window-list,
@@ -127,9 +140,40 @@ input {
   border-bottom: 1px solid var(--line);
 }
 
+.empty-state {
+  padding: 12px 0;
+  color: var(--muted);
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
 .window-item button {
   width: 100%;
   text-align: left;
+}
+
+.candidate-button {
+  display: block;
+}
+
+.collapsed-section {
+  margin-top: 10px;
+}
+
+.collapsed-section summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.candidate-preview {
+  width: 100%;
+  max-height: 120px;
+  object-fit: cover;
+  display: block;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
 }
 
 .window-title,
@@ -148,6 +192,12 @@ input {
   white-space: pre-wrap;
 }
 
+.candidate-tags {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .status-box,
 .result-box {
   border: 1px solid var(--line);
@@ -157,6 +207,64 @@ input {
   font-size: 12px;
   white-space: pre-wrap;
   overflow: auto;
+}
+
+.status-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.status-chip {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.status-chip-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.status-chip-value {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.result-meta {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.answer-summary {
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.subsection-head {
+  margin: 12px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.check-row input {
+  width: auto;
 }
 
 .preview-shell {
@@ -175,6 +283,92 @@ input {
   display: block;
 }
 
+.regions-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.roi-editor-shell {
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.roi-editor-stage {
+  position: relative;
+  width: 100%;
+  min-height: 180px;
+  overflow: hidden;
+  background: #fafafa;
+  cursor: crosshair;
+}
+
+.roi-editor-stage img {
+  width: 100%;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.roi-overlay,
+.roi-draft {
+  position: absolute;
+  inset: 0;
+}
+
+.roi-box,
+.roi-draft-box {
+  position: absolute;
+  border: 2px solid #111827;
+  background: rgba(17, 24, 39, 0.08);
+}
+
+.roi-draft-box {
+  border-style: dashed;
+}
+
+.roi-label {
+  position: absolute;
+  top: -22px;
+  left: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.roi-region-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+}
+
+.roi-region-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.roi-region-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.roi-region-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -185,5 +379,9 @@ input {
   .right-panel {
     border-right: none;
     border-bottom: 1px solid var(--line);
+  }
+
+  .status-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

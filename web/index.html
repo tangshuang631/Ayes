@@ -16,12 +16,103 @@
         <section class="panel-section">
           <div class="section-head">
             <h2>监控目标</h2>
-            <button id="refreshWindowsBtn" class="text-button">刷新</button>
+            <button id="refreshTargetsBtn" class="text-button">刷新</button>
           </div>
-          <div class="inline-actions">
-            <button id="loadScreenBtn">监控整个屏幕</button>
-          </div>
+          <div id="targetCollapseRule" class="result-meta"></div>
+          <div class="subsection-head">屏幕候选</div>
+          <div id="screenList" class="window-list"></div>
+          <div class="subsection-head">进程候选</div>
+          <div id="processList" class="window-list"></div>
+          <details id="collapsedProcessSection" class="collapsed-section">
+            <summary>低优先级进程候选</summary>
+            <div id="collapsedProcessList" class="window-list"></div>
+          </details>
+          <div class="subsection-head">窗口候选</div>
           <div id="windowList" class="window-list"></div>
+          <details id="collapsedWindowSection" class="collapsed-section">
+            <summary>低分辨率 / 无快照窗口</summary>
+            <div id="collapsedWindowList" class="window-list"></div>
+          </details>
+        </section>
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>任务配置</h2>
+            <button id="applyConfigBtn" class="text-button">装载任务</button>
+          </div>
+          <div id="selectedTargetSummary" class="result-meta">未选择监控目标</div>
+          <div class="query-row">
+            <select id="targetModeSelect">
+              <option value="selected_window">监控当前窗口</option>
+              <option value="selected_process">监控该进程</option>
+              <option value="selected_screen">监控整个屏幕</option>
+            </select>
+          </div>
+          <div class="query-row">
+            <select id="modeSelect">
+              <option value="observe">observe</option>
+              <option value="triggered">triggered</option>
+            </select>
+          </div>
+          <div class="query-row">
+            <input id="queryInput" placeholder="触发关键词，例如 价格低于 299" />
+          </div>
+          <div class="query-row two-columns">
+            <input id="screenshotIntervalInput" type="number" min="200" step="100" value="1000" placeholder="截图 ms" />
+            <input id="ocrIntervalInput" type="number" min="200" step="100" value="1000" placeholder="OCR ms" />
+          </div>
+          <div class="query-row two-columns">
+            <label class="check-row"><input id="alertEnabledInput" type="checkbox" /> webhook</label>
+            <label class="check-row"><input id="skipOcrInput" type="checkbox" checked /> 无变化跳过 OCR</label>
+          </div>
+          <div class="subsection-head">视觉增强</div>
+          <div class="query-row two-columns">
+            <label class="check-row"><input id="visionEnabledInput" type="checkbox" /> 启用 Ollama 视觉辅助</label>
+            <input id="visionModelInput" value="Molmo-7B-D-0924" placeholder="Ollama 模型名" />
+          </div>
+          <div class="query-row two-columns">
+            <select id="visionModelSelect">
+              <option value="">使用手动模型名</option>
+            </select>
+            <button id="refreshVisionModelsBtn" class="text-button">读取本机模型</button>
+          </div>
+          <div class="query-row two-columns">
+            <label class="check-row"><input id="visionTriggerSparseInput" type="checkbox" checked /> OCR 结果太少时触发</label>
+            <input id="visionSparseCharsInput" type="number" min="0" value="12" placeholder="最少字符数阈值" />
+          </div>
+          <div class="subsection-head">受控刷新点击</div>
+          <div class="query-row two-columns">
+            <label class="check-row"><input id="refreshClickEnabledInput" type="checkbox" /> 启用刷新点击</label>
+            <select id="refreshCoordinateSpaceSelect">
+              <option value="window">window</option>
+              <option value="screen">screen</option>
+            </select>
+          </div>
+          <div class="query-row two-columns">
+            <input id="refreshPointXInput" type="number" min="0" value="100" placeholder="X" />
+            <input id="refreshPointYInput" type="number" min="0" value="200" placeholder="Y" />
+          </div>
+          <div class="query-row two-columns">
+            <input id="refreshIntervalInput" type="number" min="1" value="30" placeholder="刷新间隔秒" />
+            <input id="refreshCooldownInput" type="number" min="0" value="30" placeholder="冷却秒" />
+          </div>
+          <div class="subsection-head">重点监控区域</div>
+          <div class="result-meta">在当前已选目标预览图上拖拽框选多个 ROI。JSON 入口保留给调试和手工修正。</div>
+          <div class="query-row">
+            <button id="resetRegionsBtn" class="text-button">清空区域</button>
+            <button id="loadSelectedPreviewBtn" class="text-button">载入目标预览</button>
+          </div>
+          <div id="roiEditorEmpty" class="result-meta">先从候选列表选择屏幕、进程或窗口，再载入预览进行框选。</div>
+          <div id="roiEditorShell" class="roi-editor-shell hidden">
+            <div id="roiEditorStage" class="roi-editor-stage">
+              <img id="roiEditorImage" alt="ROI 框选预览" />
+              <div id="roiOverlay" class="roi-overlay"></div>
+              <div id="roiDraft" class="roi-draft hidden"></div>
+            </div>
+          </div>
+          <div id="roiRegionList" class="roi-region-list"></div>
+          <div class="query-row">
+            <textarea id="regionsJsonInput" class="regions-input" placeholder='区域 JSON，例如 [{"region_id":"roi_main","name":"价格区","x":120,"y":240,"w":300,"h":120,"coordinate_space":"target","enabled":true}]'></textarea>
+          </div>
         </section>
         <section class="panel-section">
           <div class="section-head">
@@ -34,6 +125,9 @@
             <input id="memoryMinutes" type="number" min="1" max="15" value="5" />
             <button id="refreshTimelineBtn" class="text-button">刷新时间线</button>
           </div>
+          <div class="query-row">
+            <button id="applyTaskScopeBtn" class="text-button">应用当前任务范围</button>
+          </div>
         </section>
       </aside>
 
@@ -42,10 +136,13 @@
           <div class="section-head">
             <h2>运行状态</h2>
             <div class="inline-actions compact">
+              <button id="startWatchBtn">开始持续监控</button>
               <button id="runOnceBtn">执行一次</button>
               <button id="stopWatchBtn" class="text-button">停止</button>
             </div>
           </div>
+          <div id="statusSummary" class="status-summary-grid"></div>
+          <div id="runtimeMeta" class="result-meta"></div>
           <pre id="statusView" class="status-box"></pre>
         </section>
 
@@ -69,6 +166,39 @@
 
         <section class="panel-section">
           <div class="section-head">
+            <h2>OCR 片段</h2>
+            <button id="refreshSnippetsBtn" class="text-button">刷新</button>
+          </div>
+          <div class="result-meta">用于快速观察最近识别出的文本，辅助配置 triggered 关键词或排查未命中原因。</div>
+          <div id="snippetList" class="timeline-list"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>动作轨迹</h2>
+            <button id="refreshActionsBtn" class="text-button">刷新</button>
+          </div>
+          <div id="actionList" class="timeline-list"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>命中轨迹</h2>
+            <button id="refreshMatchesBtn" class="text-button">刷新</button>
+          </div>
+          <div id="matchList" class="timeline-list"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>告警轨迹</h2>
+            <button id="refreshAlertsBtn" class="text-button">刷新</button>
+          </div>
+          <div id="alertList" class="timeline-list"></div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-head">
             <h2>长期摘要</h2>
             <button id="refreshLongTermBtn" class="text-button">刷新</button>
           </div>
@@ -85,13 +215,31 @@
           <div class="query-row">
             <input id="memoryKeyword" placeholder="输入问题或关键词，例如 Codex" />
           </div>
+          <div id="memoryMeta" class="result-meta"></div>
+          <div id="memorySummary" class="answer-summary"></div>
           <pre id="memoryView" class="result-box"></pre>
+          <div id="memoryRefs" class="result-meta"></div>
+          <div id="memoryEvidence" class="timeline-list"></div>
         </section>
 
         <section class="panel-section">
           <div class="section-head">
             <h2>近期日志</h2>
             <button id="refreshLogsBtn" class="text-button">刷新</button>
+          </div>
+          <div class="query-row">
+            <select id="logCategorySelect">
+              <option value="">全部类别</option>
+              <option value="system">system</option>
+              <option value="watch">watch</option>
+              <option value="capture">capture</option>
+              <option value="diff">diff</option>
+              <option value="ocr">ocr</option>
+              <option value="match">match</option>
+              <option value="alert">alert</option>
+              <option value="action">action</option>
+              <option value="api">api</option>
+            </select>
           </div>
           <div id="logList" class="log-list"></div>
         </section>

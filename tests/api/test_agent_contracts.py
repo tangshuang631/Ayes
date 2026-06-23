@@ -11,4 +11,7 @@ def test_agent_contracts_endpoint_exposes_expected_routes() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert "watch.status" in payload
+    assert "watch.start" in payload
     assert "timeline.recent" in payload
+    assert payload["timeline.query"]["path"] == "/api/ask"
+    assert "query" in payload["logs.recent"]

@@ -23,3 +23,10 @@ def test_ask_endpoint_uses_recent_summary_for_generic_question() -> None:
     payload = response.json()
     assert "answer" in payload
     assert "matched_events" in payload
+    assert payload["task_id"] == "task_api_test"
+    assert payload["minutes"] == 5
+    assert "time_range" in payload
+    assert "evidence_refs" in payload
+    assert "time_scope_respected" in payload
+    assert payload["time_scope_respected"] is True
+    assert "memory_layers_used" in payload
