@@ -555,10 +555,14 @@ class WatchRunner:
                 )
                 self._record_event(match_event)
                 emitted.append(match_event)
-        extracted_numbers = self._extract_numeric_candidates(event.text.ocr_text)
         for rule in self.spec.watch_intent.rules:
             if rule.type != "numeric_threshold":
                 continue
+            extracted_numbers = self._extract_numeric_candidates(
+                event.text.ocr_text,
+                field_name=rule.field or "",
+                unit=rule.unit or "",
+            )
             for candidate in extracted_numbers:
                 if not self._compare_numeric_rule(candidate, rule.operator or "eq", rule.value or 0.0):
                     continue
@@ -595,10 +599,13 @@ class WatchRunner:
                 break
         return emitted
 
-    def _extract_numeric_candidates(self, text: str) -> List[float]:
+    def _extract_numeric_candidates(self, text: str, *, field_name: str = "", unit: str = "") -> List[float]:
         if not text:
             return []
         normalized = text.replace(",", "").replace("，", "")
+        contextual_candidates = self._extract_contextual_numeric_candidates(normalized, field_name=field_name, unit=unit)
+        if contextual_candidates:
+            return contextual_candidates
         candidates: List[float] = []
         for raw in re.findall(r"(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?", normalized):
             try:
@@ -606,6 +613,47 @@ class WatchRunner:
             except ValueError:
                 continue
         return candidates
+
+    def _extract_contextual_numeric_candidates(self, text: str, *, field_name: str, unit: str) -> List[float]:
+        aliases = self._numeric_field_aliases(field_name=field_name, unit=unit)
+        if not aliases:
+            return []
+        candidates: List[float] = []
+        for alias in aliases:
+            patterns = [
+                rf"{re.escape(alias)}\s*[:：=]?\s*[¥￥$]?\s*(-?\d+(?:\.\d+)?)",
+                rf"[¥￥$]\s*(-?\d+(?:\.\d+)?)\s*(?:{re.escape(alias)})",
+            ]
+            for pattern in patterns:
+                for raw in re.findall(pattern, text, flags=re.IGNORECASE):
+                    try:
+                        candidates.append(float(raw))
+                    except ValueError:
+                        continue
+        return candidates
+
+    def _numeric_field_aliases(self, *, field_name: str, unit: str) -> List[str]:
+        field = (field_name or "").strip().lower()
+        aliases: List[str] = []
+        if field == "price":
+            aliases.extend(["price", "价格", "售价", "现价", "到手价"])
+            aliases.extend(["¥", "￥", "$"])
+        elif field == "stock":
+            aliases.extend(["stock", "库存", "余量", "剩余"])
+        elif field:
+            aliases.append(field)
+        if unit:
+            lowered_unit = unit.strip().lower()
+            if lowered_unit == "cny":
+                aliases.extend(["¥", "￥", "元"])
+            elif lowered_unit not in aliases:
+                aliases.append(lowered_unit)
+        # 保持顺序并去重
+        unique: List[str] = []
+        for alias in aliases:
+            if alias and alias not in unique:
+                unique.append(alias)
+        return unique
 
     def _compare_numeric_rule(self, candidate: float, operator: str, threshold: float) -> bool:
         if operator == "lt":
