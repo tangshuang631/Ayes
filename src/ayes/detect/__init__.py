@@ -1,0 +1,1 @@
+"""Diff and ROI detection."""
