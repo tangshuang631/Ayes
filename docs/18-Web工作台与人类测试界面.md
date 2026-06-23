@@ -305,3 +305,15 @@ Web 工作台只是人类入口。
    - 是否显示证据事件
    - 是否显示记忆层
 7. 切换日志类别或任务范围，检查近期日志、近期事件和问答是否随之变化
+
+补充：
+
+8. 如果需要快速做本地 HTTP 闭环验证，可运行：
+   - [scripts/smoke_human_flow.py](/Users/apple/Desktop/2026/Ayes/scripts/smoke_human_flow.py)
+9. smoke 至少应验证：
+   - 装载任务成功
+   - 执行一次成功
+   - 近期事件可读
+   - OCR 片段可读
+   - 问答接口返回回答
+   - timeline / snippets 若存在事件，则优先返回位置摘要或叠框数据

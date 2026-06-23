@@ -182,3 +182,66 @@ def test_events_endpoint_supports_match_source_filter() -> None:
     client.post("/api/watch/stop")
     assert response.status_code == 200
     assert "items" in response.json()
+
+
+def test_minimal_human_verifiable_monitoring_flow() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_human_flow",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_flow",
+                        "name": "价格区",
+                        "x": 0,
+                        "y": 0,
+                        "w": 200,
+                        "h": 120,
+                        "coordinate_space": "target",
+                        "enabled": True,
+                    }
+                ],
+            },
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    run_once = client.post("/api/watch/run-once")
+    assert run_once.status_code == 200
+
+    status = client.get("/api/status")
+    timeline = client.get("/api/timeline/recent", params={"task_id": "task_human_flow", "minutes": 5, "limit": 20})
+    snippets = client.get("/api/ocr/snippets", params={"task_id": "task_human_flow", "minutes": 5, "limit": 20})
+    logs = client.get("/api/logs", params={"task_id": "task_human_flow", "minutes": 15})
+    ask = client.get("/api/ask", params={"task_id": "task_human_flow", "question": "最近发生了什么", "minutes": 5})
+
+    assert status.status_code == 200
+    assert timeline.status_code == 200
+    assert snippets.status_code == 200
+    assert logs.status_code == 200
+    assert ask.status_code == 200
+
+    timeline_items = timeline.json()["items"]
+    assert isinstance(timeline_items, list)
+    if timeline_items:
+        assert "preview_overlay" in timeline_items[0]
+
+    snippet_items = snippets.json()["items"]
+    assert isinstance(snippet_items, list)
+    if snippet_items:
+        assert "preview_overlay" in snippet_items[0]
+
+    ask_payload = ask.json()
+    assert "answer" in ask_payload
+    assert "matched_events" in ask_payload
+    assert "time_range" in ask_payload
