@@ -104,6 +104,45 @@ function buildEvidenceLinks(refs) {
     .join("<br />");
 }
 
+function buildEvidencePreviewHtmlFromRefs(refs) {
+  if (!refs || !refs.length) {
+    return "";
+  }
+  return `
+    <div class="evidence-preview-grid">
+      ${refs
+        .map((ref) => {
+          const href = ref.startsWith("/") ? ref : `/${ref}`;
+          return `
+            <a class="evidence-preview-item" href="${href}" target="_blank" rel="noreferrer">
+              <img src="${href}" alt="${ref}" loading="lazy" />
+              <span>${ref.split("/").pop() || ref}</span>
+            </a>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function buildEvidencePreviewHtml(items) {
+  if (!items || !items.length) {
+    return "";
+  }
+  return `
+    <div class="evidence-preview-grid">
+      ${items
+        .map((item) => `
+          <a class="evidence-preview-item" href="${item.src}" target="_blank" rel="noreferrer">
+            <img src="${item.src}" alt="${item.label || item.ref || "evidence"}" loading="lazy" />
+            <span>${item.label || item.ref || item.src}</span>
+          </a>
+        `)
+        .join("")}
+    </div>
+  `;
+}
+
 function nextRegionId() {
   return `roi_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -483,7 +522,7 @@ function renderMemoryResult(payload) {
   const timeRange = payload.time_range || {};
   summary.textContent = `结论: ${payload.answer || "暂无回答"} | 置信度: ${payload.confidence ?? "-"} | 证据事件: ${(payload.matched_events || []).length} | 实际命中时间: ${timeRange.from ? Math.floor(timeRange.from) : "-"} -> ${timeRange.to ? Math.floor(timeRange.to) : "-"} | 时间范围约束: ${payload.time_scope_respected ? "已遵守" : "未标记"}`;
   const refs = document.getElementById("memoryRefs");
-  refs.innerHTML = `证据引用:<br />${buildEvidenceLinks(payload.evidence_refs || [])}`;
+  refs.innerHTML = `证据引用:<br />${buildEvidenceLinks(payload.evidence_refs || [])}${buildEvidencePreviewHtml(payload.evidence_previews || [])}`;
   const evidence = document.getElementById("memoryEvidence");
   evidence.innerHTML = "";
   (payload.matched_events || []).slice().reverse().forEach((item) => {
@@ -492,6 +531,7 @@ function renderMemoryResult(payload) {
     node.innerHTML = `
       <div class="timeline-title">${item.event_type}</div>
       <div class="timeline-meta">${item.summary || ""}\n${buildEventDetailLines(item)}</div>
+      ${buildEvidencePreviewHtmlFromRefs(item.evidence_refs || [])}
     `;
     evidence.appendChild(node);
   });

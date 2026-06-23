@@ -27,8 +27,11 @@ def test_ask_endpoint_uses_recent_summary_for_generic_question() -> None:
     assert payload["minutes"] == 5
     assert "time_range" in payload
     assert "evidence_refs" in payload
+    assert "evidence_previews" in payload
     assert "time_scope_respected" in payload
     assert payload["time_scope_respected"] is True
     assert "memory_layers_used" in payload
     assert isinstance(payload["evidence_refs"], list)
     assert any(str(ref).startswith("runtime/evidence/") for ref in payload["evidence_refs"])
+    assert isinstance(payload["evidence_previews"], list)
+    assert any(str(item.get("src", "")).startswith("/runtime/evidence/") for item in payload["evidence_previews"])

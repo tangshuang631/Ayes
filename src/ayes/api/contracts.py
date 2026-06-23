@@ -28,6 +28,14 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
         for ref in event.get("evidence_refs", []):
             if ref not in evidence_refs:
                 evidence_refs.append(ref)
+    evidence_previews = [
+        {
+            "ref": ref,
+            "src": ref if ref.startswith("/") else f"/{ref}",
+            "label": ref.split("/")[-1],
+        }
+        for ref in evidence_refs
+    ]
     return {
         "task_id": task_id,
         "question": question,
@@ -41,6 +49,7 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
             "to": max(timestamps) if timestamps else None,
         },
         "evidence_refs": evidence_refs,
+        "evidence_previews": evidence_previews,
         "time_scope_respected": True,
     }
 
@@ -85,13 +94,13 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "method": "GET",
             "path": "/api/ask",
             "query": {"task_id": "可选", "question": "必填", "minutes": "1-15"},
-            "response_keys": ["task_id", "question", "minutes", "answer", "matched_events", "memory_layers_used", "time_range", "evidence_refs", "time_scope_respected"],
+            "response_keys": ["task_id", "question", "minutes", "answer", "matched_events", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
         },
         "memory.recent": {
             "method": "GET",
             "path": "/api/memory/recent",
             "query": {"task_id": "可选", "minutes": "1-15", "keyword": "可选"},
-            "response_keys": ["task_id", "minutes", "answer", "matched_events", "memory_layers_used", "time_range", "evidence_refs", "time_scope_respected"],
+            "response_keys": ["task_id", "minutes", "answer", "matched_events", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
         },
         "logs.recent": {
             "method": "GET",

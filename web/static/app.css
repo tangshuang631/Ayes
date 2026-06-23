@@ -239,6 +239,17 @@ textarea {
   font-size: 12px;
 }
 
+.result-meta a,
+.timeline-meta a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.result-meta a:hover,
+.timeline-meta a:hover {
+  text-decoration: underline;
+}
+
 .answer-summary {
   margin-bottom: 8px;
   padding: 10px;
@@ -281,6 +292,37 @@ textarea {
   width: 100%;
   height: auto;
   display: block;
+}
+
+.evidence-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.evidence-preview-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.evidence-preview-item img {
+  width: 100%;
+  aspect-ratio: 1.4 / 1;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  background: #f0f2f5;
+  display: block;
+}
+
+.evidence-preview-item span {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+  word-break: break-all;
 }
 
 .regions-input {
