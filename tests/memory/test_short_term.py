@@ -54,3 +54,56 @@ def test_short_term_query_answers_numeric_threshold_question_from_structured_mat
     assert len(result.matched_events) == 1
     assert "低于 299" in result.answer
     assert "199.0" in result.answer
+
+
+def test_short_term_query_answers_numeric_lowest_question_with_time() -> None:
+    store = ShortTermMemoryStore(retain_seconds=900)
+    first = build_event(
+        task_id="task_numeric",
+        spec_version="1.0",
+        task_mode="triggered",
+        timestamp=100.0,
+        source="semantic_match",
+        event_type="semantic_match",
+        priority="high",
+        confidence=1.0,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="命中数值阈值规则: price lt 299.0，当前识别值 199",
+        watch_match=WatchMatch(
+            matched=True,
+            score=1.0,
+            matched_rule="numeric_threshold:price:lt:299.0",
+            matched_value=199.0,
+            matched_unit="cny",
+            matched_field="price",
+        ),
+    )
+    second = build_event(
+        task_id="task_numeric",
+        spec_version="1.0",
+        task_mode="triggered",
+        timestamp=180.0,
+        source="semantic_match",
+        event_type="semantic_match",
+        priority="high",
+        confidence=1.0,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="命中数值阈值规则: price lt 299.0，当前识别值 159",
+        watch_match=WatchMatch(
+            matched=True,
+            score=1.0,
+            matched_rule="numeric_threshold:price:lt:299.0",
+            matched_value=159.0,
+            matched_unit="cny",
+            matched_field="price",
+        ),
+    )
+    store.append(first)
+    store.append(second)
+    result = store.query(now=200.0, minutes=5, question="最近5分钟最低大概是什么时候")
+    assert len(result.matched_events) == 2
+    assert "最低" in result.answer
+    assert "159.0" in result.answer
+    assert "180" in result.answer

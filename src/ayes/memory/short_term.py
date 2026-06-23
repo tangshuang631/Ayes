@@ -76,6 +76,8 @@ class ShortTermMemoryStore:
         question: str,
     ) -> Optional[QueryResult]:
         lowered = question.lower().strip()
+        if "最低" in lowered or "最高" in lowered:
+            return self._query_numeric_extreme(events, minutes=minutes, question=lowered)
         operator = None
         if "低于" in lowered or "小于" in lowered:
             operator = "lt"
@@ -131,6 +133,59 @@ class ShortTermMemoryStore:
             matched_events=matched,
             memory_layers_used=["short_term"],
         )
+
+    def _query_numeric_extreme(
+        self,
+        events: List[TimelineEvent],
+        *,
+        minutes: int,
+        question: str,
+    ) -> QueryResult:
+        field = ""
+        if "价格" in question or "price" in question:
+            field = "price"
+        elif "库存" in question or "stock" in question:
+            field = "stock"
+        matched = [
+            event
+            for event in events
+            if event.watch_match.matched
+            and event.watch_match.matched_rule.startswith("numeric_threshold:")
+            and event.watch_match.matched_value is not None
+            and (not field or event.watch_match.matched_field == field)
+        ]
+        if not matched:
+            return QueryResult(
+                answer=f"最近 {minutes} 分钟内未发现相关数值命中事件。",
+                confidence=0.76,
+                matched_events=[],
+                memory_layers_used=["short_term"],
+            )
+        field_label = self._field_label(field or matched[0].watch_match.matched_field)
+        if "最低" in question:
+            target = min(matched, key=lambda item: item.watch_match.matched_value or 0.0)
+            adjective = "最低"
+        else:
+            target = max(matched, key=lambda item: item.watch_match.matched_value or 0.0)
+            adjective = "最高"
+        answer = (
+            f"最近 {minutes} 分钟内，{field_label}{adjective}值大约是 {target.watch_match.matched_value}；"
+            f"对应时间约为 {int(target.timestamp)}。"
+        )
+        return QueryResult(
+            answer=answer,
+            confidence=0.9,
+            matched_events=sorted(matched, key=lambda item: item.timestamp),
+            memory_layers_used=["short_term"],
+        )
+
+    def _field_label(self, field: str) -> str:
+        lowered = (field or "").lower()
+        if lowered == "price":
+            return "价格"
+        if lowered == "stock":
+            return "库存"
+        return field or "目标字段"
 
 
 def operator_label(operator: str) -> str:

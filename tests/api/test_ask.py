@@ -93,3 +93,79 @@ def test_ask_endpoint_answers_numeric_threshold_question_from_structured_match()
     assert "低于 299" in payload["answer"]
     assert "199.0" in payload["answer"]
     assert payload["matched_events"]
+
+
+def test_ask_endpoint_answers_numeric_lowest_question_with_time() -> None:
+    now = time.time()
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "triggered",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {
+                "enabled": True,
+                "summary": "价格低于 299 时提醒",
+                "queries": [],
+                "rules": [
+                    {
+                        "type": "numeric_threshold",
+                        "field": "price",
+                        "operator": "lt",
+                        "value": 299.0,
+                        "unit": "cny",
+                    }
+                ],
+            },
+        }
+    )
+    runner = state.set_runner(spec, task_id="task_numeric_lowest_ask")
+    first = build_event(
+        task_id="task_numeric_lowest_ask",
+        spec_version="1.0",
+        task_mode="triggered",
+        timestamp=now - 30,
+        source="semantic_match",
+        event_type="semantic_match",
+        priority="high",
+        confidence=1.0,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="命中数值阈值规则: price lt 299.0，当前识别值 199",
+        watch_match=WatchMatch(
+            matched=True,
+            score=1.0,
+            matched_rule="numeric_threshold:price:lt:299.0",
+            matched_value=199.0,
+            matched_unit="cny",
+            matched_field="price",
+        ),
+    )
+    second = build_event(
+        task_id="task_numeric_lowest_ask",
+        spec_version="1.0",
+        task_mode="triggered",
+        timestamp=now - 10,
+        source="semantic_match",
+        event_type="semantic_match",
+        priority="high",
+        confidence=1.0,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="命中数值阈值规则: price lt 299.0，当前识别值 159",
+        watch_match=WatchMatch(
+            matched=True,
+            score=1.0,
+            matched_rule="numeric_threshold:price:lt:299.0",
+            matched_value=159.0,
+            matched_unit="cny",
+            matched_field="price",
+        ),
+    )
+    runner.memory.append(first)
+    runner.memory.append(second)
+    response = client.get("/api/ask", params={"question": "最近5分钟最低大概是什么时候", "minutes": 5, "task_id": "task_numeric_lowest_ask"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert "最低" in payload["answer"]
+    assert "159.0" in payload["answer"]
+    assert payload["matched_events"]
