@@ -64,6 +64,8 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - [15-受控刷新点击策略.md](/Users/apple/Desktop/2026/Ayes/docs/15-受控刷新点击策略.md)
 - [16-v1项目目录结构.md](/Users/apple/Desktop/2026/Ayes/docs/16-v1项目目录结构.md)
 - [17-监控目标选择交互.md](/Users/apple/Desktop/2026/Ayes/docs/17-监控目标选择交互.md)
+- [18-Web工作台与人类测试界面.md](/Users/apple/Desktop/2026/Ayes/docs/18-Web工作台与人类测试界面.md)
+- [19-日志、事件与记忆可视化.md](/Users/apple/Desktop/2026/Ayes/docs/19-日志、事件与记忆可视化.md)
 
 ## 5. 文档维护规则
 
@@ -83,6 +85,8 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - 调整刷新点击选点方式、频率、暂停恢复、安全边界和点击审计事件时，优先修改 [15-受控刷新点击策略.md](/Users/apple/Desktop/2026/Ayes/docs/15-受控刷新点击策略.md)
 - 调整 v1 代码目录、模块边界、数据目录、运行目录和测试布局时，优先修改 [16-v1项目目录结构.md](/Users/apple/Desktop/2026/Ayes/docs/16-v1项目目录结构.md)
 - 调整屏幕/窗口候选展示、预览图交互、候选过滤、可观测标记和绑定流程时，优先修改 [17-监控目标选择交互.md](/Users/apple/Desktop/2026/Ayes/docs/17-监控目标选择交互.md)
+- 调整 Web 工作台布局、人类测试入口、前端信息组织、目标选择界面集成、问答交互和运行状态面板时，优先修改 [18-Web工作台与人类测试界面.md](/Users/apple/Desktop/2026/Ayes/docs/18-Web工作台与人类测试界面.md)
+- 调整运行日志、近期事件查看、短期记忆查看、告警状态查看和可观测性展示时，优先修改 [19-日志、事件与记忆可视化.md](/Users/apple/Desktop/2026/Ayes/docs/19-日志、事件与记忆可视化.md)
 
 ## 6. 临时文档位置
 
