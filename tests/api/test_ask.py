@@ -4,7 +4,7 @@ import time
 from ayes.api.server import app, state
 from ayes.config.models import WatchSpec
 from ayes.events.factory import build_event
-from ayes.events.models import EventTarget, EventText, Observability, WatchMatch
+from ayes.events.models import EventTarget, EventText, Observability, Region, WatchMatch
 
 
 client = TestClient(app)
@@ -85,7 +85,13 @@ def test_ask_endpoint_answers_numeric_threshold_question_from_structured_match()
             matched_field="price",
         ),
     )
-    event = event.__class__(**{**event.__dict__, "text": EventText(ocr_text="当前价格 ¥199", normalized_text="当前价格 199")})
+    event = event.__class__(
+        **{
+            **event.__dict__,
+            "text": EventText(ocr_text="当前价格 ¥199", normalized_text="当前价格 199"),
+            "region": Region(region_id="roi_price", name="价格区域", x=10, y=20, w=30, h=40),
+        }
+    )
     runner.memory.append(event)
     response = client.get("/api/ask", params={"question": "最近5分钟价格有没有低于299", "minutes": 5, "task_id": "task_numeric_ask"})
     assert response.status_code == 200
@@ -97,6 +103,8 @@ def test_ask_endpoint_answers_numeric_threshold_question_from_structured_match()
     assert payload["structured_matches"][0]["field"] == "price"
     assert payload["structured_matches"][0]["value"] == 199.0
     assert payload["structured_matches"][0]["unit"] == "cny"
+    assert payload["structured_matches"][0]["region_name"] == "价格区域"
+    assert payload["structured_matches"][0]["rule"] == "numeric_threshold:price:lt:299.0"
     assert payload["structured_matches"][0]["time_text"]
 
 

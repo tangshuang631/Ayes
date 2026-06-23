@@ -259,6 +259,31 @@ textarea {
   line-height: 1.5;
 }
 
+.answer-structured-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.answer-structured-item {
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.answer-structured-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.answer-structured-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .subsection-head {
   margin: 12px 0 8px;
   color: var(--muted);

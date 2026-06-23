@@ -170,26 +170,25 @@ function buildStructuredMatchesHtml(items) {
   }
   return items
     .map((item) => {
-      const parts = [];
-      if (item.field) {
-        parts.push(`字段 ${item.field}`);
-      }
-      if (item.value !== null && item.value !== undefined) {
-        parts.push(`值 ${item.value}`);
-      }
+      const metaParts = [];
       if (item.unit) {
-        parts.push(`单位 ${item.unit}`);
+        metaParts.push(`单位 ${item.unit}`);
       }
       if (item.region_name) {
-        parts.push(`区域 ${item.region_name}`);
+        metaParts.push(`区域 ${item.region_name}`);
       }
       if (item.time_text) {
-        parts.push(`时间 ${item.time_text}`);
+        metaParts.push(`时间 ${item.time_text}`);
       }
       if (item.rule) {
-        parts.push(`规则 ${item.rule}`);
+        metaParts.push(`规则 ${item.rule}`);
       }
-      return `<div class="answer-structured-item">${parts.join(" | ")}</div>`;
+      return `
+        <div class="answer-structured-item">
+          <div class="answer-structured-title">${item.field || "字段"} | ${item.value ?? "-"}</div>
+          <div class="answer-structured-meta">${metaParts.join(" | ")}</div>
+        </div>
+      `;
     })
     .join("");
 }
@@ -569,11 +568,13 @@ function renderMemoryResult(payload) {
   const meta = document.getElementById("memoryMeta");
   meta.textContent = `任务: ${payload.task_id || "-"} | 时间范围: 最近 ${payload.minutes || "-"} 分钟 | 记忆层: ${(payload.memory_layers_used || []).join(", ") || "-"}`;
   const summary = document.getElementById("memorySummary");
+  const structured = document.getElementById("memoryStructuredMatches");
   const timeRange = payload.time_range || {};
   summary.innerHTML = `
-    <div>结论: ${payload.answer || "暂无回答"} | 置信度: ${payload.confidence ?? "-"} | 证据事件: ${(payload.matched_events || []).length} | 实际命中时间: ${timeRange.from ? formatTimestamp(timeRange.from) : "-"} -> ${timeRange.to ? formatTimestamp(timeRange.to) : "-"} | 时间范围约束: ${payload.time_scope_respected ? "已遵守" : "未标记"}</div>
-    ${buildStructuredMatchesHtml(payload.structured_matches || [])}
+    <div>结论: ${payload.answer || "暂无回答"}</div>
+    <div>置信度: ${payload.confidence ?? "-"} | 证据事件: ${(payload.matched_events || []).length} | 实际命中时间: ${timeRange.from ? formatTimestamp(timeRange.from) : "-"} -> ${timeRange.to ? formatTimestamp(timeRange.to) : "-"} | 时间范围约束: ${payload.time_scope_respected ? "已遵守" : "未标记"}</div>
   `;
+  structured.innerHTML = buildStructuredMatchesHtml(payload.structured_matches || []);
   const refs = document.getElementById("memoryRefs");
   refs.innerHTML = `证据引用:<br />${buildEvidenceLinks(payload.evidence_refs || [])}${buildEvidencePreviewHtml(payload.evidence_previews || [])}`;
   const evidence = document.getElementById("memoryEvidence");
