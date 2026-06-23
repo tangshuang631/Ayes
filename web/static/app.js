@@ -86,7 +86,22 @@ function buildEventDetailLines(item) {
   if ((item.tags || []).length) {
     lines.push(`标签: ${item.tags.join(", ")}`);
   }
+  if ((item.evidence_refs || []).length) {
+    lines.push(`证据: ${item.evidence_refs.join(", ")}`);
+  }
   return lines.join("\n");
+}
+
+function buildEvidenceLinks(refs) {
+  if (!refs || !refs.length) {
+    return "暂无";
+  }
+  return refs
+    .map((ref) => {
+      const href = ref.startsWith("/") ? ref : `/${ref}`;
+      return `<a href="${href}" target="_blank" rel="noreferrer">${ref}</a>`;
+    })
+    .join("<br />");
 }
 
 function nextRegionId() {
@@ -468,7 +483,7 @@ function renderMemoryResult(payload) {
   const timeRange = payload.time_range || {};
   summary.textContent = `结论: ${payload.answer || "暂无回答"} | 置信度: ${payload.confidence ?? "-"} | 证据事件: ${(payload.matched_events || []).length} | 实际命中时间: ${timeRange.from ? Math.floor(timeRange.from) : "-"} -> ${timeRange.to ? Math.floor(timeRange.to) : "-"} | 时间范围约束: ${payload.time_scope_respected ? "已遵守" : "未标记"}`;
   const refs = document.getElementById("memoryRefs");
-  refs.textContent = `证据引用: ${(payload.evidence_refs || []).join(", ") || "暂无"}`
+  refs.innerHTML = `证据引用:<br />${buildEvidenceLinks(payload.evidence_refs || [])}`;
   const evidence = document.getElementById("memoryEvidence");
   evidence.innerHTML = "";
   (payload.matched_events || []).slice().reverse().forEach((item) => {

@@ -5,6 +5,7 @@ from ayes.ocr.models import OCRResult, OCRTextBlock
 from ayes.vision.models import VisionResult
 from PIL import Image
 from io import BytesIO
+from pathlib import Path
 
 
 def make_png_bytes(color: str) -> bytes:
@@ -263,6 +264,11 @@ def test_runner_preserves_ocr_blocks_and_region_coordinates_in_event() -> None:
     assert len(text_event.text.blocks) == 2
     assert text_event.text.blocks[0].text == "价格 199"
     assert text_event.text.blocks[0].bbox == [10, 20, 110, 20, 110, 48, 10, 48]
+    assert any(ref.startswith("runtime/evidence/") for ref in text_event.evidence_refs)
+    assert any("full" in ref for ref in text_event.evidence_refs)
+    assert any("roi" in ref for ref in text_event.evidence_refs)
+    for ref in text_event.evidence_refs:
+        assert Path(ref).exists()
 
 
 def test_runner_logs_vision_failure_when_enhancement_errors() -> None:

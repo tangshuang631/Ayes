@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from typing import Callable, List, Optional
 from io import BytesIO
+from uuid import uuid4
 
 from ayes.alerting.notifier import WebhookNotifier
 from ayes.capture.models import CaptureFrame
@@ -60,6 +61,7 @@ class WatchRunner:
         self._last_alert_at: Optional[float] = None
         self._last_alert_key: Optional[str] = None
         self._vision_call_timestamps: List[float] = []
+        self._evidence_dir = Path("runtime/evidence")
         self._alert_notifier = WebhookNotifier()
 
     @property
@@ -251,6 +253,12 @@ class WatchRunner:
             summary=text[:120] if text else f"OCR 未识别到文本 ({provider})",
         )
         event_region = self._event_region_from_target_region(region, target_frame or frame)
+        evidence_refs = self._write_event_evidence(
+            event_id=event.event_id,
+            target_frame=target_frame or frame,
+            region_frame=frame,
+            region=region,
+        )
         return replace(
             event,
             region=event_region,
@@ -270,6 +278,7 @@ class WatchRunner:
             ),
             visual=EventVisual(),
             tags=["ocr", provider],
+            evidence_refs=evidence_refs,
         )
 
     def _effective_regions(self, frame: CaptureFrame) -> List[Optional[TargetRegion]]:
@@ -406,7 +415,35 @@ class WatchRunner:
                 provider=result.provider,
             ),
             tags=["vision", result.provider, self.spec.vision.model],
+            evidence_refs=self._write_event_evidence(
+                event_id=event.event_id,
+                target_frame=target_frame,
+                region_frame=frame,
+                region=region,
+            ),
         )
+
+    def _write_event_evidence(
+        self,
+        *,
+        event_id: str,
+        target_frame: CaptureFrame,
+        region_frame: CaptureFrame,
+        region: Optional[TargetRegion],
+    ) -> List[str]:
+        self._evidence_dir.mkdir(parents=True, exist_ok=True)
+        refs: List[str] = []
+        stamp = f"{int(target_frame.timestamp * 1000)}_{uuid4().hex[:8]}"
+        full_name = f"{event_id}_{stamp}_full.png"
+        full_path = self._evidence_dir / full_name
+        full_path.write_bytes(target_frame.image_bytes)
+        refs.append(str(full_path).replace("\\", "/"))
+        if region is not None:
+            roi_name = f"{event_id}_{stamp}_roi_{region.region_id}.png"
+            roi_path = self._evidence_dir / roi_name
+            roi_path.write_bytes(region_frame.image_bytes)
+            refs.append(str(roi_path).replace("\\", "/"))
+        return refs
 
     def _is_vision_rate_limited(self) -> bool:
         cutoff = (self._last_run_at or time.time()) - 60
