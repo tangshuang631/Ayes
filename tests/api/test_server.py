@@ -267,6 +267,11 @@ def test_timeline_recent_exposes_region_visual_and_text_blocks() -> None:
         assert "visual" in item
         assert "text" in item
         assert "blocks" in (item.get("text") or {})
+        blocks = (item.get("text") or {}).get("blocks") or []
+        if blocks:
+            assert "rect" in blocks[0]
+            assert "rect_norm" in blocks[0]
+            assert "coordinate_space" in blocks[0]
 
 
 def test_timeline_recent_exposes_structured_watch_match_fields() -> None:

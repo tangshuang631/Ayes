@@ -46,6 +46,9 @@ class EventTextBlock:
     text: str
     confidence: float
     bbox: List[float] = field(default_factory=list)
+    rect: dict = field(default_factory=dict)
+    rect_norm: dict = field(default_factory=dict)
+    coordinate_space: str = "image_pixels"
     line_index: Optional[int] = None
     block_type: Optional[str] = None
 

@@ -23,6 +23,9 @@ class OCRTextBlock:
     text: str
     confidence: float
     bbox: List[float] = field(default_factory=list)
+    rect: Dict[str, float] = field(default_factory=dict)
+    rect_norm: Dict[str, float] = field(default_factory=dict)
+    coordinate_space: str = "image_pixels"
     line_index: Optional[int] = None
     block_type: Optional[str] = None
 

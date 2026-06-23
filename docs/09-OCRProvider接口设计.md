@@ -75,6 +75,9 @@ class OCRTextBlock:
     text: str
     confidence: float
     bbox: list[float]
+    rect: dict[str, float]
+    rect_norm: dict[str, float]
+    coordinate_space: str = "image_pixels"
     line_index: Optional[int] = None
     block_type: Optional[str] = None
 
@@ -92,7 +95,22 @@ class OCRResult:
 
 - `full_text` 供快速检索和事件摘要使用
 - `blocks` 供区域绑定、变化对比、精细检索使用
+- `blocks` 中必须补充可直接消费的位置语义，而不能只留一串难解释的原始 `bbox`
 - `raw` 仅用于保留底层引擎原始结果，不允许上层直接依赖
+
+其中 `OCRTextBlock` 的位置字段要求如下：
+
+- `bbox`：保留底层 OCR 引擎原始框信息，允许是多边形点集或简化矩形
+- `rect`：统一输出像素矩形 `{x, y, w, h}`
+- `rect_norm`：统一输出归一化矩形 `{x, y, w, h}`，取值范围应为 `0.0 ~ 1.0`
+- `coordinate_space`：当前阶段固定为 `image_pixels`
+
+这样上层事件、时间线、前端和后续 Agent 才能稳定回答：
+
+- 文本大概出现在区域里的哪个位置
+- 两段文本是不是出现在差不多的位置
+- 一个数值、按钮文案或错误提示属于画面的上半区还是右下角
+- 不同分辨率下是否仍能对齐到相近位置
 
 ## 6. 能力标识
 

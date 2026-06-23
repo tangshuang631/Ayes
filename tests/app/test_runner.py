@@ -265,11 +265,58 @@ def test_runner_preserves_ocr_blocks_and_region_coordinates_in_event() -> None:
     assert len(text_event.text.blocks) == 2
     assert text_event.text.blocks[0].text == "价格 199"
     assert text_event.text.blocks[0].bbox == [10, 20, 110, 20, 110, 48, 10, 48]
+    assert text_event.text.blocks[0].rect == {"x": 10.0, "y": 20.0, "w": 100.0, "h": 28.0}
+    assert text_event.text.blocks[0].rect_norm == {"x": 10.0, "y": 20.0, "w": 100.0, "h": 28.0}
+    assert text_event.text.blocks[0].coordinate_space == "image_pixels"
     assert any(ref.startswith("runtime/evidence/") for ref in text_event.evidence_refs)
     assert any("full" in ref for ref in text_event.evidence_refs)
     assert any("roi" in ref for ref in text_event.evidence_refs)
     for ref in text_event.evidence_refs:
         assert Path(ref).exists()
+
+
+def test_runner_normalizes_vision_ocr_rectangles_to_pixels_and_ratios() -> None:
+    class VisionLikeOCR:
+        def recognize(self, image, options=None) -> OCRResult:
+            return OCRResult(
+                provider="vision",
+                elapsed_ms=1,
+                full_text="库存恢复",
+                char_count=len("库存恢复"),
+                blocks=[
+                    OCRTextBlock(
+                        text="库存恢复",
+                        confidence=0.96,
+                        bbox=[0.25, 0.50, 0.50, 0.20],
+                        line_index=0,
+                    )
+                ],
+            )
+
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = FakeCapture()
+    runner.ocr = VisionLikeOCR()
+    events = runner.run_once(now=100.0)
+    text_event = next(event for event in events if event.event_type == "text_change")
+    block = text_event.text.blocks[0]
+    assert block.rect == {"x": 0.5, "y": 1.0, "w": 1.0, "h": 0.4}
+    assert block.rect_norm == {"x": 0.25, "y": 0.5, "w": 0.5, "h": 0.2}
+    assert block.coordinate_space == "image_pixels"
 
 
 def test_runner_logs_vision_failure_when_enhancement_errors() -> None:

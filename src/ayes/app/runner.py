@@ -280,6 +280,9 @@ class WatchRunner:
                         text=item.text,
                         confidence=item.confidence,
                         bbox=list(item.bbox),
+                        rect=self._compute_block_rect(item.bbox, frame.width, frame.height),
+                        rect_norm=self._compute_block_rect_norm(item.bbox, frame.width, frame.height),
+                        coordinate_space=getattr(item, "coordinate_space", "image_pixels"),
                         line_index=item.line_index,
                         block_type=item.block_type,
                     )
@@ -333,6 +336,51 @@ class WatchRunner:
             w_norm=(region.w / frame.width) if frame.width else 0.0,
             h_norm=(region.h / frame.height) if frame.height else 0.0,
         )
+
+    def _compute_block_rect(self, bbox: List[float], width: int, height: int) -> dict:
+        if not bbox:
+            return {}
+        values = [float(value) for value in bbox]
+        if len(values) == 4:
+            x, y, w, h = values
+            if self._bbox_is_normalized(values):
+                return {"x": x * width, "y": y * height, "w": w * width, "h": h * height}
+            return {"x": x, "y": y, "w": w, "h": h}
+        xs = values[0::2]
+        ys = values[1::2]
+        if self._bbox_is_normalized(values):
+            min_x = min(xs) * width
+            max_x = max(xs) * width
+            min_y = min(ys) * height
+            max_y = max(ys) * height
+        else:
+            min_x = min(xs)
+            max_x = max(xs)
+            min_y = min(ys)
+            max_y = max(ys)
+        return {"x": min_x, "y": min_y, "w": max_x - min_x, "h": max_y - min_y}
+
+    def _compute_block_rect_norm(self, bbox: List[float], width: int, height: int) -> dict:
+        if not bbox:
+            return {}
+        values = [float(value) for value in bbox]
+        if self._bbox_is_normalized(values):
+            if len(values) == 4:
+                x, y, w, h = values
+                return {"x": x, "y": y, "w": w, "h": h}
+            xs = values[0::2]
+            ys = values[1::2]
+            return {"x": min(xs), "y": min(ys), "w": max(xs) - min(xs), "h": max(ys) - min(ys)}
+        rect = self._compute_block_rect(values, width, height)
+        return {
+            "x": (rect["x"] / width) if width else 0.0,
+            "y": (rect["y"] / height) if height else 0.0,
+            "w": (rect["w"] / width) if width else 0.0,
+            "h": (rect["h"] / height) if height else 0.0,
+        }
+
+    def _bbox_is_normalized(self, values: List[float]) -> bool:
+        return bool(values) and all(0.0 <= value <= 1.0 for value in values)
 
     def _should_run_vision_enhancement(self, *, region: Optional[TargetRegion], ocr_char_count: int) -> bool:
         if not self.spec.vision.enabled:

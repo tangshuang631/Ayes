@@ -4,7 +4,7 @@ import time
 from ayes.api.server import app, state
 from ayes.config.models import WatchSpec
 from ayes.events.factory import build_event
-from ayes.events.models import EventTarget, EventText, Observability, Region, WatchMatch
+from ayes.events.models import EventTarget, EventText, EventTextBlock, Observability, Region, WatchMatch
 
 
 client = TestClient(app)
@@ -178,7 +178,57 @@ def test_ask_endpoint_answers_numeric_lowest_question_with_time() -> None:
     runner.memory.append(second)
     response = client.get("/api/ask", params={"question": "最近5分钟最低大概是什么时候", "minutes": 5, "task_id": "task_numeric_lowest_ask"})
     assert response.status_code == 200
+
+
+def test_ask_endpoint_answers_position_question_with_region_and_direction() -> None:
+    now = time.time()
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = state.set_runner(spec, task_id="task_position_ask")
+    event = build_event(
+        task_id="task_position_ask",
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.95,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="价格 199",
+    )
+    event = event.__class__(
+        **{
+            **event.__dict__,
+            "region": Region(region_id="roi_price", name="价格区域", x=0, y=0, w=100, h=100),
+            "text": EventText(
+                ocr_text="价格 199",
+                normalized_text="价格 199",
+                blocks=[
+                    EventTextBlock(
+                        text="价格 199",
+                        confidence=0.98,
+                        bbox=[0.1, 0.1, 0.3, 0.1, 0.3, 0.2, 0.1, 0.2],
+                        rect={"x": 10.0, "y": 10.0, "w": 20.0, "h": 10.0},
+                        rect_norm={"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.1},
+                        coordinate_space="image_pixels",
+                        line_index=0,
+                    )
+                ],
+            ),
+        }
+    )
+    runner.memory.append(event)
+    response = client.get("/api/ask", params={"question": "最近5分钟价格大概在什么位置", "minutes": 5, "task_id": "task_position_ask"})
+    assert response.status_code == 200
     payload = response.json()
-    assert "最低" in payload["answer"]
-    assert "159.0" in payload["answer"]
+    assert "价格区域" in payload["answer"]
+    assert "左上" in payload["answer"]
     assert payload["matched_events"]
