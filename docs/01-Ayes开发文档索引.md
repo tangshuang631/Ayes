@@ -61,6 +61,7 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - [12-记忆存储设计.md](/Users/apple/Desktop/2026/Ayes/docs/12-记忆存储设计.md)
 - [13-问答检索路径.md](/Users/apple/Desktop/2026/Ayes/docs/13-问答检索路径.md)
 - [14-企业微信Webhook告警策略.md](/Users/apple/Desktop/2026/Ayes/docs/14-企业微信Webhook告警策略.md)
+- [15-受控刷新点击策略.md](/Users/apple/Desktop/2026/Ayes/docs/15-受控刷新点击策略.md)
 
 ## 5. 文档维护规则
 
@@ -77,6 +78,7 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - 调整短期详细记忆、长期轻量记忆、保留时间、清理策略和查询边界时，优先修改 [12-记忆存储设计.md](/Users/apple/Desktop/2026/Ayes/docs/12-记忆存储设计.md)
 - 调整问答链路、关键词检索、向量检索、混合检索、回答结构和重启后记忆接续策略时，优先修改 [13-问答检索路径.md](/Users/apple/Desktop/2026/Ayes/docs/13-问答检索路径.md)
 - 调整企业微信 webhook、告警触发、去重、冷却、消息模板、失败处理和告警审计事件时，优先修改 [14-企业微信Webhook告警策略.md](/Users/apple/Desktop/2026/Ayes/docs/14-企业微信Webhook告警策略.md)
+- 调整刷新点击选点方式、频率、暂停恢复、安全边界和点击审计事件时，优先修改 [15-受控刷新点击策略.md](/Users/apple/Desktop/2026/Ayes/docs/15-受控刷新点击策略.md)
 
 ## 6. 临时文档位置
 
