@@ -1,9 +1,33 @@
 from fastapi.testclient import TestClient
 
-from ayes.api.server import app
+from ayes.api.server import app, state
+from ayes.capture.models import CaptureFrame, CaptureResult
+from ayes.ocr.models import OCRResult
 
 
 client = TestClient(app)
+
+
+class FakeCapture:
+    def capture_main_display(self, *, timestamp: float) -> CaptureResult:
+        return CaptureResult(
+            ok=True,
+            status="ok",
+            frame=CaptureFrame(
+                frame_id="frame_api",
+                timestamp=timestamp,
+                target_type="screen",
+                target_id="main",
+                width=2,
+                height=2,
+                image_bytes=b"api-frame",
+            ),
+        )
+
+
+class FakeNumericOCR:
+    def recognize(self, image, options=None) -> OCRResult:
+        return OCRResult(provider="fake", elapsed_ms=1, full_text="当前价格 ¥199，立即购买")
 
 
 def test_status_endpoint_returns_basic_state() -> None:
@@ -275,6 +299,9 @@ def test_timeline_recent_exposes_structured_watch_match_fields() -> None:
             },
         },
     )
+    assert state.current_runner is not None
+    state.current_runner.capture = FakeCapture()
+    state.current_runner.ocr = FakeNumericOCR()
     response = client.post("/api/watch/run-once")
     assert response.status_code == 200
     timeline_response = client.get("/api/timeline/recent", params={"task_id": "task_numeric_watch_match", "minutes": 5, "limit": 20})

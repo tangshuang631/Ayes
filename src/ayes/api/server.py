@@ -58,20 +58,25 @@ def _runtime_path(name: str) -> Path:
 
 def _build_query_result_from_store(*, task_id: str, minutes: int, keyword: Optional[str], question: str) -> QueryResult:
     items = state.sqlite_store.query_events(task_id=task_id, minutes=minutes, keyword=keyword, limit=100)
+    matched_events = [_event_from_payload(item) for item in items]
+    from ayes.memory.short_term import ShortTermMemoryStore
+
+    temp_store = ShortTermMemoryStore(retain_seconds=minutes * 60)
+    for event in matched_events:
+        temp_store.append(event)
+    result = temp_store.query(now=time.time(), minutes=minutes, keyword=keyword, question=question)
+    if matched_events:
+        return QueryResult(
+            answer=result.answer,
+            confidence=result.confidence,
+            matched_events=result.matched_events or matched_events,
+            memory_layers_used=["short_term_persisted"],
+        )
     if not items:
         return QueryResult(
             answer=f"最近 {minutes} 分钟内未发现相关事件。",
             confidence=0.72,
             matched_events=[],
-            memory_layers_used=["short_term_persisted"],
-        )
-    matched_events = [_event_from_payload(item) for item in items]
-    if matched_events:
-        answer = "；".join(f"{event.summary or event.event_type}@{int(event.timestamp)}" for event in matched_events[-5:])
-        return QueryResult(
-            answer=answer,
-            confidence=0.84,
-            matched_events=matched_events,
             memory_layers_used=["short_term_persisted"],
         )
     answer = "；".join(f"{item.get('summary') or item.get('event_type')}@{int(item.get('timestamp', 0))}" for item in items[-5:])
@@ -343,9 +348,14 @@ def ask_question(
     if not resolved_task_id:
         return JSONResponse({"answer": "当前没有监控任务", "matched_events": []})
     cleaned_question = question.strip()
-    keyword = None if cleaned_question in {"", "最近发生了什么", "最近几分钟发生了什么"} else cleaned_question
+    if cleaned_question in {"", "最近发生了什么", "最近几分钟发生了什么"}:
+        keyword = None
+    elif any(token in cleaned_question for token in ["低于", "高于", "小于", "大于"]):
+        keyword = None
+    else:
+        keyword = cleaned_question
     if state.current_runner is not None and resolved_task_id == state.current_task_id:
-        result = state.current_runner.ask_recent(minutes=minutes, keyword=keyword)
+        result = state.current_runner.ask_recent(minutes=minutes, keyword=keyword, question=question)
     else:
         result = _build_query_result_from_store(
             task_id=resolved_task_id,

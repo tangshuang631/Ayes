@@ -158,8 +158,15 @@ class WatchRunner:
                 time.sleep(sleep_seconds)
         return emitted
 
-    def ask_recent(self, *, minutes: int, keyword: Optional[str] = None, now: Optional[float] = None) -> QueryResult:
-        return self.memory.query(now=now or time.time(), minutes=minutes, keyword=keyword)
+    def ask_recent(
+        self,
+        *,
+        minutes: int,
+        keyword: Optional[str] = None,
+        question: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> QueryResult:
+        return self.memory.query(now=now or time.time(), minutes=minutes, keyword=keyword, question=question)
 
     def check_watch_condition_recent(self, *, minutes: int, now: Optional[float] = None) -> QueryResult:
         queries = self.spec.watch_intent.queries if self.spec.watch_intent.enabled else []
