@@ -846,11 +846,26 @@ async function refreshStatus() {
   const runtimeMeta = document.getElementById("runtimeMeta");
   runtimeMeta.textContent = `任务已装载: ${status.has_runner ? "是" : "否"} | 持续监控: ${status.is_running ? "运行中" : "未运行"} | 动作计数: ${status.action_count ?? 0} | 命中计数: ${status.match_count ?? 0} | 告警计数: ${status.alert_count ?? 0} | 最近执行: ${status.last_run_at ? Math.floor(status.last_run_at) : "-"} | 最近事件: ${status.last_event_at ? Math.floor(status.last_event_at) : "-"} | 最近命中: ${status.last_match_at ? Math.floor(status.last_match_at) : "-"} | 最近错误: ${status.last_error || "-"}`;
   const summary = document.getElementById("statusSummary");
+  const ocrQuality = status.last_ocr_quality || {};
+  const visionDecision = status.last_vision_decision || {};
+  const visionSummary = status.last_vision_summary || {};
+  const ocrSummaryText = ocrQuality.provider
+    ? `${ocrQuality.provider} / 字符 ${ocrQuality.char_count ?? 0} / 块 ${ocrQuality.block_count ?? 0}${ocrQuality.sparse ? " / 稀疏" : ""}`
+    : "暂无";
+  const visionDecisionText = visionDecision.event_type
+    ? `${visionDecision.event_type}${(visionDecision.reasons || []).length ? ` / ${(visionDecision.reasons || []).join(",")}` : visionDecision.blocked_reason ? ` / ${visionDecision.blocked_reason}` : ""}`
+    : "暂无";
+  const visionSummaryText = visionSummary.summary
+    ? `${visionSummary.summary}${Array.isArray(visionSummary.detail_lines) && visionSummary.detail_lines.length ? ` / ${visionSummary.detail_lines[0]}` : ""}`
+    : "暂无";
   summary.innerHTML = `
     <div class="status-chip"><div class="status-chip-label">当前任务</div><div class="status-chip-value">${status.task_id || status.last_task_id || "-"}</div></div>
     <div class="status-chip"><div class="status-chip-label">运行状态</div><div class="status-chip-value">${status.is_running ? "持续监控中" : status.has_runner ? "已装载未运行" : "未装载"}</div></div>
     <div class="status-chip"><div class="status-chip-label">最近命中 / 告警</div><div class="status-chip-value">${status.match_count ?? 0} / ${status.alert_count ?? 0}</div></div>
     <div class="status-chip"><div class="status-chip-label">前端连接 / 后台策略</div><div class="status-chip-value">${status.connected_frontends ?? 0} / ${status.can_shutdown_service ? "可退出" : "保持运行"}</div></div>
+    <div class="status-chip"><div class="status-chip-label">最近 OCR 质量</div><div class="status-chip-value">${ocrSummaryText}</div></div>
+    <div class="status-chip"><div class="status-chip-label">最近视觉决策</div><div class="status-chip-value">${visionDecisionText}</div></div>
+    <div class="status-chip"><div class="status-chip-label">最近视觉结果</div><div class="status-chip-value">${visionSummaryText}</div></div>
   `;
   const taskInput = document.getElementById("taskIdInput");
   if (status.task_id) {

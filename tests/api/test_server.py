@@ -196,6 +196,9 @@ def test_status_endpoint_exposes_current_spec_payload() -> None:
     assert "match_count" in payload
     assert "alert_count" in payload
     assert "last_match_at" in payload
+    assert "last_ocr_quality" in payload
+    assert "last_vision_summary" in payload
+    assert "last_vision_decision" in payload
 
 
 def test_ocr_snippets_endpoint_returns_recent_text_fragments() -> None:

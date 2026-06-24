@@ -163,6 +163,9 @@ class AppState:
         match_count = 0
         alert_count = 0
         last_match_at = None
+        last_ocr_quality = None
+        last_vision_summary = None
+        last_vision_decision = None
         if self.current_runner is not None:
             for event in self.current_runner.events:
                 source = getattr(event, "source", "")
@@ -173,6 +176,36 @@ class AppState:
                     last_match_at = event.timestamp
                 if source == "alert":
                     alert_count += 1
+                if source == "ocr":
+                    attrs = getattr(getattr(event, "visual", None), "attributes", {}) or {}
+                    last_ocr_quality = {
+                        "summary": getattr(getattr(event, "visual", None), "summary", "") or getattr(event, "summary", ""),
+                        "provider": attrs.get("ocr_provider"),
+                        "char_count": attrs.get("ocr_char_count"),
+                        "block_count": attrs.get("ocr_block_count"),
+                        "avg_confidence": attrs.get("ocr_avg_confidence"),
+                        "sparse": attrs.get("ocr_sparse"),
+                        "timestamp": getattr(event, "timestamp", None),
+                    }
+                if source == "vision" and getattr(event, "event_type", "") not in {"vision_triggered", "vision_skipped"}:
+                    attrs = getattr(getattr(event, "visual", None), "attributes", {}) or {}
+                    last_vision_summary = {
+                        "summary": getattr(getattr(event, "visual", None), "summary", "") or getattr(event, "summary", ""),
+                        "detail_lines": attrs.get("detail_lines") or [],
+                        "provider": getattr(getattr(event, "visual", None), "provider", "") or attrs.get("vision_provider"),
+                        "timestamp": getattr(event, "timestamp", None),
+                    }
+                if source == "vision" and getattr(event, "event_type", "") in {"vision_triggered", "vision_skipped"}:
+                    attrs = getattr(getattr(event, "visual", None), "attributes", {}) or {}
+                    last_vision_decision = {
+                        "event_type": getattr(event, "event_type", ""),
+                        "summary": getattr(event, "summary", ""),
+                        "reasons": attrs.get("vision_reasons") or [],
+                        "blocked_reason": attrs.get("vision_blocked_reason") or "",
+                        "model": attrs.get("vision_model") or "",
+                        "provider": attrs.get("vision_provider") or "",
+                        "timestamp": getattr(event, "timestamp", None),
+                    }
         return {
             "has_runner": self.current_runner is not None,
             "is_running": self.is_background_running(),
@@ -190,6 +223,9 @@ class AppState:
             "last_run_at": self.current_runner.last_run_at if self.current_runner else None,
             "last_event_at": self.current_runner.last_event_at if self.current_runner else None,
             "last_match_at": last_match_at,
+            "last_ocr_quality": last_ocr_quality,
+            "last_vision_summary": last_vision_summary,
+            "last_vision_decision": last_vision_decision,
             "last_error": self.last_error,
             "log_count": len(self.log_store.list_entries()),
             "last_screenshot_path": self.last_screenshot_path,
