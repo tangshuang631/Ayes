@@ -22,6 +22,7 @@ from ayes.detect.diff import ByteDiffDetector
 from ayes.events.factory import build_event
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, WatchMatch
 from ayes.memory.short_term import QueryResult, ShortTermMemoryStore
+from ayes.observation.fusion import build_structured_observation, merge_vision_observation
 from ayes.ocr.models import ImageInput
 from ayes.ocr.service import OCRService
 from ayes.targets.discovery.macos import MacOSWindowDiscovery
@@ -434,30 +435,38 @@ class WatchRunner:
             region=region,
         )
         block_items = list(blocks or [])
+        event_text_blocks = [
+            EventTextBlock(
+                text=item.text,
+                confidence=item.confidence,
+                bbox=list(item.bbox),
+                rect=self._compute_block_rect(item.bbox, frame.width, frame.height),
+                rect_norm=self._compute_block_rect_norm(item.bbox, frame.width, frame.height),
+                coordinate_space=getattr(item, "coordinate_space", "image_pixels"),
+                line_index=item.line_index,
+                block_type=item.block_type,
+            )
+            for item in block_items
+        ]
         avg_confidence = 0.0
         if block_items:
             avg_confidence = sum(float(item.confidence) for item in block_items) / len(block_items)
         char_count = len((text or "").strip())
         sparse_text = char_count < int(self.spec.vision.ocr_sparse_min_chars or 12)
+        event_region = self._event_region_from_target_region(region, target_frame or frame)
+        structured_observation = build_structured_observation(
+            region=asdict(event_region),
+            full_text=text,
+            provider=provider,
+            blocks=event_text_blocks,
+        )
         return replace(
             event,
             region=event_region,
             text=EventText(
                 ocr_text=text,
                 normalized_text=text.lower(),
-                blocks=[
-                    EventTextBlock(
-                        text=item.text,
-                        confidence=item.confidence,
-                        bbox=list(item.bbox),
-                        rect=self._compute_block_rect(item.bbox, frame.width, frame.height),
-                        rect_norm=self._compute_block_rect_norm(item.bbox, frame.width, frame.height),
-                        coordinate_space=getattr(item, "coordinate_space", "image_pixels"),
-                        line_index=item.line_index,
-                        block_type=item.block_type,
-                    )
-                    for item in block_items
-                ],
+                blocks=event_text_blocks,
             ),
             visual=EventVisual(
                 summary=(
@@ -471,6 +480,7 @@ class WatchRunner:
                     "ocr_block_count": len(block_items),
                     "ocr_avg_confidence": round(avg_confidence, 4),
                     "ocr_sparse": sparse_text,
+                    "structured_observation": structured_observation,
                 },
                 provider=provider,
             ),
@@ -702,7 +712,19 @@ class WatchRunner:
             visual=EventVisual(
                 summary=result.summary,
                 labels=result.labels,
-                attributes=result.attributes,
+                attributes={
+                    **result.attributes,
+                    "structured_observation": merge_vision_observation(
+                        build_structured_observation(
+                            region=asdict(self._event_region_from_target_region(region, target_frame)),
+                            full_text="",
+                            provider="",
+                            blocks=[],
+                        ),
+                        result=result,
+                        fusion_notes=["OCR 文本较稀疏，已补充视觉摘要"],
+                    ),
+                },
                 provider=result.provider,
             ),
             tags=["vision", result.provider, self.spec.vision.model],
@@ -846,8 +868,8 @@ class WatchRunner:
         for rule in self.spec.watch_intent.rules:
             if rule.type != "numeric_threshold":
                 continue
-            extracted_numbers = self._extract_numeric_candidates(
-                event.text.ocr_text,
+            extracted_numbers = self._extract_numeric_candidates_from_event(
+                event=event,
                 field_name=rule.field or "",
                 unit=rule.unit or "",
             )
@@ -886,6 +908,28 @@ class WatchRunner:
                 emitted.append(match_event)
                 break
         return emitted
+
+    def _extract_numeric_candidates_from_event(self, *, event, field_name: str, unit: str) -> List[float]:
+        observation = ((event.visual.attributes or {}).get("structured_observation") or {})
+        entities = observation.get("entities") or []
+        matched_from_entities: List[float] = []
+        for entity in entities:
+            if str(entity.get("type") or "") != "numeric":
+                continue
+            entity_field = str(entity.get("field") or "").lower()
+            if field_name and entity_field != field_name.lower():
+                continue
+            try:
+                matched_from_entities.append(float(entity.get("value")))
+            except (TypeError, ValueError):
+                continue
+        if matched_from_entities:
+            return matched_from_entities
+        return self._extract_numeric_candidates(
+            event.text.ocr_text,
+            field_name=field_name,
+            unit=unit,
+        )
 
     def _extract_numeric_candidates(self, text: str, *, field_name: str = "", unit: str = "") -> List[float]:
         if not text:

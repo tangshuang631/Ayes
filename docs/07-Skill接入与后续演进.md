@@ -40,6 +40,8 @@
 当前已存在的 HTTP 接口应视为第一版正式 skill 背板，包括：
 
 - `/api/targets`
+- `/api/agent/plan-watch-spec`
+- `/api/watch/confirm-plan`
 - `/api/watch/load-configured`
 - `/api/watch/start`
 - `/api/watch/stop`
@@ -64,6 +66,15 @@
 - “给这个页面配置一个刷新点击点，每 30 秒点一次”
 
 这些调用最终都应落到统一的 `watch spec`，而不是让 skill 直接操作底层采集模块。
+
+其中从当前阶段开始，推荐的正式编排顺序调整为：
+
+1. `targets` 或工作台选择目标
+2. `plan-watch-spec` 生成任务草案
+3. 智能体复述 `confirmation_summary`
+4. `confirm-plan` 确认并装载最终任务
+5. `start`
+6. `recent / screenshot / ask / alerts / logs` 回读运行证据
 
 ## 2.1 当前阶段补充要求
 
@@ -126,6 +137,7 @@
 
 推荐的 skill 使用场景包括：
 
+- “帮我把这句话先转成监控任务草案，再告诉我还缺什么配置”
 - “帮我读取当前正在监控的目标最近几分钟发生了什么”
 - “帮我看看最近有没有弹窗报错”
 - “帮我查询这个任务最近有没有命中价格条件”
@@ -138,6 +150,12 @@
 - 需要重新框选 ROI
 - 需要确认当前预览图是不是正确目标
 - 需要人工排查截图与 OCR 是否对齐
+
+而以下情况已经应优先交给 skill / CLI / API：
+
+- 简单的屏幕 / 进程级监控任务草案生成
+- 价格阈值、有货提醒、错误弹窗等常见 watch intent 编排
+- webhook 是否缺失、触发条件是否缺失这类确认问题
 
 ## 3. 第二阶段方向
 

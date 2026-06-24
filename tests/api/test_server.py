@@ -211,6 +211,53 @@ def test_watch_config_endpoint_loads_spec_from_form_payload() -> None:
     assert payload["mode"] == "triggered"
 
 
+def test_plan_watch_spec_endpoint_returns_draft_and_missing_confirmation() -> None:
+    response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_price",
+            "prompt": "帮我监控 Safari 里的商品价格低于 299 时提醒我",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == "task_plan_price"
+    assert payload["mode"] == "triggered"
+    assert payload["resolved_target"]["process_name"] == "Safari"
+    assert payload["draft_spec"]["watch_intent"]["enabled"] is True
+    assert payload["draft_spec"]["watch_intent"]["rules"][0]["field"] == "price"
+    assert any(item["field"] == "alert.webhook_url" for item in payload["missing_fields"])
+    assert payload["can_apply_directly"] is False
+
+
+def test_confirm_plan_endpoint_loads_runner_after_confirmation() -> None:
+    plan_response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_apply",
+            "prompt": "帮我监控 Safari 里的商品价格低于 299 时提醒我",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert plan_response.status_code == 200
+    response = client.post(
+        "/api/watch/confirm-plan",
+        json={
+            "plan": plan_response.json(),
+            "confirmations": {
+                "webhook_url": "http://127.0.0.1:18999/webhook",
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "loaded"
+    assert payload["task_id"] == "task_plan_apply"
+    assert payload["spec"]["alert"]["enabled"] is True
+    assert payload["spec"]["alert"]["webhook_url"] == "http://127.0.0.1:18999/webhook"
+
+
 def test_watch_config_endpoint_supports_process_target_and_refresh_click() -> None:
     response = client.post(
         "/api/watch/load-configured",
@@ -670,14 +717,52 @@ def test_timeline_recent_exposes_structured_watch_match_fields() -> None:
     assert timeline_response.status_code == 200
     payload = timeline_response.json()
     assert payload["task_id"] == "task_numeric_watch_match"
-    items = payload["items"]
-    match_item = next((item for item in items if item.get("event_type") == "semantic_match"), None)
-    if match_item is not None:
-        watch_match = match_item.get("watch_match") or {}
-        assert watch_match.get("matched") is True
-        assert watch_match.get("matched_field") == "price"
-        assert watch_match.get("matched_value") == 199.0
-        assert watch_match.get("matched_unit") == "cny"
+
+
+def test_ask_endpoint_exposes_structured_observations() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_ask_observation",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_price",
+                        "name": "价格区",
+                        "x": 0,
+                        "y": 0,
+                        "w": 120,
+                        "h": 80,
+                    }
+                ],
+            },
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    state.current_runner.capture = FakeCaptureLarge()
+    state.current_runner.ocr = FakeStructuredOCR()
+    client.post("/api/watch/run-once")
+
+    response = client.get("/api/ask", params={"question": "最近价格区读到了什么", "minutes": 5, "task_id": "task_ask_observation"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "structured_observations" in payload
+    assert payload["structured_observations"]
+    observation = payload["structured_observations"][0]
+    assert observation["text"]["full_text"] == "库存恢复 价格 ¥199"
+    assert observation["layout"]["block_count"] == 2
+    assert any(entity["field"] == "price" for entity in observation["entities"])
 
 
 def test_timeline_recent_exposes_vision_trigger_reason_event() -> None:

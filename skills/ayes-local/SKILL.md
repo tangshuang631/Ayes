@@ -34,7 +34,10 @@ Use this skill when the request is about:
    - 必要时补 `ayes-agent-local memory-items` 和 `ayes-agent-local logs`
    - 最后用 `ayes-agent-local ask --question "..."` 组织回答
 3. 如果用户要求开始或恢复监控：
-   - 必要时用 `ayes-agent-local load-spec ...`
+   - 如果用户给的是自然语言任务，先用 `ayes-agent-local plan-spec ...`
+   - 读取返回的 `missing_fields / ambiguities / confirmation_summary`
+   - 让用户确认或补齐缺失项后，再用 `ayes-agent-local confirm-plan ...`
+   - 如果已经有明确结构化 spec，也可以继续用 `ayes-agent-local load-spec ...`
    - 再用 `ayes-agent-local start`
 4. 如果用户要求停止持续监控：
    - 用 `ayes-agent-local stop`
@@ -53,6 +56,8 @@ Use this skill when the request is about:
 ayes-agent-local ensure-service
 ayes-agent-local contracts
 ayes-agent-local status
+ayes-agent-local plan-spec --task-id task_web --prompt "帮我监控 Safari 里的商品价格低于 299 时提醒我" --target-type process --process-name Safari
+ayes-agent-local confirm-plan --plan-file /tmp/task_web.plan.json --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"
 ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
 ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
 ayes-agent-local screenshot --task-id task_web
@@ -107,6 +112,7 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 - 时序事件
 - 短期 / 长期记忆
 - 按需视觉增强
+- 对话式任务草案与配置确认流
 
 ## Escalation Back To Workbench
 

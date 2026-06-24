@@ -26,12 +26,16 @@ ayes-agent-local status
 
 ```bash
 ayes-agent-local targets
+ayes-agent-local plan-spec --task-id task_plan --prompt "帮我监控 Safari 里的商品价格低于 299 时提醒我" --target-type process --process-name Safari
+ayes-agent-local confirm-plan --plan-file /tmp/task_plan.json --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"
 ayes-agent-local task --task-id task_web
 ```
 
 用途：
 
 - `targets`：读取当前可选屏幕/进程目标摘要
+- `plan-spec`：读取自然语言任务并生成 `watch spec` 草案、缺失项和确认摘要
+- `confirm-plan`：补齐确认项后正式装载任务
 - `task`：读取持久化任务配置快照
 
 ## 3. 近期证据链路
@@ -94,6 +98,26 @@ ayes-agent-local stop
 - `stop` 会停止当前持续监控
 
 ## 6. 装载最小 watch spec
+
+优先推荐的自然语言编排流：
+
+```bash
+ayes-agent-local plan-spec \
+  --task-id task_price \
+  --prompt "帮我监控 Google Chrome 里的商品价格低于 299 时提醒我" \
+  --target-type process \
+  --process-name "Google Chrome"
+```
+
+如果返回提示缺少 webhook，则把输出 JSON 保存为本地文件后确认装载：
+
+```bash
+ayes-agent-local confirm-plan \
+  --plan-file /tmp/task_price.plan.json \
+  --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"
+```
+
+当用户已知完整结构化配置时，仍可直接使用 `load-spec`。
 
 屏幕观察任务：
 

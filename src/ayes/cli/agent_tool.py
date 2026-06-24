@@ -90,6 +90,13 @@ def _build_target_payload(args: argparse.Namespace) -> Dict[str, Any]:
     raise RuntimeError(f"不支持的 target_type: {target_type}")
 
 
+def _build_optional_target_payload(args: argparse.Namespace) -> Optional[Dict[str, Any]]:
+    target_type = getattr(args, "target_type", None)
+    if not target_type:
+        return None
+    return _build_target_payload(args)
+
+
 def _build_load_spec_payload(args: argparse.Namespace) -> Dict[str, Any]:
     queries = [item for item in (args.query or []) if str(item).strip()]
     payload: Dict[str, Any] = {
@@ -122,6 +129,36 @@ def _build_load_spec_payload(args: argparse.Namespace) -> Dict[str, Any]:
     return payload
 
 
+def _build_plan_spec_payload(args: argparse.Namespace) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "task_id": args.task_id,
+        "prompt": args.prompt,
+    }
+    target = _build_optional_target_payload(args)
+    if target is not None:
+        payload["target"] = target
+    if args.webhook_url:
+        payload["webhook_url"] = args.webhook_url
+    return payload
+
+
+def _build_confirm_plan_payload(args: argparse.Namespace) -> Dict[str, Any]:
+    plan_path = Path(args.plan_file)
+    if not plan_path.exists():
+        raise RuntimeError(f"plan_file 不存在: {plan_path}")
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"plan_file 不是合法 JSON: {plan_path}") from exc
+    confirmations: Dict[str, Any] = {}
+    if args.webhook_url:
+        confirmations["webhook_url"] = args.webhook_url
+    target = _build_optional_target_payload(args)
+    if target is not None:
+        confirmations["target"] = target
+    return {"plan": plan, "confirmations": confirmations}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ayes-agent", description="Ayes 面向智能体的本地薄工具")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="本地 Ayes HTTP 服务地址")
@@ -134,6 +171,22 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("start", help="启动当前已装载的持续监控")
     subparsers.add_parser("run-once", help="执行一次即时采样")
     subparsers.add_parser("stop", help="停止当前持续监控")
+    plan_parser = subparsers.add_parser("plan-spec", help="根据自然语言生成 watch spec 草案")
+    plan_parser.add_argument("--task-id", required=True)
+    plan_parser.add_argument("--prompt", required=True)
+    plan_parser.add_argument("--target-type", choices=["screen", "window", "process"], default=None)
+    plan_parser.add_argument("--screen-id", type=int, default=1)
+    plan_parser.add_argument("--window-id", type=int, default=None)
+    plan_parser.add_argument("--process-name", default=None)
+    plan_parser.add_argument("--webhook-url", default=None)
+
+    confirm_plan_parser = subparsers.add_parser("confirm-plan", help="确认任务草案并装载监控任务")
+    confirm_plan_parser.add_argument("--plan-file", required=True)
+    confirm_plan_parser.add_argument("--target-type", choices=["screen", "window", "process"], default=None)
+    confirm_plan_parser.add_argument("--screen-id", type=int, default=1)
+    confirm_plan_parser.add_argument("--window-id", type=int, default=None)
+    confirm_plan_parser.add_argument("--process-name", default=None)
+    confirm_plan_parser.add_argument("--webhook-url", default=None)
 
     task_parser = subparsers.add_parser("task", help="读取指定任务快照")
     task_parser.add_argument("--task-id", required=True, help="任务 ID")
@@ -208,6 +261,10 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
         return _request_json(base_url, "/api/watch/status")
     if args.command == "targets":
         return _request_json(base_url, "/api/targets")
+    if args.command == "plan-spec":
+        return _request_json(base_url, "/api/agent/plan-watch-spec", method="POST", payload=_build_plan_spec_payload(args))
+    if args.command == "confirm-plan":
+        return _request_json(base_url, "/api/watch/confirm-plan", method="POST", payload=_build_confirm_plan_payload(args))
     if args.command == "start":
         return _request_json(base_url, "/api/watch/start", method="POST", payload={})
     if args.command == "run-once":

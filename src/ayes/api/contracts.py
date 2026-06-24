@@ -11,6 +11,15 @@ from ayes.config.models import WatchSpec
 from ayes.memory.short_term import QueryResult
 
 
+def extract_structured_observation(event: Dict[str, Any]) -> Dict[str, Any]:
+    visual = event.get("visual") or {}
+    attrs = visual.get("attributes") or {}
+    observation = attrs.get("structured_observation")
+    if isinstance(observation, dict):
+        return observation
+    return {}
+
+
 def describe_location_summary(event: Dict[str, Any]) -> str:
     region = event.get("region") or {}
     region_label = region.get("name") or region.get("region_id") or ""
@@ -65,9 +74,14 @@ def build_task_payload(*, task_id: str, spec: WatchSpec) -> Dict[str, Any]:
 
 def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: str, question: str) -> Dict[str, Any]:
     matched_events = [asdict(event) for event in result.matched_events]
+    structured_observations: List[Dict[str, Any]] = []
     for event in matched_events:
         event["location_summary"] = describe_location_summary(event)
         event["preview_overlay"] = build_preview_overlay(event)
+        observation = extract_structured_observation(event)
+        event["structured_observation"] = observation
+        if observation:
+            structured_observations.append(observation)
     timestamps = [event["timestamp"] for event in matched_events if "timestamp" in event]
     evidence_refs: List[str] = []
     for event in matched_events:
@@ -156,6 +170,7 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
         },
         "structured_matches": structured_matches,
         "structured_vision_matches": structured_vision_matches,
+        "structured_observations": structured_observations,
         "evidence_refs": evidence_refs,
         "evidence_previews": evidence_previews,
         "lead_evidence": {
@@ -174,6 +189,7 @@ def build_memory_items_payload(*, items: List[Dict[str, Any]], task_id: str, min
         event = dict(item)
         event["location_summary"] = describe_location_summary(event)
         event["preview_overlay"] = build_preview_overlay(event)
+        event["structured_observation"] = extract_structured_observation(event)
         normalized.append(event)
     return {
         "task_id": task_id,
@@ -227,6 +243,18 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "request": {"window_id": "可选，窗口监控时通过路径参数提供"},
             "response_keys": ["status", "mode"],
         },
+        "watch.plan": {
+            "method": "POST",
+            "path": "/api/agent/plan-watch-spec",
+            "request": {"task_id": "必填", "prompt": "必填", "target": "可选"},
+            "response_keys": ["task_id", "mode", "draft_spec", "missing_fields", "ambiguities", "confirmation_summary", "can_apply_directly"],
+        },
+        "watch.confirm_plan": {
+            "method": "POST",
+            "path": "/api/watch/confirm-plan",
+            "request": {"plan": "必填", "confirmations": "可选"},
+            "response_keys": ["status", "task_id", "mode", "spec", "target"],
+        },
         "watch.status": {
             "method": "GET",
             "path": "/api/watch/status",
@@ -263,7 +291,7 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "method": "GET",
             "path": "/api/ask",
             "query": {"task_id": "可选", "question": "必填", "minutes": "1-15"},
-            "response_keys": ["task_id", "question", "minutes", "answer", "matched_events", "structured_matches", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
+            "response_keys": ["task_id", "question", "minutes", "answer", "matched_events", "structured_matches", "structured_observations", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
         },
         "snapshot.inspect": {
             "method": "GET",

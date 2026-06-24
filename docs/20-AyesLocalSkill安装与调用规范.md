@@ -154,6 +154,8 @@
 - `contracts`
 - `status`
 - `targets`
+- `plan-spec`
+- `confirm-plan`
 - `task`
 - `recent`
 - `alerts`
@@ -174,6 +176,8 @@
 
 - `ensure-service`：保证本地 Ayes 服务可复用或被拉起
 - `targets`：读取候选目标摘要
+- `plan-spec`：把自然语言和已知目标转成任务草案、缺失项与确认摘要
+- `confirm-plan`：在补齐 webhook / 目标 / ROI / 点击点后确认装载最终任务
 - `task`：读取任务配置或持久化任务信息
 - `recent` / `ask` / `screenshot`：构成“随问随答”的最小闭环
 - `alerts`：读取最近告警审计结果，回答“是否通知过 / 为什么没通知”
@@ -185,6 +189,7 @@
 - 何时应该触发 `ayes-local`
 - 何时不应该触发
 - 默认调用顺序
+- 自然语言任务如何先走草案再走确认
 - 没有目标或 ROI 时如何回退到工作台
 - 如何回答用户，而不是只返回原始 JSON
 

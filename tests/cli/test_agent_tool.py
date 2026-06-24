@@ -1,4 +1,5 @@
 from ayes.cli import agent_tool
+import json
 
 
 def test_agent_tool_ensure_service_uses_local_helper(monkeypatch, capsys) -> None:
@@ -144,4 +145,81 @@ def test_agent_tool_load_spec_posts_minimal_payload(monkeypatch, capsys) -> None
     assert recorded["payload"]["watch_intent"]["enabled"] is True
     assert recorded["payload"]["watch_intent"]["queries"] == ["价格低于 299"]
     assert recorded["payload"]["alert"]["webhook_url"] == "http://127.0.0.1:18999/webhook"
+    assert '"status": "loaded"' in capsys.readouterr().out
+
+
+def test_agent_tool_plan_spec_posts_prompt_and_target(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"mode": "triggered", "can_apply_directly": False}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "plan-spec",
+            "--task-id",
+            "task_plan",
+            "--prompt",
+            "帮我监控 Safari 里的商品价格低于 299 时提醒我",
+            "--target-type",
+            "process",
+            "--process-name",
+            "Safari",
+        ]
+    )
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/agent/plan-watch-spec"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"]["task_id"] == "task_plan"
+    assert recorded["payload"]["prompt"].startswith("帮我监控 Safari")
+    assert recorded["payload"]["target"]["process_name"] == "Safari"
+    assert '"mode": "triggered"' in capsys.readouterr().out
+
+
+def test_agent_tool_confirm_plan_posts_plan_file(monkeypatch, tmp_path, capsys) -> None:
+    recorded = {}
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "task_id": "task_plan_confirm",
+                "draft_spec": {
+                    "spec_version": "1.0",
+                    "mode": "triggered",
+                    "target": {"type": "process", "process_name": "Safari"},
+                    "watch_intent": {"enabled": True, "summary": "价格低于 299 时提醒我", "queries": ["价格低于 299"]},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "loaded", "task_id": "task_plan_confirm"}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "confirm-plan",
+            "--plan-file",
+            str(plan_path),
+            "--webhook-url",
+            "http://127.0.0.1:18999/webhook",
+        ]
+    )
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/watch/confirm-plan"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"]["plan"]["task_id"] == "task_plan_confirm"
+    assert recorded["payload"]["confirmations"]["webhook_url"] == "http://127.0.0.1:18999/webhook"
     assert '"status": "loaded"' in capsys.readouterr().out

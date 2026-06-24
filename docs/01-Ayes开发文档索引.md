@@ -67,6 +67,8 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - [18-Web工作台与人类测试界面.md](/Users/apple/Desktop/2026/Ayes/docs/18-Web工作台与人类测试界面.md)
 - [19-日志、事件与记忆可视化.md](/Users/apple/Desktop/2026/Ayes/docs/19-日志、事件与记忆可视化.md)
 - [20-AyesLocalSkill安装与调用规范.md](/Users/apple/Desktop/2026/Ayes/docs/20-AyesLocalSkill安装与调用规范.md)
+- [21-对话式任务规划与配置确认流.md](/Users/apple/Desktop/2026/Ayes/docs/21-对话式任务规划与配置确认流.md)
+- [22-OCR与视觉融合结构化观察.md](/Users/apple/Desktop/2026/Ayes/docs/22-OCR与视觉融合结构化观察.md)
 
 ## 5. 文档维护规则
 
@@ -89,6 +91,8 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - 调整 Web 工作台布局、人类测试入口、前端信息组织、目标选择界面集成、问答交互和运行状态面板时，优先修改 [18-Web工作台与人类测试界面.md](/Users/apple/Desktop/2026/Ayes/docs/18-Web工作台与人类测试界面.md)
 - 调整运行日志、近期事件查看、短期记忆查看、告警状态查看和可观测性展示时，优先修改 [19-日志、事件与记忆可视化.md](/Users/apple/Desktop/2026/Ayes/docs/19-日志、事件与记忆可视化.md)
 - 调整 `ayes-local` skill 的安装流、目录产物、命令包装、智能体调用规范和后台配合方式时，优先修改 [20-AyesLocalSkill安装与调用规范.md](/Users/apple/Desktop/2026/Ayes/docs/20-AyesLocalSkill安装与调用规范.md)
+- 调整自然语言到 `watch spec` 的任务规划、配置确认流、任务草案结构和智能体编排方式时，优先修改 [21-对话式任务规划与配置确认流.md](/Users/apple/Desktop/2026/Ayes/docs/21-对话式任务规划与配置确认流.md)
+- 调整 OCR 结果、视觉增强结果和统一结构化观察输出时，优先修改 [22-OCR与视觉融合结构化观察.md](/Users/apple/Desktop/2026/Ayes/docs/22-OCR与视觉融合结构化观察.md)
 
 ## 6. 临时文档位置
 

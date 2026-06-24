@@ -260,6 +260,102 @@ def test_runner_process_target_writes_warning_log_when_process_window_missing() 
     assert "未找到可采集业务窗口" in logs[-1]["message"]
 
 
+def test_runner_ocr_event_contains_structured_observation() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_price",
+                        "name": "价格区",
+                        "x": 0,
+                        "y": 0,
+                        "w": 2,
+                        "h": 2,
+                    }
+                ],
+            },
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = FakeCapture()
+    runner.ocr = FakeOCRWithBlocks()
+
+    events = runner.run_once(now=100.0)
+
+    observation = events[0].visual.attributes["structured_observation"]
+    assert observation["text"]["full_text"] == "价格 199\n立即购买"
+    assert observation["layout"]["block_count"] == 2
+    assert any(entity["field"] == "price" for entity in observation["entities"])
+    assert observation["region"]["region_id"] == "roi_price"
+
+
+def test_runner_vision_event_contains_structured_observation() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_chart",
+                        "name": "图表区",
+                        "x": 0,
+                        "y": 0,
+                        "w": 2,
+                        "h": 2,
+                    }
+                ],
+            },
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "vision": {
+                "enabled": True,
+                "provider": "ollama",
+                "model": "Molmo-7B-D-0924",
+                "trigger_when_ocr_sparse": True,
+                "ocr_sparse_min_chars": 999,
+                "trigger_on_visual_regions": True,
+                "trigger_on_watch_intent": False,
+                "trigger_on_question_semantics": False,
+                "max_calls_per_minute": 6,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = FakeCapture()
+    runner.ocr = SparseOCR()
+    runner.vision = FakeVision()
+
+    events = runner.run_once(now=100.0)
+
+    vision_event = next(event for event in events if event.event_type == "visual_summary")
+    observation = vision_event.visual.attributes["structured_observation"]
+    assert observation["source"] == "ocr+vision"
+    assert observation["visual"]["summary"] == "图表区域呈下降趋势，右侧有一个可点击按钮"
+    assert "OCR 文本较稀疏" in observation["fusion_notes"][0]
+
+
 def test_runner_process_target_emits_target_switched_event_when_representative_window_changes() -> None:
     spec = WatchSpec.from_dict(
         {

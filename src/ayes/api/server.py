@@ -12,11 +12,19 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ayes.app.state import AppState
-from ayes.api.contracts import build_agent_contract_payload, build_memory_items_payload, build_preview_overlay, build_query_result_payload, describe_location_summary
+from ayes.api.contracts import (
+    build_agent_contract_payload,
+    build_memory_items_payload,
+    build_preview_overlay,
+    build_query_result_payload,
+    describe_location_summary,
+    extract_structured_observation,
+)
 from ayes.cli.spec_builder import build_window_observe_spec
 from ayes.config.models import WatchSpec
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, TimelineEvent, WatchMatch
 from ayes.memory.short_term import QueryResult
+from ayes.planner.service import WatchSpecPlanner
 from ayes.targets.preview import TargetPreviewService
 from ayes.vision.ollama import OllamaService
 
@@ -28,6 +36,7 @@ app = FastAPI(title="Ayes Workbench")
 state = AppState()
 target_preview_service = TargetPreviewService(runtime_dir=BASE_DIR / "runtime")
 ollama_service = OllamaService()
+planner_service = WatchSpecPlanner()
 
 if (WEB_DIR / "static").exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
@@ -54,6 +63,14 @@ def _runtime_path(name: str) -> Path:
     path = RUNTIME_DIR / name
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _decorate_event_payload(item: dict) -> dict:
+    payload = dict(item)
+    payload["location_summary"] = describe_location_summary(payload)
+    payload["preview_overlay"] = build_preview_overlay(payload)
+    payload["structured_observation"] = extract_structured_observation(payload)
+    return payload
 
 
 def _build_query_result_from_store(*, task_id: str, minutes: int, keyword: Optional[str], question: str) -> QueryResult:
@@ -304,6 +321,45 @@ def load_configured_watch(payload: dict = Body(...)) -> JSONResponse:
     )
 
 
+@app.post("/api/agent/plan-watch-spec")
+def plan_watch_spec(payload: dict = Body(...)) -> JSONResponse:
+    task_id = str(payload.get("task_id") or "task_web").strip() or "task_web"
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        return JSONResponse({"error": "prompt 不能为空"}, status_code=400)
+    draft = planner_service.plan(
+        task_id=task_id,
+        prompt=prompt,
+        target=payload.get("target"),
+        webhook_url=payload.get("webhook_url"),
+    )
+    state.log_store.write(category="api", level="info", message="已生成 watch spec 草案", task_id=task_id, metadata={"mode": draft.mode})
+    return JSONResponse(draft.to_dict())
+
+
+@app.post("/api/watch/confirm-plan")
+def confirm_watch_plan(payload: dict = Body(...)) -> JSONResponse:
+    plan = payload.get("plan")
+    confirmations = payload.get("confirmations") or {}
+    try:
+        spec, normalized_plan = planner_service.confirm(plan_payload=plan, confirmations=confirmations)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    task_id = str(normalized_plan.get("task_id") or payload.get("task_id") or "task_web").strip() or "task_web"
+    state.set_runner(spec, task_id=task_id)
+    state.log_store.write(category="watch", level="info", message="已从任务草案确认并装载监控任务", task_id=task_id, metadata={"mode": spec.mode, "target_type": spec.target.type})
+    return JSONResponse(
+        {
+            "status": "loaded",
+            "task_id": task_id,
+            "mode": spec.mode,
+            "target": asdict(spec.target),
+            "spec": asdict(spec),
+            "plan": normalized_plan,
+        }
+    )
+
+
 @app.post("/api/watch/run-once")
 def run_watch_once() -> JSONResponse:
     if state.current_runner is None:
@@ -350,6 +406,7 @@ def get_events(
         since_timestamp=since_timestamp,
         limit=100,
     )
+    items = [_decorate_event_payload(item) for item in items]
     return JSONResponse(
         {
             "items": items,
@@ -430,6 +487,19 @@ def ask_question(
             keyword=keyword,
             question=question,
         )
+    if hours is None and not result.matched_events:
+        fallback_items = state.sqlite_store.query_events(
+            task_id=resolved_task_id,
+            minutes=minutes,
+            limit=5,
+        )
+        if fallback_items:
+            result = QueryResult(
+                answer=result.answer,
+                confidence=result.confidence,
+                matched_events=[_event_from_payload(item) for item in fallback_items],
+                memory_layers_used=result.memory_layers_used,
+            )
     state.log_store.write(category="api", level="info", message="执行一次问答查询", task_id=resolved_task_id, metadata={"question": question, "minutes": minutes, "hours": hours})
     effective_minutes = (hours * 60) if hours is not None else minutes
     return JSONResponse(build_query_result_payload(result=result, minutes=effective_minutes, task_id=resolved_task_id, question=question))
@@ -466,9 +536,7 @@ def get_recent_alerts(
         return JSONResponse({"items": [], "task_id": None, "minutes": minutes, "limit": limit, "count": 0})
     since_timestamp = time.time() - (minutes * 60)
     items = state.sqlite_store.list_events(task_id=resolved_task_id, source="alert", since_timestamp=since_timestamp, limit=limit)
-    for item in items:
-        item["location_summary"] = describe_location_summary(item)
-        item["preview_overlay"] = build_preview_overlay(item)
+    items = [_decorate_event_payload(item) for item in items]
     return JSONResponse(
         {
             "items": items,
@@ -493,6 +561,7 @@ def get_ocr_snippets(
     items = state.sqlite_store.list_events(task_id=resolved_task_id, source="ocr", since_timestamp=since_timestamp, limit=limit)
     snippets = []
     for item in items:
+        item = _decorate_event_payload(item)
         text = (item.get("text") or {}).get("ocr_text", "").strip()
         summary = (item.get("summary") or "").strip()
         if not text and not summary:
@@ -504,10 +573,11 @@ def get_ocr_snippets(
                 "summary": summary,
                 "ocr_text": text,
                 "preview": (text or summary)[:120],
-                "location_summary": describe_location_summary(item),
-                "preview_overlay": build_preview_overlay(item),
+                "location_summary": item.get("location_summary"),
+                "preview_overlay": item.get("preview_overlay"),
                 "evidence_ref": ((item.get("evidence_refs") or [None])[0]),
                 "tags": item.get("tags") or [],
+                "structured_observation": item.get("structured_observation") or {},
             }
         )
     return JSONResponse(
@@ -580,9 +650,7 @@ def timeline_recent(
         return JSONResponse({"items": [], "task_id": None, "minutes": minutes, "limit": limit, "count": 0})
     since_timestamp = time.time() - (minutes * 60)
     items = state.sqlite_store.list_events(task_id=resolved_task_id, since_timestamp=since_timestamp, limit=limit)
-    for item in items:
-        item["location_summary"] = describe_location_summary(item)
-        item["preview_overlay"] = build_preview_overlay(item)
+    items = [_decorate_event_payload(item) for item in items]
     return JSONResponse(
         {
             "items": items,
