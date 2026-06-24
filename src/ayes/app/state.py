@@ -8,7 +8,7 @@ from dataclasses import asdict
 from typing import Optional
 
 from ayes.app.runner import WatchRunner
-from ayes.api.contracts import build_task_payload
+from ayes.api.contracts import build_task_payload, describe_location_summary
 from ayes.config.models import WatchSpec
 from ayes.logs.store import LogStore
 from ayes.memory.long_term import build_long_term_summary
@@ -296,6 +296,39 @@ class AppState:
             },
         }
 
+    def _build_latest_key_event(self) -> Optional[dict]:
+        if self.current_runner is None or not self.current_runner.events:
+            return None
+        ignored_sources = {"capture", "diff", "action"}
+        ignored_event_types = {"vision_triggered", "vision_skipped"}
+        for event in reversed(self.current_runner.events):
+            if event.source in ignored_sources:
+                continue
+            if event.event_type in ignored_event_types:
+                continue
+            payload = asdict(event)
+            text_preview = (
+                ((payload.get("text") or {}).get("ocr_text") or payload.get("summary") or "")
+                .strip()
+                [:160]
+            )
+            target = payload.get("target") or {}
+            region = payload.get("region") or {}
+            return {
+                "event_id": payload.get("event_id"),
+                "source": payload.get("source"),
+                "event_type": payload.get("event_type"),
+                "summary": payload.get("summary") or payload.get("event_type") or "",
+                "timestamp": payload.get("timestamp"),
+                "location_summary": describe_location_summary(payload),
+                "text_preview": text_preview,
+                "region_name": region.get("name") or region.get("region_id") or "",
+                "target_label": target.get("process_name")
+                or target.get("window_title")
+                or (f"screen:{target.get('screen_id')}" if target.get("screen_id") is not None else ""),
+            }
+        return None
+
     def status(self) -> dict:
         action_count = 0
         match_count = 0
@@ -364,6 +397,7 @@ class AppState:
                 if last_capture_status is not None and last_capture_target is not None:
                     break
         health_summary = self._build_health_summary(task_id=resolved_task_id)
+        latest_key_event = self._build_latest_key_event()
         return {
             "has_runner": self.current_runner is not None,
             "is_running": self.is_background_running(),
@@ -386,6 +420,7 @@ class AppState:
             "last_vision_decision": last_vision_decision,
             "last_capture_target": last_capture_target,
             "last_capture_status": last_capture_status,
+            "latest_key_event": latest_key_event,
             "task_snapshot": self._build_task_snapshot(),
             "health_summary": health_summary,
             "last_error": self.last_error,

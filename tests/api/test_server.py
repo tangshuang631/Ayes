@@ -249,6 +249,57 @@ def test_status_endpoint_exposes_current_spec_payload() -> None:
     assert payload["task_snapshot"]["sampling"]["ocr_interval_ms"] == 1200
     assert payload["task_snapshot"]["vision_enabled"] is True
     assert payload["task_snapshot"]["alert_enabled"] is True
+    assert "latest_key_event" in payload
+
+
+def test_status_endpoint_exposes_latest_key_event_summary() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_status_latest_event",
+            "mode": "triggered",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_price",
+                        "name": "价格区",
+                        "x": 10,
+                        "y": 20,
+                        "w": 80,
+                        "h": 60,
+                        "coordinate_space": "target",
+                        "enabled": True,
+                    }
+                ],
+            },
+            "sampling": {"screenshot_interval_ms": 1000, "ocr_interval_ms": 1000},
+            "watch_intent": {
+                "enabled": True,
+                "summary": "价格低于 299 时提醒",
+                "queries": ["价格低于 299"],
+            },
+            "alert": {"enabled": True},
+        },
+    )
+    assert state.current_runner is not None
+    state.current_runner.capture = FakeCapture()
+    state.current_runner.ocr = FakeNumericOCR()
+    client.post("/api/watch/run-once")
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    latest = payload["latest_key_event"]
+    assert latest is not None
+    assert "source" in latest
+    assert "event_type" in latest
+    assert "summary" in latest
+    assert "timestamp" in latest
+    assert "location_summary" in latest
+    assert "text_preview" in latest
 
 
 def test_ocr_snippets_endpoint_returns_recent_text_fragments() -> None:

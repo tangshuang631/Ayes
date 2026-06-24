@@ -938,10 +938,19 @@ function renderRawStatusSummary(status) {
   const ocrQuality = status.last_ocr_quality || {};
   const visionDecision = status.last_vision_decision || {};
   const visionSummary = status.last_vision_summary || {};
+  const latestKeyEvent = status.latest_key_event || null;
   const targetSummaryText = `${formatEventTarget(captureTarget)} | ${taskTarget.type || "未装载"} | ROI: ${buildRegionSummaryFromSpecTarget(taskTarget)}`;
-  const ocrSummaryText = ocrQuality.provider
-    ? `${ocrQuality.provider} | 字符 ${ocrQuality.char_count ?? 0} | 块 ${ocrQuality.block_count ?? 0}${ocrQuality.sparse ? " | 稀疏结果" : ""}`
+  const ocrSummaryText = ocrQuality.summary
+    ? `${ocrQuality.summary}${ocrQuality.provider ? `\nOCR: ${ocrQuality.provider} / 字符 ${ocrQuality.char_count ?? 0} / 块 ${ocrQuality.block_count ?? 0}${ocrQuality.sparse ? " / 稀疏" : ""}` : ""}`
     : "暂无 OCR 读取结果";
+  const latestKeyEventText = latestKeyEvent
+    ? [
+      latestKeyEvent.summary || `${latestKeyEvent.source || ""} / ${latestKeyEvent.event_type || ""}`,
+      latestKeyEvent.location_summary ? `位置: ${latestKeyEvent.location_summary}` : "",
+      latestKeyEvent.text_preview ? `内容: ${latestKeyEvent.text_preview}` : "",
+      latestKeyEvent.timestamp ? `时间: ${formatTimestamp(latestKeyEvent.timestamp)}` : "",
+    ].filter(Boolean).join("\n")
+    : "暂无关键事件";
   const visionDecisionText = visionDecision.event_type
     ? `${visionDecision.event_type}${(visionDecision.reasons || []).length ? ` | ${(visionDecision.reasons || []).join(" | ")}` : visionDecision.blocked_reason ? ` | ${visionDecision.blocked_reason}` : ""}`
     : "未触发视觉辅助";
@@ -958,16 +967,16 @@ function renderRawStatusSummary(status) {
       <div class="status-raw-value">${captureStatus}</div>
     </div>
     <div class="status-raw-line">
-      <div class="status-raw-label">最近 OCR 原始结果摘要</div>
+      <div class="status-raw-label">最近读到的 OCR 内容</div>
       <div class="status-raw-value">${ocrSummaryText}</div>
     </div>
     <div class="status-raw-line">
-      <div class="status-raw-label">最近视觉辅助判断</div>
-      <div class="status-raw-value">${visionDecisionText}</div>
+      <div class="status-raw-label">最近关键事件</div>
+      <div class="status-raw-value">${latestKeyEventText}</div>
     </div>
     <div class="status-raw-line">
-      <div class="status-raw-label">最近视觉补充内容</div>
-      <div class="status-raw-value">${visionSummaryText}</div>
+      <div class="status-raw-label">视觉辅助链路</div>
+      <div class="status-raw-value">${visionDecisionText}${visionSummary.summary ? `\n\n${visionSummaryText}` : ""}</div>
     </div>
   `;
 }
