@@ -45,3 +45,11 @@ def test_memory_panel_exposes_follow_up_question_anchor() -> None:
 def test_memory_panel_exposes_evidence_summary_anchor() -> None:
     html = Path("web/index.html").read_text(encoding="utf-8")
     assert 'id="memoryEvidenceSummary"' in html
+
+
+def test_roi_editor_anchors_remain_available_for_target_switch_reset_flow() -> None:
+    html = Path("web/index.html").read_text(encoding="utf-8")
+    assert 'id="roiEditorEmpty"' in html
+    assert 'id="roiEditorShell"' in html
+    assert 'id="roiEditorImage"' in html
+    assert 'id="regionsJsonInput"' in html

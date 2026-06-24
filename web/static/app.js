@@ -731,12 +731,61 @@ async function notifyFrontendSessionHeartbeat() {
   }
 }
 
+function buildTargetIdentity(target) {
+  if (!target) {
+    return "";
+  }
+  if (target.type === "screen") {
+    return `screen:${target.screen_id ?? ""}`;
+  }
+  if (target.type === "process") {
+    return `process:${target.process_name ?? ""}:${target.window_id ?? ""}`;
+  }
+  return `window:${target.window_id ?? ""}`;
+}
+
+function resetRoiDraftState() {
+  editableRegions = [];
+  roiPreviewSource = null;
+  roiDraftState = null;
+  const shell = document.getElementById("roiEditorShell");
+  const empty = document.getElementById("roiEditorEmpty");
+  const image = document.getElementById("roiEditorImage");
+  const overlay = document.getElementById("roiOverlay");
+  const draft = document.getElementById("roiDraft");
+  if (shell) {
+    shell.classList.add("hidden");
+  }
+  if (empty) {
+    empty.textContent = "请基于当前已选目标重新载入预览并框选 ROI。";
+    empty.classList.remove("hidden");
+  }
+  if (image) {
+    image.removeAttribute("src");
+  }
+  if (overlay) {
+    overlay.innerHTML = "";
+  }
+  if (draft) {
+    draft.classList.add("hidden");
+    draft.innerHTML = "";
+  }
+  syncRegionsTextarea();
+  renderRegionList();
+}
+
 function setSelectedTarget(target) {
+  const previousIdentity = buildTargetIdentity(selectedTarget);
+  const nextIdentity = buildTargetIdentity(target);
+  const changed = previousIdentity !== nextIdentity;
   selectedTarget = target;
   const summary = document.getElementById("selectedTargetSummary");
   if (!target) {
     summary.textContent = "未选择监控目标";
     return;
+  }
+  if (changed) {
+    resetRoiDraftState();
   }
   if (target.type === "screen") {
     summary.textContent = `已选目标: 主屏幕 / screen_id=${target.screen_id} | ROI: ${buildRegionSummaryFromSpecTarget(target)}`;
