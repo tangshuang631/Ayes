@@ -35,6 +35,7 @@ ayes-agent-local task --task-id task_web
 
 - `targets`：读取当前可选屏幕/进程目标摘要
 - `plan-spec`：读取自然语言任务并生成 `watch spec` 草案、缺失项和确认摘要
+- `plan-spec`：同时返回 `questions[] / region_intents[] / action_intents[]`，供智能体逐条补问
 - `confirm-plan`：补齐确认项后正式装载任务
 - `task`：读取持久化任务配置快照
 
@@ -118,6 +119,19 @@ ayes-agent-local confirm-plan \
 ```
 
 当用户已知完整结构化配置时，仍可直接使用 `load-spec`。
+
+如果 `plan-spec` 返回：
+
+- `questions[]`：智能体应先逐条补问
+- `region_intents[]`：智能体应向用户确认区域名称、用途，以及是否真的需要这些区域
+- `action_intents[]`：智能体应确认是否启用刷新点击、频率多少、是否已有点击点
+
+推荐补问顺序：
+
+1. 先处理 `target_missing`
+2. 再处理 `region_scope / region_definition`
+3. 再处理 `refresh_click_enable / refresh_click_interval / refresh_click_point`
+4. 最后处理 `webhook_missing` 等执行前缺口
 
 屏幕观察任务：
 

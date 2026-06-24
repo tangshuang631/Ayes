@@ -247,7 +247,7 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "method": "POST",
             "path": "/api/agent/plan-watch-spec",
             "request": {"task_id": "必填", "prompt": "必填", "target": "可选"},
-            "response_keys": ["task_id", "mode", "draft_spec", "missing_fields", "ambiguities", "confirmation_summary", "can_apply_directly"],
+            "response_keys": ["task_id", "mode", "draft_spec", "missing_fields", "questions", "region_intents", "action_intents", "ambiguities", "confirmation_summary", "can_apply_directly"],
         },
         "watch.confirm_plan": {
             "method": "POST",

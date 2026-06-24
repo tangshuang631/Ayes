@@ -71,8 +71,9 @@
 
 1. `targets` 或工作台选择目标
 2. `plan-watch-spec` 生成任务草案
-3. 智能体复述 `confirmation_summary`
-4. `confirm-plan` 确认并装载最终任务
+3. 智能体按 `questions[]` 逐条补问
+4. 智能体复述 `confirmation_summary`
+5. `confirm-plan` 确认并装载最终任务
 5. `start`
 6. `recent / screenshot / ask / alerts / logs` 回读运行证据
 

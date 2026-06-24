@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import copy
 import re
+from uuid import uuid4
 from typing import Any, Dict, List, Optional, Tuple
 
 from ayes.config.models import WatchSpec
-from ayes.planner.models import PlanIssue, WatchPlanDraft
+from ayes.planner.models import ActionIntent, PlanIssue, PlanQuestion, RegionIntent, WatchPlanDraft
 
 
 class WatchSpecPlanner:
@@ -26,6 +27,9 @@ class WatchSpecPlanner:
         intent_category = self._infer_intent_category(cleaned_prompt)
         draft_spec = self._build_default_spec(mode=mode)
         missing_fields: List[PlanIssue] = []
+        questions: List[PlanQuestion] = []
+        region_intents: List[RegionIntent] = []
+        action_intents: List[ActionIntent] = []
         ambiguities: List[PlanIssue] = []
         assumptions: List[str] = []
         confirmation_summary: List[str] = []
@@ -36,6 +40,15 @@ class WatchSpecPlanner:
             confirmation_summary.append(self._build_target_summary(resolved_target))
         else:
             missing_fields.append(PlanIssue(field="target", reason="尚未指定监控目标"))
+            questions.append(
+                PlanQuestion(
+                    question_id="q_target_missing",
+                    kind="target_missing",
+                    field="target",
+                    prompt="这次要监控哪个目标，是整个屏幕、某个进程还是某个窗口？",
+                    suggested_answer="先监控 Safari 进程",
+                )
+            )
 
         watch_intent, watch_assumptions = self._build_watch_intent(cleaned_prompt, mode=mode)
         assumptions.extend(watch_assumptions)
@@ -57,17 +70,42 @@ class WatchSpecPlanner:
         draft_spec["alert"] = alert
         if mode == "triggered" and not alert.get("webhook_url"):
             missing_fields.append(PlanIssue(field="alert.webhook_url", reason="triggered 模式需要可用通知出口"))
+            questions.append(
+                PlanQuestion(
+                    question_id="q_webhook_missing",
+                    kind="webhook_missing",
+                    field="alert.webhook_url",
+                    prompt="这个 triggered 任务要通知到哪里？请补一个企业微信 webhook URL。",
+                    suggested_answer="使用企业微信 webhook 通知我",
+                )
+            )
         if mode == "triggered":
             confirmation_summary.append(self._build_trigger_summary(watch_intent))
         else:
             confirmation_summary.append("将持续保留近期事件、记忆与可回放证据，不主动发送告警")
 
-        refresh_click, refresh_issues, refresh_assumptions = self._build_refresh_click(cleaned_prompt)
+        region_intents, region_questions = self._build_region_intents(cleaned_prompt)
+        questions.extend(region_questions)
+
+        refresh_click, refresh_issues, refresh_questions, refresh_actions, refresh_assumptions = self._build_refresh_click(cleaned_prompt)
         draft_spec["actions"] = {"refresh_click": refresh_click}
         missing_fields.extend(refresh_issues)
+        questions.extend(refresh_questions)
+        action_intents.extend(refresh_actions)
         assumptions.extend(refresh_assumptions)
         if refresh_click.get("enabled"):
             confirmation_summary.append("已识别到刷新诉求，但仍需确认刷新点击坐标")
+        if region_intents:
+            confirmation_summary.append("已识别到重点监控区域诉求，后续需逐条确认区域名称、用途和绑定状态")
+            action_intents.insert(
+                0,
+                ActionIntent(
+                    action_type="region_binding",
+                    purpose="为重点监控区域补齐绑定和坐标",
+                    required_confirmation=True,
+                    missing_fields=["target.regions"],
+                ),
+            )
 
         confirmation_summary.append(
             f"短期记忆保留 {draft_spec['memory']['short_term']['retain_minutes']} 分钟，"
@@ -89,6 +127,9 @@ class WatchSpecPlanner:
             target_hint=target or {},
             resolved_target=resolved_target,
             missing_fields=missing_fields,
+            questions=questions,
+            region_intents=region_intents,
+            action_intents=action_intents,
             ambiguities=ambiguities,
             assumptions=assumptions,
             confirmation_summary=confirmation_summary,
@@ -123,12 +164,28 @@ class WatchSpecPlanner:
         if isinstance(regions, list) and regions:
             spec_payload.setdefault("target", {})["regions"] = regions
 
+        region_intents = confirmations.get("region_intents")
+        if isinstance(region_intents, list) and region_intents:
+            payload["region_intents"] = region_intents
+
         refresh_click_point = confirmations.get("refresh_click_point")
+        refresh_click_enabled = confirmations.get("refresh_click_enabled")
+        refresh_click_interval_sec = confirmations.get("refresh_click_interval_sec")
+        refresh_click_coordinate_space = confirmations.get("refresh_click_coordinate_space")
+        refresh_click = spec_payload.setdefault("actions", {}).setdefault("refresh_click", {})
+        if isinstance(refresh_click_enabled, bool):
+            refresh_click["enabled"] = refresh_click_enabled
+        if refresh_click_interval_sec is not None:
+            refresh_click["interval_sec"] = int(refresh_click_interval_sec)
+        if refresh_click_coordinate_space:
+            refresh_click["coordinate_space"] = str(refresh_click_coordinate_space)
         if isinstance(refresh_click_point, dict) and refresh_click_point:
-            refresh_click = spec_payload.setdefault("actions", {}).setdefault("refresh_click", {})
             refresh_click["enabled"] = True
             refresh_click["point"] = refresh_click_point
             refresh_click.setdefault("coordinate_space", "window")
+
+        if confirmations.get("use_entire_target") is True:
+            spec_payload.setdefault("target", {})["regions"] = []
 
         spec = WatchSpec.from_dict(spec_payload)
         payload["draft_spec"] = spec_payload
@@ -138,6 +195,56 @@ class WatchSpecPlanner:
         payload["can_apply_directly"] = True
         payload["status"] = "ready"
         return spec, payload
+
+    def _build_region_intents(self, prompt: str) -> Tuple[List[RegionIntent], List[PlanQuestion]]:
+        intents: List[RegionIntent] = []
+        questions: List[PlanQuestion] = []
+        wants_regions = any(keyword in prompt for keyword in ["区域", "范围", "只看", "重点区域", "几个区域", "小范围"])
+        if "价格" in prompt:
+            intents.append(
+                RegionIntent(
+                    region_intent_id=f"ri_{uuid4().hex[:8]}",
+                    name="价格区",
+                    purpose="读取当前价格并判断阈值",
+                )
+            )
+        if "库存" in prompt or "有货" in prompt:
+            intents.append(
+                RegionIntent(
+                    region_intent_id=f"ri_{uuid4().hex[:8]}",
+                    name="库存区",
+                    purpose="读取库存状态和有货变化",
+                )
+            )
+        if "报错" in prompt or "错误" in prompt or "弹窗" in prompt:
+            intents.append(
+                RegionIntent(
+                    region_intent_id=f"ri_{uuid4().hex[:8]}",
+                    name="报错区",
+                    purpose="识别弹窗和异常提示",
+                )
+            )
+        if intents or wants_regions:
+            questions.append(
+                PlanQuestion(
+                    question_id="q_region_scope",
+                    kind="region_scope",
+                    field="target.regions",
+                    prompt="这次要监控整个目标，还是只监控几个重点区域？",
+                    suggested_answer="只监控几个重点区域",
+                )
+            )
+        if intents:
+            questions.append(
+                PlanQuestion(
+                    question_id="q_region_definition",
+                    kind="region_definition",
+                    field="target.regions",
+                    prompt="已识别出重点区域意图，请确认这些区域名称和用途是否正确。",
+                    suggested_answer="保留价格区和库存区",
+                )
+            )
+        return intents, questions
 
     def _build_default_spec(self, *, mode: str) -> Dict[str, Any]:
         return {
@@ -375,7 +482,7 @@ class WatchSpecPlanner:
             "dedupe_window_sec": 300,
         }
 
-    def _build_refresh_click(self, prompt: str) -> Tuple[Dict[str, Any], List[PlanIssue], List[str]]:
+    def _build_refresh_click(self, prompt: str) -> Tuple[Dict[str, Any], List[PlanIssue], List[PlanQuestion], List[ActionIntent], List[str]]:
         refresh = {
             "enabled": False,
             "coordinate_space": "window",
@@ -385,12 +492,54 @@ class WatchSpecPlanner:
             "pause_when_target_matched": True,
         }
         issues: List[PlanIssue] = []
+        questions: List[PlanQuestion] = []
+        action_intents: List[ActionIntent] = []
         assumptions: List[str] = []
         if any(keyword in prompt for keyword in ["刷新", "自动点击", "点一下", "点刷新"]):
             refresh["enabled"] = True
             issues.append(PlanIssue(field="actions.refresh_click.point", reason="检测到刷新诉求，但尚未提供点击坐标"))
+            questions.append(
+                PlanQuestion(
+                    question_id="q_refresh_click_enable",
+                    kind="refresh_click_enable",
+                    field="actions.refresh_click.enabled",
+                    prompt="要不要真的启用自动刷新点击？",
+                    suggested_answer="启用自动刷新点击",
+                )
+            )
+            questions.append(
+                PlanQuestion(
+                    question_id="q_refresh_click_point",
+                    kind="refresh_click_point",
+                    field="actions.refresh_click.point",
+                    prompt="刷新点击点还没绑定，需要补充点击坐标或后续绑定方式。",
+                    suggested_answer="后续绑定刷新按钮点击点",
+                )
+            )
+            action_intents.append(
+                ActionIntent(
+                    action_type="refresh_click",
+                    purpose="周期性刷新页面以便发现状态变化",
+                    required_confirmation=True,
+                    missing_fields=["actions.refresh_click.point"],
+                )
+            )
             assumptions.append("已识别到刷新点击意图，默认刷新间隔 30 秒")
-        return refresh, issues, assumptions
+            interval_match = re.search(r"每\s*([0-9]+)\s*秒", prompt)
+            if interval_match:
+                refresh["interval_sec"] = int(interval_match.group(1))
+                assumptions = [item for item in assumptions if "默认刷新间隔 30 秒" not in item]
+            else:
+                questions.append(
+                    PlanQuestion(
+                        question_id="q_refresh_click_interval",
+                        kind="refresh_click_interval",
+                        field="actions.refresh_click.interval_sec",
+                        prompt="自动刷新点击间隔多少秒合适？",
+                        suggested_answer="每 30 秒点一次",
+                    )
+                )
+        return refresh, issues, questions, action_intents, assumptions
 
     def _normalize_target(self, target: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(target, dict):

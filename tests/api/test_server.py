@@ -228,7 +228,30 @@ def test_plan_watch_spec_endpoint_returns_draft_and_missing_confirmation() -> No
     assert payload["draft_spec"]["watch_intent"]["enabled"] is True
     assert payload["draft_spec"]["watch_intent"]["rules"][0]["field"] == "price"
     assert any(item["field"] == "alert.webhook_url" for item in payload["missing_fields"])
+    assert any(question["kind"] == "webhook_missing" for question in payload["questions"])
     assert payload["can_apply_directly"] is False
+
+
+def test_plan_watch_spec_endpoint_emits_region_and_refresh_questions() -> None:
+    response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_regions",
+            "prompt": "帮我监控 Safari 页面里的价格和库存，只看两个重点区域，并且每 30 秒自动刷新一次",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == "task_plan_regions"
+    assert len(payload["region_intents"]) >= 2
+    assert payload["region_intents"][0]["status"] == "needs_binding"
+    kinds = [item["kind"] for item in payload["questions"]]
+    assert "region_scope" in kinds
+    assert "region_definition" in kinds
+    assert "refresh_click_enable" in kinds
+    refresh_intent = next(item for item in payload["action_intents"] if item["action_type"] == "refresh_click")
+    assert "actions.refresh_click.point" in refresh_intent["missing_fields"]
 
 
 def test_confirm_plan_endpoint_loads_runner_after_confirmation() -> None:
@@ -256,6 +279,48 @@ def test_confirm_plan_endpoint_loads_runner_after_confirmation() -> None:
     assert payload["task_id"] == "task_plan_apply"
     assert payload["spec"]["alert"]["enabled"] is True
     assert payload["spec"]["alert"]["webhook_url"] == "http://127.0.0.1:18999/webhook"
+
+
+def test_confirm_plan_endpoint_merges_region_and_refresh_confirmations() -> None:
+    plan_response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_confirm_regions",
+            "prompt": "帮我监控 Safari 页面里的价格和库存，并自动刷新",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert plan_response.status_code == 200
+    response = client.post(
+        "/api/watch/confirm-plan",
+        json={
+            "plan": plan_response.json(),
+            "confirmations": {
+                "use_entire_target": False,
+                "region_intents": [
+                    {"name": "价格区", "purpose": "读取价格"},
+                    {"name": "库存区", "purpose": "读取库存"},
+                ],
+                "regions": [
+                    {"region_id": "roi_price", "name": "价格区", "x": 0, "y": 0, "w": 60, "h": 40},
+                    {"region_id": "roi_stock", "name": "库存区", "x": 60, "y": 0, "w": 60, "h": 40},
+                ],
+                "refresh_click_enabled": True,
+                "refresh_click_interval_sec": 45,
+                "refresh_click_coordinate_space": "screen",
+                "refresh_click_point": {"x": 100, "y": 120},
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    refresh_click = payload["spec"]["actions"]["refresh_click"]
+    assert refresh_click["enabled"] is True
+    assert refresh_click["interval_sec"] == 45
+    assert refresh_click["coordinate_space"] == "screen"
+    assert refresh_click["point"] == {"x": 100, "y": 120}
+    assert len(payload["spec"]["target"]["regions"]) == 2
+    assert payload["plan"]["region_intents"][0]["name"] == "价格区"
 
 
 def test_watch_config_endpoint_supports_process_target_and_refresh_click() -> None:

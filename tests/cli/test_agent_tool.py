@@ -181,6 +181,61 @@ def test_agent_tool_plan_spec_posts_prompt_and_target(monkeypatch, capsys) -> No
     assert '"mode": "triggered"' in capsys.readouterr().out
 
 
+def test_agent_tool_confirm_plan_posts_region_and_refresh_confirmations(monkeypatch, tmp_path, capsys) -> None:
+    recorded = {}
+    plan_path = tmp_path / "plan_regions.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "task_id": "task_plan_regions",
+                "draft_spec": {
+                    "spec_version": "1.0",
+                    "mode": "observe",
+                    "target": {"type": "process", "process_name": "Safari"},
+                    "watch_intent": {"enabled": False, "summary": "", "queries": []},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "loaded", "task_id": "task_plan_regions"}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "confirm-plan",
+            "--plan-file",
+            str(plan_path),
+            "--use-entire-target",
+            "--region-intent",
+            "价格区:读取价格",
+            "--region-intent",
+            "库存区:读取库存",
+            "--refresh-click-enabled",
+            "--refresh-click-interval-sec",
+            "45",
+            "--refresh-click-coordinate-space",
+            "screen",
+        ]
+    )
+
+    assert exit_code == 0
+    confirmations = recorded["payload"]["confirmations"]
+    assert confirmations["use_entire_target"] is True
+    assert len(confirmations["region_intents"]) == 2
+    assert confirmations["region_intents"][0]["name"] == "价格区"
+    assert confirmations["refresh_click_enabled"] is True
+    assert confirmations["refresh_click_interval_sec"] == 45
+    assert confirmations["refresh_click_coordinate_space"] == "screen"
+    assert '"status": "loaded"' in capsys.readouterr().out
+
+
 def test_agent_tool_confirm_plan_posts_plan_file(monkeypatch, tmp_path, capsys) -> None:
     recorded = {}
     plan_path = tmp_path / "plan.json"

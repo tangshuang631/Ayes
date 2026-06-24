@@ -156,7 +156,34 @@ def _build_confirm_plan_payload(args: argparse.Namespace) -> Dict[str, Any]:
     target = _build_optional_target_payload(args)
     if target is not None:
         confirmations["target"] = target
+    if args.use_entire_target:
+        confirmations["use_entire_target"] = True
+    if args.region_intent:
+        confirmations["region_intents"] = [_parse_region_intent(item) for item in args.region_intent]
+    if args.refresh_click_enabled:
+        confirmations["refresh_click_enabled"] = True
+    if args.refresh_click_interval_sec is not None:
+        confirmations["refresh_click_interval_sec"] = args.refresh_click_interval_sec
+    if args.refresh_click_coordinate_space is not None:
+        confirmations["refresh_click_coordinate_space"] = args.refresh_click_coordinate_space
     return {"plan": plan, "confirmations": confirmations}
+
+
+def _parse_region_intent(raw: str) -> Dict[str, Any]:
+    text = str(raw or "").strip()
+    if not text:
+        raise RuntimeError("region_intent 不能为空")
+    if ":" in text:
+        name, purpose = text.split(":", 1)
+    elif "：" in text:
+        name, purpose = text.split("：", 1)
+    else:
+        name, purpose = text, ""
+    name = name.strip()
+    purpose = purpose.strip()
+    if not name:
+        raise RuntimeError("region_intent 名称不能为空")
+    return {"name": name, "purpose": purpose, "required": True, "status": "needs_binding"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -187,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_plan_parser.add_argument("--window-id", type=int, default=None)
     confirm_plan_parser.add_argument("--process-name", default=None)
     confirm_plan_parser.add_argument("--webhook-url", default=None)
+    confirm_plan_parser.add_argument("--use-entire-target", action="store_true")
+    confirm_plan_parser.add_argument("--region-intent", action="append", default=[])
+    confirm_plan_parser.add_argument("--refresh-click-enabled", action="store_true")
+    confirm_plan_parser.add_argument("--refresh-click-interval-sec", type=int, default=None)
+    confirm_plan_parser.add_argument("--refresh-click-coordinate-space", choices=["window", "screen"], default=None)
 
     task_parser = subparsers.add_parser("task", help="读取指定任务快照")
     task_parser.add_argument("--task-id", required=True, help="任务 ID")
