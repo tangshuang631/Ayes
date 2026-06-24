@@ -75,6 +75,7 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
             if ref not in evidence_refs:
                 evidence_refs.append(ref)
     structured_matches: List[Dict[str, Any]] = []
+    structured_vision_matches: List[Dict[str, Any]] = []
     seen_structured_keys: set[str] = set()
     for event in matched_events:
         watch_match = event.get("watch_match") or {}
@@ -105,6 +106,25 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
                 "time_text": _format_time_text(timestamp),
             }
         )
+    for event in matched_events:
+        if event.get("source") != "vision":
+            continue
+        visual = event.get("visual") or {}
+        attrs = visual.get("attributes") or {}
+        region = event.get("region") or {}
+        structured_vision_matches.append(
+            {
+                "event_id": event.get("event_id"),
+                "summary": visual.get("summary") or event.get("summary") or "",
+                "detail_lines": attrs.get("detail_lines") or [],
+                "reasons": attrs.get("vision_reasons") or [],
+                "blocked_reason": attrs.get("vision_blocked_reason") or "",
+                "model": attrs.get("vision_model") or visual.get("provider") or "",
+                "provider": attrs.get("vision_provider") or visual.get("provider") or "",
+                "region_name": region.get("name") or region.get("region_id") or "",
+                "time_text": _format_time_text(event.get("timestamp")),
+            }
+        )
     evidence_previews = [
         {
             "ref": ref,
@@ -127,6 +147,7 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
             "to": max(timestamps) if timestamps else None,
         },
         "structured_matches": structured_matches,
+        "structured_vision_matches": structured_vision_matches,
         "evidence_refs": evidence_refs,
         "evidence_previews": evidence_previews,
         "time_scope_respected": True,

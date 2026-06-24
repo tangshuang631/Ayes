@@ -237,3 +237,58 @@ def test_ask_endpoint_answers_position_question_with_region_and_direction() -> N
     assert payload["matched_events"][0]["location_summary"]
     if payload["evidence_previews"]:
         assert payload["evidence_previews"][0]["overlay"]["kind"] in {"block", "region", "none"}
+
+
+def test_ask_payload_exposes_structured_vision_matches() -> None:
+    now = time.time()
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = state.set_runner(spec, task_id="task_vision_ask")
+    event = build_event(
+        task_id="task_vision_ask",
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now,
+        source="vision",
+        event_type="vision_triggered",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="视觉增强已触发: ocr_sparse",
+    )
+    event = event.__class__(
+        **{
+            **event.__dict__,
+            "region": Region(region_id="roi_chart", name="图表区", x=0, y=0, w=100, h=100),
+            "visual": __import__("ayes.events.models", fromlist=["EventVisual"]).EventVisual(
+                summary="检测到下降图表和红色按钮",
+                labels=["vision_triggered", "ocr_sparse"],
+                attributes={
+                    "vision_reasons": ["ocr_sparse"],
+                    "vision_blocked_reason": "",
+                    "vision_model": "Molmo-7B-D-0924",
+                    "vision_provider": "ollama",
+                    "detail_lines": ["下降图表位于中间", "右上有红色按钮"],
+                },
+                provider="ollama",
+            ),
+        }
+    )
+    runner.memory.append(event)
+    response = client.get("/api/ask", params={"question": "最近发生了什么", "minutes": 5, "task_id": "task_vision_ask"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert "structured_vision_matches" in payload
+    assert payload["structured_vision_matches"]
+    first = payload["structured_vision_matches"][0]
+    assert first["provider"] == "ollama"
+    assert first["model"] == "Molmo-7B-D-0924"
+    assert first["region_name"] == "图表区"
+    assert first["detail_lines"] == ["下降图表位于中间", "右上有红色按钮"]

@@ -297,6 +297,43 @@ function buildStructuredMatchesHtml(items) {
     .join("");
 }
 
+function buildStructuredVisionMatchesHtml(items) {
+  if (!items || !items.length) {
+    return "";
+  }
+  return items
+    .map((item) => {
+      const metaParts = [];
+      if (item.provider) {
+        metaParts.push(`provider ${item.provider}`);
+      }
+      if (item.model) {
+        metaParts.push(`model ${item.model}`);
+      }
+      if (item.region_name) {
+        metaParts.push(`区域 ${item.region_name}`);
+      }
+      if (item.time_text) {
+        metaParts.push(`时间 ${item.time_text}`);
+      }
+      if (Array.isArray(item.reasons) && item.reasons.length) {
+        metaParts.push(`触发 ${item.reasons.join(", ")}`);
+      }
+      if (item.blocked_reason) {
+        metaParts.push(`阻断 ${item.blocked_reason}`);
+      }
+      const details = Array.isArray(item.detail_lines) && item.detail_lines.length ? item.detail_lines.join(" | ") : "";
+      return `
+        <div class="answer-structured-item">
+          <div class="answer-structured-title">${item.summary || "视觉结果"}</div>
+          <div class="answer-structured-meta">${metaParts.join(" | ")}</div>
+          ${details ? `<div class="answer-structured-meta">细节: ${details}</div>` : ""}
+        </div>
+      `;
+    })
+    .join("");
+}
+
 function buildTimelineEventHtml(item) {
   const primaryEvidenceRef = (item.evidence_refs || [])[0];
   const primaryEvidenceSrc = primaryEvidenceRef ? (primaryEvidenceRef.startsWith("/") ? primaryEvidenceRef : `/${primaryEvidenceRef}`) : "";
@@ -716,12 +753,14 @@ function renderMemoryResult(payload) {
   meta.textContent = `任务: ${payload.task_id || "-"} | 时间范围: 最近 ${payload.minutes || "-"} 分钟 | 记忆层: ${(payload.memory_layers_used || []).join(", ") || "-"}`;
   const summary = document.getElementById("memorySummary");
   const structured = document.getElementById("memoryStructuredMatches");
+  const visionStructured = document.getElementById("memoryStructuredVisionMatches");
   const timeRange = payload.time_range || {};
   summary.innerHTML = `
     <div>结论: ${payload.answer || "暂无回答"}</div>
     <div>置信度: ${payload.confidence ?? "-"} | 证据事件: ${(payload.matched_events || []).length} | 实际命中时间: ${timeRange.from ? formatTimestamp(timeRange.from) : "-"} -> ${timeRange.to ? formatTimestamp(timeRange.to) : "-"} | 时间范围约束: ${payload.time_scope_respected ? "已遵守" : "未标记"}</div>
   `;
   structured.innerHTML = buildStructuredMatchesHtml(payload.structured_matches || []);
+  visionStructured.innerHTML = buildStructuredVisionMatchesHtml(payload.structured_vision_matches || []);
   const refs = document.getElementById("memoryRefs");
   refs.innerHTML = `证据引用:<br />${buildEvidenceLinks(payload.evidence_refs || [])}${buildEvidencePreviewHtml(payload.evidence_previews || [])}`;
   const evidence = document.getElementById("memoryEvidence");
