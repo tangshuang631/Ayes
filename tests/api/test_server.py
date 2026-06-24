@@ -202,8 +202,25 @@ def test_status_endpoint_exposes_current_spec_payload() -> None:
         json={
             "task_id": "task_status_spec",
             "mode": "observe",
-            "target": {"type": "screen", "screen_id": 1},
-            "sampling": {"screenshot_interval_ms": 3000},
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_status",
+                        "name": "价格区",
+                        "x": 10,
+                        "y": 20,
+                        "w": 30,
+                        "h": 40,
+                        "coordinate_space": "target",
+                        "enabled": True,
+                    }
+                ],
+            },
+            "sampling": {"screenshot_interval_ms": 3000, "ocr_interval_ms": 1200},
+            "vision": {"enabled": True, "model": "Molmo-7B-D-0924"},
+            "alert": {"enabled": True},
             "watch_intent": {"enabled": False},
         },
     )
@@ -223,6 +240,15 @@ def test_status_endpoint_exposes_current_spec_payload() -> None:
     assert "last_vision_decision" in payload
     assert "last_capture_target" in payload
     assert "last_capture_status" in payload
+    assert "task_snapshot" in payload
+    assert payload["task_snapshot"]["mode"] == "observe"
+    assert payload["task_snapshot"]["target_type"] == "screen"
+    assert payload["task_snapshot"]["region_count"] == 1
+    assert payload["task_snapshot"]["region_names"] == ["价格区"]
+    assert payload["task_snapshot"]["sampling"]["screenshot_interval_ms"] == 3000
+    assert payload["task_snapshot"]["sampling"]["ocr_interval_ms"] == 1200
+    assert payload["task_snapshot"]["vision_enabled"] is True
+    assert payload["task_snapshot"]["alert_enabled"] is True
 
 
 def test_ocr_snippets_endpoint_returns_recent_text_fragments() -> None:

@@ -35,6 +35,30 @@ class AppState:
         self._last_long_term_event_index: int = 0
         self.log_store.write(category="system", level="info", message="Ayes AppState 初始化完成")
 
+    def _build_task_snapshot(self) -> Optional[dict]:
+        if self.current_spec is None:
+            return None
+        enabled_regions = [region for region in self.current_spec.target.regions if region.enabled]
+        return {
+            "mode": self.current_spec.mode,
+            "target_type": self.current_spec.target.type,
+            "target_label": self.current_spec.target.process_name or self.current_spec.target.window_id or self.current_spec.target.screen_id,
+            "region_count": len(enabled_regions),
+            "region_names": [region.name for region in enabled_regions],
+            "sampling": {
+                "screenshot_interval_ms": self.current_spec.sampling.screenshot_interval_ms,
+                "ocr_interval_ms": self.current_spec.sampling.ocr_interval_ms,
+                "change_detection_interval_ms": self.current_spec.sampling.change_detection_interval_ms,
+                "skip_ocr_when_no_change": self.current_spec.sampling.skip_ocr_when_no_change,
+            },
+            "vision_enabled": self.current_spec.vision.enabled,
+            "vision_model": self.current_spec.vision.model if self.current_spec.vision.enabled else "",
+            "alert_enabled": self.current_spec.alert.enabled,
+            "refresh_click_enabled": self.current_spec.actions.refresh_click.enabled,
+            "short_term_minutes": self.current_spec.memory.short_term.retain_minutes,
+            "long_term_hours": self.current_spec.memory.long_term.retain_hours,
+        }
+
     def _prune_expired_long_term_summaries(self, *, task_id: str, now: Optional[float] = None) -> int:
         if self.current_spec is None or not self.current_spec.memory.long_term.enabled:
             return 0
@@ -362,6 +386,7 @@ class AppState:
             "last_vision_decision": last_vision_decision,
             "last_capture_target": last_capture_target,
             "last_capture_status": last_capture_status,
+            "task_snapshot": self._build_task_snapshot(),
             "health_summary": health_summary,
             "last_error": self.last_error,
             "log_count": len(self.log_store.list_entries()),
