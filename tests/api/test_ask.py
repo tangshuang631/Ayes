@@ -108,6 +108,7 @@ def test_ask_endpoint_answers_numeric_threshold_question_from_structured_match()
     assert payload["structured_matches"][0]["region_name"] == "价格区域"
     assert payload["structured_matches"][0]["rule"] == "numeric_threshold:price:lt:299.0"
     assert payload["structured_matches"][0]["time_text"]
+    assert payload["structured_matches"][0]["location_summary"] == "价格区域"
 
 
 def test_ask_endpoint_answers_numeric_lowest_question_with_time() -> None:
@@ -235,6 +236,7 @@ def test_ask_endpoint_answers_position_question_with_region_and_direction() -> N
     assert "左上" in payload["answer"]
     assert payload["matched_events"]
     assert payload["matched_events"][0]["location_summary"]
+    assert payload["matched_events"][0]["text"]["blocks"][0]["rect_norm"]
     if payload["evidence_previews"]:
         assert payload["evidence_previews"][0]["overlay"]["kind"] in {"block", "region", "none"}
 

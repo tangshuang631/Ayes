@@ -94,6 +94,9 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
         seen_structured_keys.add(key)
         region = event.get("region") or {}
         timestamp = event.get("timestamp")
+        blocks = ((event.get("text") or {}).get("blocks") or [])
+        first_block = blocks[0] if blocks else {}
+        first_block_rect_norm = first_block.get("rect_norm") or {}
         structured_matches.append(
             {
                 "event_id": event.get("event_id"),
@@ -103,6 +106,10 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
                 "rule": watch_match.get("matched_rule") or "",
                 "query": watch_match.get("matched_query") or "",
                 "region_name": region.get("name") or region.get("region_id") or "",
+                "location_summary": event.get("location_summary") or describe_location_summary(event),
+                "first_block_text": first_block.get("text") or "",
+                "first_block_rect_norm": first_block_rect_norm,
+                "first_block_direction": _describe_direction(first_block_rect_norm),
                 "time_text": _format_time_text(timestamp),
             }
         )

@@ -285,16 +285,30 @@ function buildStructuredMatchesHtml(items) {
       if (item.region_name) {
         metaParts.push(`区域 ${item.region_name}`);
       }
+      if (item.location_summary) {
+        metaParts.push(`位置 ${item.location_summary}`);
+      }
+      if (item.first_block_direction) {
+        metaParts.push(`方向 ${item.first_block_direction}`);
+      }
       if (item.time_text) {
         metaParts.push(`时间 ${item.time_text}`);
       }
       if (item.rule) {
         metaParts.push(`规则 ${item.rule}`);
       }
+      const detailParts = [];
+      if (item.first_block_text) {
+        detailParts.push(`块文本 ${item.first_block_text}`);
+      }
+      if (item.first_block_rect_norm && Object.keys(item.first_block_rect_norm).length) {
+        detailParts.push(`rect_norm ${JSON.stringify(item.first_block_rect_norm)}`);
+      }
       return `
         <div class="answer-structured-item">
           <div class="answer-structured-title">${item.field || "字段"} | ${item.value ?? "-"}</div>
           <div class="answer-structured-meta">${metaParts.join(" | ")}</div>
+          ${detailParts.length ? `<div class="answer-structured-meta">${detailParts.join(" | ")}</div>` : ""}
         </div>
       `;
     })
