@@ -939,8 +939,19 @@ function renderRawStatusSummary(status) {
   const visionDecision = status.last_vision_decision || {};
   const visionSummary = status.last_vision_summary || {};
   const latestKeyEvent = status.latest_key_event || null;
+  const recentOcrRead = status.recent_ocr_read || null;
   const targetSummaryText = `${formatEventTarget(captureTarget)} | ${taskTarget.type || "未装载"} | ROI: ${buildRegionSummaryFromSpecTarget(taskTarget)}`;
-  const ocrSummaryText = ocrQuality.summary
+  const ocrBlocksText = recentOcrRead && Array.isArray(recentOcrRead.blocks_preview) && recentOcrRead.blocks_preview.length
+    ? recentOcrRead.blocks_preview.map((block) => `${block.direction ? `[${block.direction}] ` : ""}${block.text}`).join("\n")
+    : "";
+  const ocrSummaryText = recentOcrRead && recentOcrRead.full_text
+    ? [
+      recentOcrRead.full_text,
+      recentOcrRead.location_summary ? `位置: ${recentOcrRead.location_summary}` : "",
+      ocrBlocksText ? `块预览:\n${ocrBlocksText}` : "",
+      ocrQuality.provider ? `OCR: ${ocrQuality.provider} / 字符 ${ocrQuality.char_count ?? 0} / 块 ${ocrQuality.block_count ?? 0}${ocrQuality.sparse ? " / 稀疏" : ""}` : "",
+    ].filter(Boolean).join("\n")
+    : ocrQuality.summary
     ? `${ocrQuality.summary}${ocrQuality.provider ? `\nOCR: ${ocrQuality.provider} / 字符 ${ocrQuality.char_count ?? 0} / 块 ${ocrQuality.block_count ?? 0}${ocrQuality.sparse ? " / 稀疏" : ""}` : ""}`
     : "暂无 OCR 读取结果";
   const latestKeyEventText = latestKeyEvent

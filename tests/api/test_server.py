@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from ayes.api.server import app, state
 from ayes.capture.models import CaptureFrame, CaptureResult
-from ayes.ocr.models import OCRResult
+from ayes.ocr.models import OCRResult, OCRTextBlock
 from PIL import Image
 from io import BytesIO
 
@@ -30,9 +30,51 @@ class FakeCapture:
         )
 
 
+class FakeCaptureLarge:
+    def capture_main_display(self, *, timestamp: float) -> CaptureResult:
+        image = Image.new("RGB", (120, 80), color="white")
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        return CaptureResult(
+            ok=True,
+            status="ok",
+            frame=CaptureFrame(
+                frame_id="frame_api_large",
+                timestamp=timestamp,
+                target_type="screen",
+                target_id="main",
+                width=120,
+                height=80,
+                image_bytes=buffer.getvalue(),
+            ),
+        )
+
+
 class FakeNumericOCR:
     def recognize(self, image, options=None) -> OCRResult:
         return OCRResult(provider="fake", elapsed_ms=1, full_text="当前价格 ¥199，立即购买")
+
+
+class FakeStructuredOCR:
+    def recognize(self, image, options=None) -> OCRResult:
+        return OCRResult(
+            provider="fake",
+            elapsed_ms=1,
+            full_text="库存恢复 价格 ¥199",
+            blocks=[
+                OCRTextBlock(
+                    text="库存恢复",
+                    confidence=0.98,
+                    bbox=[0, 0, 40, 0, 40, 10, 0, 10],
+                ),
+                OCRTextBlock(
+                    text="价格 ¥199",
+                    confidence=0.95,
+                    bbox=[0, 12, 60, 12, 60, 24, 0, 24],
+                ),
+            ],
+            char_count=len("库存恢复 价格 ¥199"),
+        )
 
 
 def test_status_endpoint_returns_basic_state() -> None:
@@ -284,7 +326,7 @@ def test_status_endpoint_exposes_latest_key_event_summary() -> None:
         },
     )
     assert state.current_runner is not None
-    state.current_runner.capture = FakeCapture()
+    state.current_runner.capture = FakeCaptureLarge()
     state.current_runner.ocr = FakeNumericOCR()
     client.post("/api/watch/run-once")
 
@@ -300,6 +342,49 @@ def test_status_endpoint_exposes_latest_key_event_summary() -> None:
     assert "timestamp" in latest
     assert "location_summary" in latest
     assert "text_preview" in latest
+
+
+def test_status_endpoint_exposes_recent_ocr_blocks_preview() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_status_ocr_blocks",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_status_blocks",
+                        "name": "库存价格区",
+                        "x": 0,
+                        "y": 0,
+                        "w": 120,
+                        "h": 80,
+                        "coordinate_space": "target",
+                        "enabled": True,
+                    }
+                ],
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    assert state.current_runner is not None
+    state.current_runner.capture = FakeCaptureLarge()
+    state.current_runner.ocr = FakeStructuredOCR()
+    client.post("/api/watch/run-once")
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    recent_ocr = payload["recent_ocr_read"]
+    assert recent_ocr is not None
+    assert recent_ocr["full_text"] == "库存恢复 价格 ¥199"
+    assert recent_ocr["location_summary"] == "库存价格区 / 左上"
+    assert len(recent_ocr["blocks_preview"]) == 2
+    assert recent_ocr["blocks_preview"][0]["text"] == "库存恢复"
+    assert "direction" in recent_ocr["blocks_preview"][0]
 
 
 def test_ocr_snippets_endpoint_returns_recent_text_fragments() -> None:

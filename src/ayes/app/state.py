@@ -8,7 +8,7 @@ from dataclasses import asdict
 from typing import Optional
 
 from ayes.app.runner import WatchRunner
-from ayes.api.contracts import build_task_payload, describe_location_summary
+from ayes.api.contracts import _describe_direction, build_task_payload, describe_location_summary
 from ayes.config.models import WatchSpec
 from ayes.logs.store import LogStore
 from ayes.memory.long_term import build_long_term_summary
@@ -329,6 +329,32 @@ class AppState:
             }
         return None
 
+    def _build_recent_ocr_read(self) -> Optional[dict]:
+        if self.current_runner is None or not self.current_runner.events:
+            return None
+        for event in reversed(self.current_runner.events):
+            if event.source != "ocr":
+                continue
+            payload = asdict(event)
+            blocks = ((payload.get("text") or {}).get("blocks") or [])[:3]
+            return {
+                "summary": payload.get("summary") or "",
+                "full_text": ((payload.get("text") or {}).get("ocr_text") or "").strip(),
+                "location_summary": describe_location_summary(payload),
+                "timestamp": payload.get("timestamp"),
+                "provider": ((payload.get("visual") or {}).get("attributes") or {}).get("ocr_provider"),
+                "blocks_preview": [
+                    {
+                        "text": block.get("text") or "",
+                        "confidence": block.get("confidence"),
+                        "direction": _describe_direction(block.get("rect_norm") or {}),
+                        "rect_norm": block.get("rect_norm") or {},
+                    }
+                    for block in blocks
+                ],
+            }
+        return None
+
     def status(self) -> dict:
         action_count = 0
         match_count = 0
@@ -398,6 +424,7 @@ class AppState:
                     break
         health_summary = self._build_health_summary(task_id=resolved_task_id)
         latest_key_event = self._build_latest_key_event()
+        recent_ocr_read = self._build_recent_ocr_read()
         return {
             "has_runner": self.current_runner is not None,
             "is_running": self.is_background_running(),
@@ -421,6 +448,7 @@ class AppState:
             "last_capture_target": last_capture_target,
             "last_capture_status": last_capture_status,
             "latest_key_event": latest_key_event,
+            "recent_ocr_read": recent_ocr_read,
             "task_snapshot": self._build_task_snapshot(),
             "health_summary": health_summary,
             "last_error": self.last_error,
