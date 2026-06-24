@@ -1541,6 +1541,14 @@ async function startBackgroundWatch() {
     return;
   }
   await refreshStatus();
+  await refreshScreenshot();
+  await refreshEvents();
+  await refreshSnippets();
+  await refreshActionEvents();
+  await refreshMatchEvents();
+  await refreshAlertEvents();
+  await refreshVisionEvents();
+  await refreshMemoryItems();
   await refreshLogs();
 }
 
@@ -1555,6 +1563,9 @@ function ensureStatusPolling() {
     await refreshActionEvents();
     await refreshMatchEvents();
     await refreshAlertEvents();
+    await refreshVisionEvents();
+    await refreshMemoryItems();
+    await refreshScreenshot();
     await refreshLogs();
   }, 2000);
 }
