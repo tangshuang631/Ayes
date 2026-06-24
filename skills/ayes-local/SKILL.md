@@ -5,12 +5,6 @@ description: Use when the user wants Codex to watch a local screen, process, or 
 
 # Ayes Local
 
-## Overview
-
-Ayes gives Codex a local visual timeline over the user's chosen screen or process.
-
-Use it to read current monitoring state, recent screen changes, screenshot evidence, short-term memory, and recent Q&A results from the local Ayes service.
-
 ## When to Use
 
 Use this skill when the request is about:
@@ -31,36 +25,57 @@ Use this skill when the request is about:
 
 ## Default Workflow
 
-1. 先用 `ayes-agent status` 或 `ayes-agent contracts` 确认本地服务和接口状态。
+1. 先读 `references/installation.md`，确认本机已安装 `ayes-local` 和 `ayes-agent-local` 包装脚本。
+2. 先用 `ayes-agent-local ensure-service` 或 `ayes-agent-local status` 确认本地服务可达。
 2. 如果用户是在追问最近情况：
-   - 先读 `ayes-agent screenshot`
-   - 再读 `ayes-agent recent`
-   - 最后用 `ayes-agent ask --question "..."` 组织回答
+   - 先读 `ayes-agent-local screenshot`
+   - 再读 `ayes-agent-local recent`
+   - 必要时补 `ayes-agent-local memory-items` 和 `ayes-agent-local logs`
+   - 最后用 `ayes-agent-local ask --question "..."` 组织回答
 3. 如果用户要求开始或恢复监控：
-   - 必要时用 `ayes-agent load-spec ...`
-   - 再用 `ayes-agent start`
+   - 必要时用 `ayes-agent-local load-spec ...`
+   - 再用 `ayes-agent-local start`
 4. 如果用户要求停止持续监控：
-   - 用 `ayes-agent stop`
+   - 用 `ayes-agent-local stop`
+
+更完整的安装、命令和排障细节，按需继续读取：
+
+- `references/installation.md`
+- `references/commands.md`
+- `references/troubleshooting.md`
 
 ## Tooling
 
 优先使用本地工具：
 
 ```bash
-ayes-agent contracts
-ayes-agent status
-ayes-agent recent --task-id task_web --minutes 5 --limit 20
-ayes-agent screenshot --task-id task_web
-ayes-agent ask --task-id task_web --minutes 5 --question "最近几分钟发生了什么"
-ayes-agent start
-ayes-agent stop
+ayes-agent-local ensure-service
+ayes-agent-local contracts
+ayes-agent-local status
+ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
+ayes-agent-local screenshot --task-id task_web
+ayes-agent-local ask --task-id task_web --minutes 5 --question "最近几分钟发生了什么"
+ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 20
+ayes-agent-local logs --task-id task_web --minutes 15
+ayes-agent-local start
+ayes-agent-local stop
 ```
 
-如果没有安装 `ayes-agent`，可以回退到等价的本地 HTTP API：
+如果没有安装 `ayes-agent-local`，可暂时回退到仓库内命令：
+
+```bash
+PYTHONPATH=src python3 -m ayes.cli.agent_tool status
+```
+
+若连本地命令也不可用，再回退到等价的本地 HTTP API：
 
 - `/api/agent/contracts`
 - `/api/watch/status`
+- `/api/watch/task/{task_id}`
 - `/api/timeline/recent`
+- `/api/timeline/long-term`
+- `/api/memory/items`
+- `/api/logs`
 - `/api/screenshot`
 - `/api/ask`
 - `/api/watch/start`

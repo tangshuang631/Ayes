@@ -169,7 +169,45 @@ curl -s http://127.0.0.1:8770/api/agent/contracts
 - `/api/ask`
 - `/api/logs`
 
-后续将继续补仓库内可安装的 Ayes skill 和更薄的本地工具入口。
+## ayes-local skill 安装
+
+当前仓库已经内置正式的 `ayes-local` skill 模板和本地安装脚本。
+
+默认安装到 Codex：
+
+```bash
+cd /Users/apple/Desktop/2026/Ayes
+python3 scripts/install_ayes_local_skill.py
+```
+
+安装后将生成：
+
+```text
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local
+```
+
+建议先验证：
+
+```bash
+"$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local" ensure-service
+"$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local" contracts
+"$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local" status
+```
+
+`ayes-local` 的目标不是替代后台服务，而是让 Codex / OpenClaw / 其他 Agent 可以稳定复用：
+
+- 当前监控状态
+- 最近截图证据
+- 近期事件时间线
+- 短期记忆与长期摘要
+- 最近日志
+
+详细安装和命令说明见：
+
+- `docs/20-AyesLocalSkill安装与调用规范.md`
+- `skills/ayes-local/references/installation.md`
+- `skills/ayes-local/references/commands.md`
+- `skills/ayes-local/references/troubleshooting.md`
 
 当前补充能力：
 

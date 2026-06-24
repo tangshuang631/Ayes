@@ -116,6 +116,14 @@
 - skill 优先调用本地 `ayes-agent` 工具命令或等价薄包装
 - 若本地服务未启动，skill 应先提示启动 Ayes 服务或桌面启动器
 
+进一步收口后，正式交付形态应明确为：
+
+- 仓库内维护 `skills/ayes-local/` 作为唯一正式模板
+- 由 `scripts/install_ayes_local_skill.py` 安装到目标 Agent 的 skill 根目录
+- 安装时生成绑定当前仓库路径的 `ayes-agent-local` 包装脚本
+- `SKILL.md` 保持简洁，详细安装、命令、排障说明拆到 `references/`
+- 智能体默认先调 `ayes-agent-local`，再由其转发到 `ayes.cli.agent_tool` 与本地 HTTP API
+
 推荐的 skill 使用场景包括：
 
 - “帮我读取当前正在监控的目标最近几分钟发生了什么”

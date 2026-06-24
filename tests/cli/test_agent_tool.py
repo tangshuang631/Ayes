@@ -1,6 +1,51 @@
 from ayes.cli import agent_tool
 
 
+def test_agent_tool_ensure_service_uses_local_helper(monkeypatch, capsys) -> None:
+    calls = []
+
+    monkeypatch.setattr(agent_tool, "ensure_local_service_started", lambda base_url: calls.append(base_url))
+    exit_code = agent_tool.main(["ensure-service"])
+
+    assert exit_code == 0
+    assert calls == ["http://127.0.0.1:8770"]
+    assert '"status": "service_ready"' in capsys.readouterr().out
+
+
+def test_agent_tool_targets_reads_targets_endpoint(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        return {"screens": [], "processes": []}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["targets"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/targets"
+    assert recorded["method"] == "GET"
+    assert '"screens": []' in capsys.readouterr().out
+
+
+def test_agent_tool_task_reads_watch_task_endpoint(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        return {"task_id": "task_demo"}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["task", "--task-id", "task_demo"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/watch/task/task_demo"
+    assert recorded["method"] == "GET"
+    assert '"task_id": "task_demo"' in capsys.readouterr().out
+
+
 def test_agent_tool_recent_builds_expected_path(monkeypatch, capsys) -> None:
     recorded = {}
 
