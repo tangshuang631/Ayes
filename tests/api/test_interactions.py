@@ -184,6 +184,47 @@ def test_events_endpoint_supports_match_source_filter() -> None:
     assert "items" in response.json()
 
 
+def test_events_endpoint_supports_vision_source_filter() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_vision_events",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_chart",
+                        "name": "图表区",
+                        "x": 0,
+                        "y": 0,
+                        "w": 120,
+                        "h": 120,
+                        "coordinate_space": "target",
+                        "enabled": True,
+                    }
+                ],
+            },
+            "vision": {
+                "enabled": True,
+                "provider": "ollama",
+                "model": "Molmo-7B-D-0924",
+                "trigger_when_ocr_sparse": True,
+                "ocr_sparse_min_chars": 999,
+                "trigger_on_visual_regions": True,
+                "trigger_on_watch_intent": False,
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post("/api/watch/run-once")
+    response = client.get("/api/events", params={"task_id": "task_vision_events", "source": "vision", "minutes": 15})
+    client.post("/api/watch/stop")
+    assert response.status_code == 200
+    assert "items" in response.json()
+
+
 def test_minimal_human_verifiable_monitoring_flow() -> None:
     client.post(
         "/api/watch/load-configured",

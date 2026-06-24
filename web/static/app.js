@@ -854,6 +854,11 @@ async function refreshAlertEvents() {
   renderSimpleTimeline("alertList", "alertMeta", data, "alert");
 }
 
+async function refreshVisionEvents() {
+  const data = await requestJson(buildScopedUrl("/api/events", { source: "vision" }));
+  renderSimpleTimeline("visionList", "visionMeta", data, "vision");
+}
+
 async function refreshLongTerm() {
   const data = await requestJson(buildScopedUrl("/api/timeline/long-term", { limit: "20", minutes: null }));
   renderLongTerm(data);
@@ -1038,6 +1043,7 @@ document.getElementById("runOnceBtn").onclick = async () => {
   await refreshActionEvents();
   await refreshMatchEvents();
   await refreshAlertEvents();
+  await refreshVisionEvents();
   await refreshLogs();
   await queryMemory();
   await refreshMemoryItems();
@@ -1053,6 +1059,7 @@ document.getElementById("refreshSnippetsBtn").onclick = refreshSnippets;
 document.getElementById("refreshActionsBtn").onclick = refreshActionEvents;
 document.getElementById("refreshMatchesBtn").onclick = refreshMatchEvents;
 document.getElementById("refreshAlertsBtn").onclick = refreshAlertEvents;
+document.getElementById("refreshVisionEventsBtn").onclick = refreshVisionEvents;
 document.getElementById("askBtn").onclick = queryMemory;
 document.getElementById("refreshLogsBtn").onclick = refreshLogs;
 document.getElementById("refreshScreenshotBtn").onclick = refreshScreenshot;
@@ -1068,6 +1075,7 @@ document.getElementById("applyTaskScopeBtn").onclick = async () => {
   await refreshSnippets();
   await refreshLongTerm();
   await refreshLogs();
+  await refreshVisionEvents();
   await queryMemory();
   await refreshMemoryItems();
 };
@@ -1191,6 +1199,7 @@ notifyFrontendSessionOpen().finally(() => {
   refreshActionEvents();
   refreshMatchEvents();
   refreshAlertEvents();
+  refreshVisionEvents();
   refreshLongTerm();
   refreshLogs();
   refreshScreenshot();
