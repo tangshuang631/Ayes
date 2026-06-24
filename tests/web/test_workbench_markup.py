@@ -53,3 +53,7 @@ def test_roi_editor_anchors_remain_available_for_target_switch_reset_flow() -> N
     assert 'id="roiEditorShell"' in html
     assert 'id="roiEditorImage"' in html
     assert 'id="regionsJsonInput"' in html
+    assert 'id="modeSelect"' in html
+    assert 'id="queryInput"' in html
+    assert 'id="screenshotIntervalInput"' in html
+    assert 'id="ocrIntervalInput"' in html

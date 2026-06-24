@@ -774,6 +774,26 @@ function resetRoiDraftState() {
   renderRegionList();
 }
 
+function resetTaskConfigForm() {
+  document.getElementById("modeSelect").value = "observe";
+  document.getElementById("queryInput").value = "";
+  document.getElementById("screenshotIntervalInput").value = "1000";
+  document.getElementById("ocrIntervalInput").value = "1000";
+  document.getElementById("skipOcrInput").checked = true;
+  document.getElementById("alertEnabledInput").checked = false;
+  document.getElementById("visionEnabledInput").checked = false;
+  document.getElementById("visionModelInput").value = "Molmo-7B-D-0924";
+  document.getElementById("visionModelSelect").value = "";
+  document.getElementById("visionTriggerSparseInput").checked = true;
+  document.getElementById("visionSparseCharsInput").value = "12";
+  document.getElementById("refreshClickEnabledInput").checked = false;
+  document.getElementById("refreshCoordinateSpaceSelect").value = "window";
+  document.getElementById("refreshPointXInput").value = "100";
+  document.getElementById("refreshPointYInput").value = "200";
+  document.getElementById("refreshIntervalInput").value = "30";
+  document.getElementById("refreshCooldownInput").value = "30";
+}
+
 function setSelectedTarget(target) {
   const previousIdentity = buildTargetIdentity(selectedTarget);
   const nextIdentity = buildTargetIdentity(target);
@@ -786,6 +806,7 @@ function setSelectedTarget(target) {
   }
   if (changed) {
     resetRoiDraftState();
+    resetTaskConfigForm();
   }
   if (target.type === "screen") {
     summary.textContent = `已选目标: 主屏幕 / screen_id=${target.screen_id} | ROI: ${buildRegionSummaryFromSpecTarget(target)}`;
