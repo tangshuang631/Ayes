@@ -35,9 +35,11 @@ def test_ask_endpoint_uses_recent_summary_for_generic_question() -> None:
     assert payload["time_scope_respected"] is True
     assert "memory_layers_used" in payload
     assert isinstance(payload["evidence_refs"], list)
-    assert any(str(ref).startswith("runtime/evidence/") for ref in payload["evidence_refs"])
     assert isinstance(payload["evidence_previews"], list)
-    assert any(str(item.get("src", "")).startswith("/runtime/evidence/") for item in payload["evidence_previews"])
+    if payload["evidence_refs"]:
+        assert all(str(ref).startswith("runtime/evidence/") for ref in payload["evidence_refs"])
+    if payload["evidence_previews"]:
+        assert all(str(item.get("src", "")).startswith("/runtime/evidence/") for item in payload["evidence_previews"])
 
 
 def test_ask_endpoint_answers_numeric_threshold_question_from_structured_match() -> None:

@@ -205,6 +205,38 @@ function buildEvidencePreviewHtml(items) {
   `;
 }
 
+function renderPanelMeta(id, text) {
+  const node = document.getElementById(id);
+  if (node) {
+    node.textContent = text;
+  }
+}
+
+function buildScopeMetaText(payload, extra = {}) {
+  const taskId = payload && Object.prototype.hasOwnProperty.call(payload, "task_id")
+    ? (payload.task_id || "无活动任务")
+    : (getTaskId() || "当前任务");
+  const minutes = payload?.minutes ?? extra.minutes;
+  const count = payload?.count ?? ((payload?.items || []).length);
+  const source = payload?.source || extra.source;
+  const category = payload?.category || extra.category;
+  const limit = payload?.limit ?? extra.limit;
+  const parts = [`任务: ${taskId}`, `条数: ${count ?? 0}`];
+  if (minutes !== undefined && minutes !== null) {
+    parts.push(`时间范围: 最近 ${minutes} 分钟`);
+  }
+  if (source) {
+    parts.push(`来源: ${source}`);
+  }
+  if (category) {
+    parts.push(`类别: ${category}`);
+  }
+  if (limit) {
+    parts.push(`limit: ${limit}`);
+  }
+  return parts.join(" | ");
+}
+
 function buildStructuredMatchesHtml(items) {
   if (!items || !items.length) {
     return "";
@@ -562,9 +594,18 @@ function renderCollapsedProcesses(items) {
   section.style.display = items.length ? "block" : "none";
 }
 
-function renderEvents(items) {
+function renderEvents(payload) {
+  const items = payload.items || [];
+  renderPanelMeta("eventMeta", buildScopeMetaText(payload, { limit: 20 }));
   const container = document.getElementById("eventList");
   container.innerHTML = "";
+  if (!items.length) {
+    const node = document.createElement("div");
+    node.className = "empty-state";
+    node.textContent = `当前范围内没有近期事件。${buildScopeMetaText(payload, { limit: 20 })}`;
+    container.appendChild(node);
+    return;
+  }
   items.slice().reverse().forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
@@ -573,9 +614,18 @@ function renderEvents(items) {
   });
 }
 
-function renderSnippets(items) {
+function renderSnippets(payload) {
+  const items = payload.items || [];
+  renderPanelMeta("snippetMeta", buildScopeMetaText(payload, { limit: 20, source: "ocr" }));
   const container = document.getElementById("snippetList");
   container.innerHTML = "";
+  if (!items.length) {
+    const node = document.createElement("div");
+    node.className = "empty-state";
+    node.textContent = `当前范围内没有 OCR 片段。${buildScopeMetaText(payload, { limit: 20, source: "ocr" })}`;
+    container.appendChild(node);
+    return;
+  }
   items.forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
@@ -589,9 +639,18 @@ function renderSnippets(items) {
   });
 }
 
-function renderActionEvents(items) {
+function renderActionEvents(payload) {
+  const items = payload.items || [];
+  renderPanelMeta("actionMeta", buildScopeMetaText(payload, { source: "action" }));
   const container = document.getElementById("actionList");
   container.innerHTML = "";
+  if (!items.length) {
+    const node = document.createElement("div");
+    node.className = "empty-state";
+    node.textContent = `当前范围内没有动作事件。${buildScopeMetaText(payload, { source: "action" })}`;
+    container.appendChild(node);
+    return;
+  }
   items.slice().reverse().forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
@@ -600,9 +659,18 @@ function renderActionEvents(items) {
   });
 }
 
-function renderSimpleTimeline(id, items) {
+function renderSimpleTimeline(id, metaId, payload, fallbackSourceLabel) {
+  const items = payload.items || [];
+  renderPanelMeta(metaId, buildScopeMetaText(payload, { source: fallbackSourceLabel }));
   const container = document.getElementById(id);
   container.innerHTML = "";
+  if (!items.length) {
+    const node = document.createElement("div");
+    node.className = "empty-state";
+    node.textContent = `当前范围内没有相关事件。${buildScopeMetaText(payload, { source: fallbackSourceLabel })}`;
+    container.appendChild(node);
+    return;
+  }
   items.slice().reverse().forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
@@ -635,9 +703,18 @@ function renderMemoryResult(payload) {
   });
 }
 
-function renderLongTerm(items) {
+function renderLongTerm(payload) {
+  const items = payload.items || [];
+  renderPanelMeta("longTermMeta", buildScopeMetaText(payload, { limit: 20 }));
   const container = document.getElementById("longTermList");
   container.innerHTML = "";
+  if (!items.length) {
+    const node = document.createElement("div");
+    node.className = "empty-state";
+    node.textContent = `当前任务还没有长期摘要。${buildScopeMetaText(payload, { limit: 20 })}`;
+    container.appendChild(node);
+    return;
+  }
   items.forEach((item) => {
     const node = document.createElement("div");
     node.className = "timeline-item";
@@ -649,9 +726,18 @@ function renderLongTerm(items) {
   });
 }
 
-function renderLogs(items) {
+function renderLogs(payload) {
+  const items = payload.items || [];
+  renderPanelMeta("logMeta", buildScopeMetaText(payload, { category: document.getElementById("logCategorySelect").value || "全部" }));
   const container = document.getElementById("logList");
   container.innerHTML = "";
+  if (!items.length) {
+    const node = document.createElement("div");
+    node.className = "empty-state";
+    node.textContent = `当前范围内没有日志。${buildScopeMetaText(payload, { category: document.getElementById("logCategorySelect").value || "全部" })}`;
+    container.appendChild(node);
+    return;
+  }
   items.slice().reverse().forEach((item) => {
     const node = document.createElement("div");
     node.className = "log-item";
@@ -703,38 +789,38 @@ async function refreshWindows() {
 
 async function refreshEvents() {
   const data = await requestJson(buildScopedUrl("/api/timeline/recent", { limit: "20" }));
-  renderEvents(data.items || []);
+  renderEvents(data);
 }
 
 async function refreshActionEvents() {
   const data = await requestJson(buildScopedUrl("/api/events", { source: "action" }));
-  renderActionEvents(data.items || []);
+  renderActionEvents(data);
 }
 
 async function refreshSnippets() {
   const data = await requestJson(buildScopedUrl("/api/ocr/snippets", { limit: "20" }));
-  renderSnippets(data.items || []);
+  renderSnippets(data);
 }
 
 async function refreshMatchEvents() {
   const data = await requestJson(buildScopedUrl("/api/events", { source: "semantic_match" }));
-  renderSimpleTimeline("matchList", data.items || []);
+  renderSimpleTimeline("matchList", "matchMeta", data, "semantic_match");
 }
 
 async function refreshAlertEvents() {
   const data = await requestJson(buildScopedUrl("/api/events", { source: "alert" }));
-  renderSimpleTimeline("alertList", data.items || []);
+  renderSimpleTimeline("alertList", "alertMeta", data, "alert");
 }
 
 async function refreshLongTerm() {
   const data = await requestJson(buildScopedUrl("/api/timeline/long-term", { limit: "20", minutes: null }));
-  renderLongTerm(data.items || []);
+  renderLongTerm(data);
 }
 
 async function refreshLogs() {
   const category = document.getElementById("logCategorySelect").value;
   const data = await requestJson(buildScopedUrl("/api/logs", { category }));
-  renderLogs(data.items || []);
+  renderLogs(data);
 }
 
 async function refreshVisionModels() {

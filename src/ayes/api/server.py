@@ -306,16 +306,21 @@ def get_events(
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
-        return JSONResponse({"items": []})
+        return JSONResponse({"items": [], "task_id": None, "minutes": minutes, "source": source, "count": 0})
     since_timestamp = time.time() - (minutes * 60)
+    items = state.sqlite_store.list_events(
+        task_id=resolved_task_id,
+        source=source,
+        since_timestamp=since_timestamp,
+        limit=100,
+    )
     return JSONResponse(
         {
-            "items": state.sqlite_store.list_events(
-                task_id=resolved_task_id,
-                source=source,
-                since_timestamp=since_timestamp,
-                limit=100,
-            )
+            "items": items,
+            "task_id": resolved_task_id,
+            "minutes": minutes,
+            "source": source,
+            "count": len(items),
         }
     )
 
@@ -375,7 +380,16 @@ def get_logs(
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
     since_timestamp = time.time() - (minutes * 60) if minutes else None
-    return JSONResponse({"items": state.sqlite_store.list_logs(category=category, task_id=resolved_task_id, since_timestamp=since_timestamp, limit=100)})
+    items = state.sqlite_store.list_logs(category=category, task_id=resolved_task_id, since_timestamp=since_timestamp, limit=100)
+    return JSONResponse(
+        {
+            "items": items,
+            "task_id": resolved_task_id,
+            "minutes": minutes,
+            "category": category,
+            "count": len(items),
+        }
+    )
 
 
 @app.get("/api/ocr/snippets")
@@ -386,7 +400,7 @@ def get_ocr_snippets(
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
-        return JSONResponse({"items": []})
+        return JSONResponse({"items": [], "task_id": None, "minutes": minutes, "limit": limit, "count": 0})
     since_timestamp = time.time() - (minutes * 60)
     items = state.sqlite_store.list_events(task_id=resolved_task_id, source="ocr", since_timestamp=since_timestamp, limit=limit)
     snippets = []
@@ -408,7 +422,15 @@ def get_ocr_snippets(
                 "tags": item.get("tags") or [],
             }
         )
-    return JSONResponse({"items": snippets})
+    return JSONResponse(
+        {
+            "items": snippets,
+            "task_id": resolved_task_id,
+            "minutes": minutes,
+            "limit": limit,
+            "count": len(snippets),
+        }
+    )
 
 
 @app.get("/api/screenshot")
@@ -442,21 +464,30 @@ def timeline_recent(
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
-        return JSONResponse({"items": []})
+        return JSONResponse({"items": [], "task_id": None, "minutes": minutes, "limit": limit, "count": 0})
     since_timestamp = time.time() - (minutes * 60)
     items = state.sqlite_store.list_events(task_id=resolved_task_id, since_timestamp=since_timestamp, limit=limit)
     for item in items:
         item["location_summary"] = describe_location_summary(item)
         item["preview_overlay"] = build_preview_overlay(item)
-    return JSONResponse({"items": items})
+    return JSONResponse(
+        {
+            "items": items,
+            "task_id": resolved_task_id,
+            "minutes": minutes,
+            "limit": limit,
+            "count": len(items),
+        }
+    )
 
 
 @app.get("/api/timeline/long-term")
 def timeline_long_term(task_id: Optional[str] = None, limit: int = Query(20, ge=1, le=100)) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
-        return JSONResponse({"items": []})
-    return JSONResponse({"items": state.sqlite_store.list_long_term_summaries(task_id=resolved_task_id, limit=limit)})
+        return JSONResponse({"items": [], "task_id": None, "limit": limit, "count": 0})
+    items = state.sqlite_store.list_long_term_summaries(task_id=resolved_task_id, limit=limit)
+    return JSONResponse({"items": items, "task_id": resolved_task_id, "limit": limit, "count": len(items)})
 
 
 @app.get("/api/agent/contracts")

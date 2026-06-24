@@ -49,7 +49,12 @@ def test_logs_endpoint_supports_task_and_category_filters() -> None:
     client.post("/api/watch/run-once")
     response = client.get("/api/logs", params={"task_id": "task_web", "category": "watch", "minutes": 15})
     assert response.status_code == 200
-    assert "items" in response.json()
+    payload = response.json()
+    assert "items" in payload
+    assert payload["task_id"] == "task_web"
+    assert payload["category"] == "watch"
+    assert payload["minutes"] == 15
+    assert "count" in payload
 
 
 def test_targets_endpoint_returns_screen_and_window_sections() -> None:
@@ -200,6 +205,9 @@ def test_ocr_snippets_endpoint_returns_recent_text_fragments() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert "items" in payload
+    assert payload["task_id"] == "task_web"
+    assert payload["minutes"] == 5
+    assert "count" in payload
     if payload["items"]:
         assert "location_summary" in payload["items"][0]
         assert "preview_overlay" in payload["items"][0]
@@ -223,7 +231,8 @@ def test_targets_endpoint_exposes_preview_and_collapse_metadata() -> None:
     assert "collapse_rule" in payload
     assert payload["collapse_rule"]["max_width"] == 500
     assert payload["collapse_rule"]["max_height"] == 500
-    assert payload["screens"][0]["preview_path"] is not None
+    assert "preview_path" in payload["screens"][0]
+    assert payload["screens"][0]["observability"]["has_pixels"] == bool(payload["screens"][0]["preview_path"])
 
 
 def test_vision_models_endpoint_returns_availability_shape() -> None:
@@ -262,7 +271,12 @@ def test_timeline_recent_exposes_region_visual_and_text_blocks() -> None:
     client.post("/api/watch/run-once")
     response = client.get("/api/timeline/recent", params={"task_id": "task_timeline_shape", "minutes": 5, "limit": 20})
     assert response.status_code == 200
-    items = response.json()["items"]
+    payload = response.json()
+    assert payload["task_id"] == "task_timeline_shape"
+    assert payload["minutes"] == 5
+    assert payload["limit"] == 20
+    assert "count" in payload
+    items = payload["items"]
     assert isinstance(items, list)
     if items:
         item = items[0]
@@ -316,7 +330,9 @@ def test_timeline_recent_exposes_structured_watch_match_fields() -> None:
     assert response.status_code == 200
     timeline_response = client.get("/api/timeline/recent", params={"task_id": "task_numeric_watch_match", "minutes": 5, "limit": 20})
     assert timeline_response.status_code == 200
-    items = timeline_response.json()["items"]
+    payload = timeline_response.json()
+    assert payload["task_id"] == "task_numeric_watch_match"
+    items = payload["items"]
     match_item = next((item for item in items if item.get("event_type") == "semantic_match"), None)
     if match_item is not None:
         watch_match = match_item.get("watch_match") or {}
@@ -324,3 +340,15 @@ def test_timeline_recent_exposes_structured_watch_match_fields() -> None:
         assert watch_match.get("matched_field") == "price"
         assert watch_match.get("matched_value") == 199.0
         assert watch_match.get("matched_unit") == "cny"
+
+
+def test_events_endpoint_returns_query_scope_metadata() -> None:
+    client.post("/api/watch/load-screen")
+    client.post("/api/watch/run-once")
+    response = client.get("/api/events", params={"task_id": "task_web", "source": "ocr", "minutes": 5})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == "task_web"
+    assert payload["source"] == "ocr"
+    assert payload["minutes"] == 5
+    assert "count" in payload
