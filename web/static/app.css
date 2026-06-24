@@ -374,16 +374,14 @@ select {
   overflow: auto;
 }
 
-.status-summary-grid,
-.health-summary {
+.status-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }
 
-.status-chip,
-.health-item {
+.status-chip {
   min-height: 72px;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -391,25 +389,47 @@ select {
   background: var(--surface-quiet);
 }
 
-.health-item.is-alert {
-  border-color: var(--danger-line);
-  background: var(--danger-soft);
-}
-
-.status-chip-label,
-.health-item-label {
+.status-chip-label {
   color: var(--text-mute);
   font-size: 11px;
   line-height: 1.4;
 }
 
-.status-chip-value,
-.health-item-value {
+.status-chip-value {
   margin-top: 6px;
   font-size: 13px;
   font-weight: 600;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.status-raw-summary {
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-quiet);
+}
+
+.status-raw-line + .status-raw-line {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.status-raw-label {
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.status-raw-value {
+  margin-top: 4px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .result-meta {
@@ -693,9 +713,8 @@ select {
     grid-template-columns: 300px minmax(0, 1fr) 340px;
   }
 
-  .status-summary-grid,
-  .health-summary {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .status-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -715,15 +734,13 @@ select {
     overflow: visible;
   }
 
-  .status-summary-grid,
-  .health-summary {
+  .status-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 640px) {
   .status-summary-grid,
-  .health-summary,
   .two-columns,
   .query-row {
     grid-template-columns: 1fr;

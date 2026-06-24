@@ -885,30 +885,42 @@ function formatHealthTimestamp(timestamp) {
   return timestamp ? formatTimestamp(timestamp) : "暂无";
 }
 
-function renderHealthSummary(status) {
-  const health = status.health_summary || {};
-  const lastMatch = health.last_match || null;
-  const lastAlert = health.last_alert || null;
-  const recentMemory = health.recent_memory || {};
-  const recentLogs = health.recent_logs || {};
-  const hasLogIssue = (recentLogs.error_count || 0) > 0 || (recentLogs.warn_count || 0) > 0 || Boolean(status.last_error);
-  const container = document.getElementById("healthSummary");
+function renderRawStatusSummary(status) {
+  const container = document.getElementById("statusRawSummary");
+  const captureTarget = status.last_capture_target || null;
+  const captureStatus = status.last_capture_status || "暂无";
+  const ocrQuality = status.last_ocr_quality || {};
+  const visionDecision = status.last_vision_decision || {};
+  const visionSummary = status.last_vision_summary || {};
+  const ocrSummaryText = ocrQuality.provider
+    ? `${ocrQuality.provider} | 字符 ${ocrQuality.char_count ?? 0} | 块 ${ocrQuality.block_count ?? 0}${ocrQuality.sparse ? " | 稀疏结果" : ""}`
+    : "暂无 OCR 读取结果";
+  const visionDecisionText = visionDecision.event_type
+    ? `${visionDecision.event_type}${(visionDecision.reasons || []).length ? ` | ${(visionDecision.reasons || []).join(" | ")}` : visionDecision.blocked_reason ? ` | ${visionDecision.blocked_reason}` : ""}`
+    : "未触发视觉辅助";
+  const visionSummaryText = visionSummary.summary
+    ? `${visionSummary.summary}${Array.isArray(visionSummary.detail_lines) && visionSummary.detail_lines.length ? `\n${visionSummary.detail_lines.slice(0, 2).join("\n")}` : ""}`
+    : "暂无视觉补充结果";
   container.innerHTML = `
-    <div class="health-item">
-      <div class="health-item-label">最近命中</div>
-      <div class="health-item-value">${lastMatch ? `${lastMatch.summary || lastMatch.event_type || "已命中"}\n${formatHealthTimestamp(lastMatch.timestamp)}` : "15 分钟内暂无命中"}</div>
+    <div class="status-raw-line">
+      <div class="status-raw-label">当前读取目标</div>
+      <div class="status-raw-value">${formatEventTarget(captureTarget)}</div>
     </div>
-    <div class="health-item${lastAlert ? " is-alert" : ""}">
-      <div class="health-item-label">最近告警</div>
-      <div class="health-item-value">${lastAlert ? `${lastAlert.summary || lastAlert.event_type || "已告警"}\n${formatHealthTimestamp(lastAlert.timestamp)}` : "15 分钟内暂无告警"}</div>
+    <div class="status-raw-line">
+      <div class="status-raw-label">最近一次读取状态</div>
+      <div class="status-raw-value">${captureStatus}</div>
     </div>
-    <div class="health-item">
-      <div class="health-item-label">近期记忆</div>
-      <div class="health-item-value">${recentMemory.count ?? 0} 条\n最近: ${formatHealthTimestamp(recentMemory.latest_timestamp)}</div>
+    <div class="status-raw-line">
+      <div class="status-raw-label">最近 OCR 原始结果摘要</div>
+      <div class="status-raw-value">${ocrSummaryText}</div>
     </div>
-    <div class="health-item${hasLogIssue ? " is-alert" : ""}">
-      <div class="health-item-label">近期日志健康</div>
-      <div class="health-item-value">${recentLogs.count ?? 0} 条 / 错误 ${(recentLogs.error_count ?? 0)} / 警告 ${(recentLogs.warn_count ?? 0)}\n最近: ${formatHealthTimestamp(recentLogs.latest_timestamp)}</div>
+    <div class="status-raw-line">
+      <div class="status-raw-label">最近视觉辅助判断</div>
+      <div class="status-raw-value">${visionDecisionText}</div>
+    </div>
+    <div class="status-raw-line">
+      <div class="status-raw-label">最近视觉补充内容</div>
+      <div class="status-raw-value">${visionSummaryText}</div>
     </div>
   `;
 }
@@ -917,34 +929,17 @@ async function refreshStatus() {
   const status = await requestJson("/api/status");
   setText("statusView", status);
   const runtimeMeta = document.getElementById("runtimeMeta");
-  runtimeMeta.textContent = `任务已装载: ${status.has_runner ? "是" : "否"} | 持续监控: ${status.is_running ? "运行中" : "未运行"} | 动作计数: ${status.action_count ?? 0} | 命中计数: ${status.match_count ?? 0} | 告警计数: ${status.alert_count ?? 0} | 最近执行: ${formatHealthTimestamp(status.last_run_at)} | 最近事件: ${formatHealthTimestamp(status.last_event_at)} | 最近命中: ${formatHealthTimestamp(status.last_match_at)} | 最近错误: ${status.last_error || "无"}`;
+  runtimeMeta.textContent = `任务: ${status.task_id || status.last_task_id || "-"} | 运行: ${status.is_running ? "持续监控中" : status.has_runner ? "已装载未运行" : "未装载"} | 前端连接: ${status.connected_frontends ?? 0} | 后台策略: ${status.can_shutdown_service ? "空闲可退出" : "保持运行"} | 最近执行: ${formatHealthTimestamp(status.last_run_at)} | 最近错误: ${status.last_error || "无"}`;
   const summary = document.getElementById("statusSummary");
-  const ocrQuality = status.last_ocr_quality || {};
-  const visionDecision = status.last_vision_decision || {};
-  const visionSummary = status.last_vision_summary || {};
   const captureTarget = status.last_capture_target || null;
   const captureStatus = status.last_capture_status || "暂无";
-  const ocrSummaryText = ocrQuality.provider
-    ? `${ocrQuality.provider} / 字符 ${ocrQuality.char_count ?? 0} / 块 ${ocrQuality.block_count ?? 0}${ocrQuality.sparse ? " / 稀疏" : ""}`
-    : "暂无";
-  const visionDecisionText = visionDecision.event_type
-    ? `${visionDecision.event_type}${(visionDecision.reasons || []).length ? ` / ${(visionDecision.reasons || []).join(",")}` : visionDecision.blocked_reason ? ` / ${visionDecision.blocked_reason}` : ""}`
-    : "暂无";
-  const visionSummaryText = visionSummary.summary
-    ? `${visionSummary.summary}${Array.isArray(visionSummary.detail_lines) && visionSummary.detail_lines.length ? ` / ${visionSummary.detail_lines[0]}` : ""}`
-    : "暂无";
   summary.innerHTML = `
     <div class="status-chip"><div class="status-chip-label">当前任务</div><div class="status-chip-value">${status.task_id || status.last_task_id || "-"}</div></div>
     <div class="status-chip"><div class="status-chip-label">运行状态</div><div class="status-chip-value">${status.is_running ? "持续监控中" : status.has_runner ? "已装载未运行" : "未装载"}</div></div>
     <div class="status-chip"><div class="status-chip-label">当前采集目标</div><div class="status-chip-value">${formatEventTarget(captureTarget)}</div></div>
-    <div class="status-chip"><div class="status-chip-label">最近命中 / 告警</div><div class="status-chip-value">${status.match_count ?? 0} / ${status.alert_count ?? 0}</div></div>
-    <div class="status-chip"><div class="status-chip-label">前端连接 / 后台策略</div><div class="status-chip-value">${status.connected_frontends ?? 0} / ${status.can_shutdown_service ? "可退出" : "保持运行"}</div></div>
     <div class="status-chip"><div class="status-chip-label">最近采集状态</div><div class="status-chip-value">${captureStatus}</div></div>
-    <div class="status-chip"><div class="status-chip-label">最近 OCR 质量</div><div class="status-chip-value">${ocrSummaryText}</div></div>
-    <div class="status-chip"><div class="status-chip-label">最近视觉决策</div><div class="status-chip-value">${visionDecisionText}</div></div>
-    <div class="status-chip"><div class="status-chip-label">最近视觉结果</div><div class="status-chip-value">${visionSummaryText}</div></div>
   `;
-  renderHealthSummary(status);
+  renderRawStatusSummary(status);
   const taskInput = document.getElementById("taskIdInput");
   if (status.task_id) {
     taskInput.value = status.task_id;
