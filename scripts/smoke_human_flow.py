@@ -76,12 +76,17 @@ def main() -> int:
     snippet_items = snippets.get("items") or []
     ask_events = ask.get("matched_events") or []
     memory_entry_items = memory_items.get("items") or []
+    ask_structured_vision_matches = ask.get("structured_vision_matches") or []
+    vision_events = [item for item in timeline_items if item.get("source") == "vision"]
+    ocr_events = [item for item in timeline_items if item.get("source") == "ocr"]
 
     summary = {
         "task_id": task_id,
         "status_has_runner": status.get("has_runner"),
         "timeline_event_count": len(timeline_items),
         "timeline_first_preview_overlay": (timeline_items[0] if timeline_items else {}).get("preview_overlay"),
+        "timeline_first_ocr_quality": (((ocr_events[0] if ocr_events else {}).get("visual") or {}).get("attributes") or {}),
+        "timeline_vision_event_count": len(vision_events),
         "snippet_count": len(snippet_items),
         "snippet_first_preview_overlay": (snippet_items[0] if snippet_items else {}).get("preview_overlay"),
         "snippet_first_evidence_ref": (snippet_items[0] if snippet_items else {}).get("evidence_ref"),
@@ -89,6 +94,7 @@ def main() -> int:
         "ask_answer": ask.get("answer"),
         "ask_matched_event_count": len(ask_events),
         "ask_time_range": ask.get("time_range"),
+        "ask_structured_vision_match_count": len(ask_structured_vision_matches),
         "memory_item_count": len(memory_entry_items),
         "memory_first_preview_overlay": (memory_entry_items[0] if memory_entry_items else {}).get("preview_overlay"),
     }
@@ -109,6 +115,9 @@ def main() -> int:
         return 1
     if "answer" not in ask:
         print("smoke failed: ask response missing answer", file=sys.stderr)
+        return 1
+    if "structured_vision_matches" not in ask:
+        print("smoke failed: ask response missing structured_vision_matches", file=sys.stderr)
         return 1
     return 0
 

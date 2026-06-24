@@ -136,4 +136,6 @@ python3 scripts/smoke_human_flow.py --base-url http://127.0.0.1:8770
 - `ocr/snippets` 返回 `items`
 - `memory/items` 返回 `items`
 - `ask` 返回 `answer`
+- `ask` 返回 `structured_vision_matches`
 - 若 timeline/snippet 中存在事件，应尽量带 `preview_overlay`
+- 若 timeline 中存在 OCR 或 vision 事件，应尽量能观察到 OCR 质量摘要或 vision 结构化结果

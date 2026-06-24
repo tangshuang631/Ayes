@@ -337,4 +337,6 @@ Web 工作台只是人类入口。
    - OCR 片段可读
    - 最近记忆条目可读
    - 问答接口返回回答
+   - 问答接口返回 `structured_vision_matches`
    - timeline / snippets 若存在事件，则优先返回位置摘要或叠框数据
+   - 若命中了 OCR 或 vision 相关事件，应尽量能核验 OCR 质量摘要或 vision 结构化结果
