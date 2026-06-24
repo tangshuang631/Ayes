@@ -73,6 +73,19 @@ class FakeDiscovery:
         return self.process_window
 
 
+class SequenceDiscovery:
+    def __init__(self, windows) -> None:
+        self.windows = list(windows)
+        self.index = 0
+
+    def get_primary_window_for_process(self, *, process_name=None, process_id=None, only_observable=True):
+        if not self.windows:
+            return None
+        candidate = self.windows[min(self.index, len(self.windows) - 1)]
+        self.index += 1
+        return candidate
+
+
 def make_window_candidate(*, window_id: int, process_id: int = 100, process_name: str = "TargetApp") -> WindowCandidate:
     return WindowCandidate(
         window_id=window_id,
@@ -245,6 +258,43 @@ def test_runner_process_target_writes_warning_log_when_process_window_missing() 
     assert logs[-1]["category"] == "capture"
     assert logs[-1]["level"] == "warning"
     assert "未找到可采集业务窗口" in logs[-1]["message"]
+
+
+def test_runner_process_target_emits_target_switched_event_when_representative_window_changes() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "TargetApp"},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = FakeCapture()
+    runner.discovery = SequenceDiscovery(
+        [
+            make_window_candidate(window_id=42, process_name="TargetApp"),
+            make_window_candidate(window_id=43, process_name="TargetApp"),
+        ]
+    )
+    runner.ocr = FakeOCR()
+
+    first_events = runner.run_once(now=100.0)
+    second_events = runner.run_once(now=101.0)
+
+    assert all(event.event_type != "target_switched" for event in first_events)
+    switch_events = [event for event in second_events if event.event_type == "target_switched"]
+    assert len(switch_events) == 1
+    assert switch_events[0].target.window_id == 43
+    assert "42" in switch_events[0].summary
+    assert "43" in switch_events[0].summary
 
 
 def test_runner_emits_refresh_click_events_when_action_enabled() -> None:

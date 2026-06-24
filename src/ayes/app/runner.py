@@ -64,6 +64,7 @@ class WatchRunner:
         self._vision_call_timestamps: List[float] = []
         self._evidence_dir = Path("runtime/evidence")
         self._last_evidence_cleanup_at: Optional[float] = None
+        self._last_process_window_signature: Optional[tuple[int, str]] = None
         self._alert_notifier = WebhookNotifier()
 
     @property
@@ -109,6 +110,10 @@ class WatchRunner:
             self._record_event(event)
             return [event]
         frame = capture_result.frame
+        target_switched_event = self._maybe_build_target_switched_event(now, frame)
+        if target_switched_event is not None:
+            self._record_event(target_switched_event)
+            emitted.append(target_switched_event)
         if self._previous_frame is not None and self.ticker.should_run_diff(now_ms):
             self.ticker.mark_diff(now_ms)
             diff_stats = self.diff.compare(self._previous_frame, frame)
@@ -306,6 +311,62 @@ class WatchRunner:
             window_title=str(metadata.get("window_title") or ""),
             window_state=str(metadata.get("window_state") or "unknown"),
         )
+
+    def _process_window_signature(self, frame: Optional[CaptureFrame]) -> Optional[tuple[int, str]]:
+        if self.spec.target.type != "process" or frame is None:
+            return None
+        metadata = frame.metadata or {}
+        window_id = metadata.get("window_id")
+        if window_id is None:
+            return None
+        return (int(window_id), str(metadata.get("window_title") or ""))
+
+    def _maybe_build_target_switched_event(self, now: float, frame: CaptureFrame):
+        signature = self._process_window_signature(frame)
+        if signature is None:
+            return None
+        previous_signature = self._last_process_window_signature
+        self._last_process_window_signature = signature
+        if previous_signature is None or previous_signature == signature:
+            return None
+        previous_window_id, previous_title = previous_signature
+        current_window_id, current_title = signature
+        previous_label = previous_title or f"window_id={previous_window_id}"
+        current_label = current_title or f"window_id={current_window_id}"
+        summary = f"进程 {self.spec.target.process_name or current_window_id} 代表窗口切换: {previous_label} ({previous_window_id}) -> {current_label} ({current_window_id})"
+        self._write_log(
+            category="capture",
+            level="info",
+            message=summary,
+            metadata={
+                "event_type": "target_switched",
+                "process_name": self.spec.target.process_name,
+                "previous_window_id": previous_window_id,
+                "previous_window_title": previous_title,
+                "current_window_id": current_window_id,
+                "current_window_title": current_title,
+            },
+        )
+        event = build_event(
+            task_id=self.task_id,
+            spec_version=self.spec.spec_version,
+            task_mode=self.spec.mode,
+            timestamp=now,
+            source="capture",
+            event_type="target_switched",
+            priority="medium",
+            confidence=1.0,
+            target=self._event_target_from_frame(frame),
+            observability=Observability(
+                has_metadata=True,
+                has_pixels=True,
+                is_onscreen=True,
+                is_observable_candidate=True,
+                capture_status="ok",
+            ),
+            summary=summary,
+        )
+        return replace(event, tags=["process_target", "target_switched"])
 
     def _build_visual_event(self, now: float, frame: CaptureFrame, event_type: str, summary: str):
         return build_event(
