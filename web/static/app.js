@@ -423,6 +423,30 @@ function buildStructuredVisionMatchesHtml(items) {
     .join("");
 }
 
+function buildEvidenceSummaryHtml(items) {
+  if (!items || !items.length) {
+    return "";
+  }
+  return items.slice(0, 3).map((item) => {
+    const metaParts = [];
+    if (item.event_type) {
+      metaParts.push(item.event_type);
+    }
+    if (item.timestamp) {
+      metaParts.push(formatTimestamp(item.timestamp));
+    }
+    if (item.location_summary) {
+      metaParts.push(item.location_summary);
+    }
+    return `
+      <div class="answer-structured-item">
+        <div class="answer-structured-title">${item.summary || item.event_type || "证据事件"}</div>
+        <div class="answer-structured-meta">${metaParts.join(" | ")}</div>
+      </div>
+    `;
+  }).join("");
+}
+
 function buildTimelineEventHtml(item) {
   const primaryEvidenceRef = (item.evidence_refs || [])[0];
   const primaryEvidenceSrc = primaryEvidenceRef ? (primaryEvidenceRef.startsWith("/") ? primaryEvidenceRef : `/${primaryEvidenceRef}`) : "";
@@ -841,6 +865,7 @@ function renderMemoryResult(payload) {
   const summary = document.getElementById("memorySummary");
   const structured = document.getElementById("memoryStructuredMatches");
   const visionStructured = document.getElementById("memoryStructuredVisionMatches");
+  const evidenceSummary = document.getElementById("memoryEvidenceSummary");
   const timeRange = payload.time_range || {};
   summary.innerHTML = `
     <div>结论: ${payload.answer || "暂无回答"}</div>
@@ -848,6 +873,7 @@ function renderMemoryResult(payload) {
   `;
   structured.innerHTML = buildStructuredMatchesHtml(payload.structured_matches || []);
   visionStructured.innerHTML = buildStructuredVisionMatchesHtml(payload.structured_vision_matches || []);
+  evidenceSummary.innerHTML = buildEvidenceSummaryHtml(payload.matched_events || []);
   const refs = document.getElementById("memoryRefs");
   refs.innerHTML = `证据引用:<br />${buildEvidenceLinks(payload.evidence_refs || [])}${buildEvidencePreviewHtml(payload.evidence_previews || [])}`;
   const evidence = document.getElementById("memoryEvidence");
