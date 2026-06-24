@@ -339,6 +339,20 @@ select {
   margin-bottom: 10px;
 }
 
+.collapsed-panel-section {
+  padding-top: 14px;
+}
+
+.collapsed-panel-body {
+  padding: 6px 0 2px;
+}
+
+.nested-section-head {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
 .candidate-preview {
   width: 100%;
   max-height: 140px;

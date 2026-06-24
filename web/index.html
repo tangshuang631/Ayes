@@ -171,59 +171,68 @@
           <div id="eventList" class="timeline-list"></div>
         </section>
 
-        <section class="panel-section">
-          <div class="section-head">
-            <h2>OCR 片段</h2>
-            <button id="refreshSnippetsBtn" class="text-button">刷新</button>
-          </div>
-          <div id="snippetMeta" class="result-meta"></div>
-          <div class="result-meta">用于快速观察最近识别出的文本，辅助配置 triggered 关键词或排查未命中原因。</div>
-          <div id="snippetList" class="timeline-list"></div>
+        <section class="panel-section collapsed-panel-section">
+          <details id="collapsedOcrSection" class="collapsed-section">
+            <summary>更多 OCR 与轨迹</summary>
+            <section class="collapsed-panel-body">
+              <div class="section-head">
+                <h2>OCR 片段</h2>
+                <button id="refreshSnippetsBtn" class="text-button">刷新</button>
+              </div>
+              <div id="snippetMeta" class="result-meta"></div>
+              <div class="result-meta">用于快速观察最近识别出的文本，辅助配置 triggered 关键词或排查未命中原因。</div>
+              <div id="snippetList" class="timeline-list"></div>
+            </section>
+          </details>
         </section>
 
-        <section class="panel-section">
-          <div class="section-head">
-            <h2>动作轨迹</h2>
-            <button id="refreshActionsBtn" class="text-button">刷新</button>
-          </div>
-          <div id="actionMeta" class="result-meta"></div>
-          <div id="actionList" class="timeline-list"></div>
+        <section class="panel-section collapsed-panel-section">
+          <details id="collapsedTraceSection" class="collapsed-section">
+            <summary>更多动作、命中、告警与视觉轨迹</summary>
+            <section class="collapsed-panel-body">
+              <div class="section-head">
+                <h2>动作轨迹</h2>
+                <button id="refreshActionsBtn" class="text-button">刷新</button>
+              </div>
+              <div id="actionMeta" class="result-meta"></div>
+              <div id="actionList" class="timeline-list"></div>
+
+              <div class="section-head nested-section-head">
+                <h2>命中轨迹</h2>
+                <button id="refreshMatchesBtn" class="text-button">刷新</button>
+              </div>
+              <div id="matchMeta" class="result-meta"></div>
+              <div id="matchList" class="timeline-list"></div>
+
+              <div class="section-head nested-section-head">
+                <h2>告警轨迹</h2>
+                <button id="refreshAlertsBtn" class="text-button">刷新</button>
+              </div>
+              <div id="alertMeta" class="result-meta"></div>
+              <div id="alertList" class="timeline-list"></div>
+
+              <div class="section-head nested-section-head">
+                <h2>视觉轨迹</h2>
+                <button id="refreshVisionEventsBtn" class="text-button">刷新</button>
+              </div>
+              <div id="visionMeta" class="result-meta"></div>
+              <div id="visionList" class="timeline-list"></div>
+            </section>
+          </details>
         </section>
 
-        <section class="panel-section">
-          <div class="section-head">
-            <h2>命中轨迹</h2>
-            <button id="refreshMatchesBtn" class="text-button">刷新</button>
-          </div>
-          <div id="matchMeta" class="result-meta"></div>
-          <div id="matchList" class="timeline-list"></div>
-        </section>
-
-        <section class="panel-section">
-          <div class="section-head">
-            <h2>告警轨迹</h2>
-            <button id="refreshAlertsBtn" class="text-button">刷新</button>
-          </div>
-          <div id="alertMeta" class="result-meta"></div>
-          <div id="alertList" class="timeline-list"></div>
-        </section>
-
-        <section class="panel-section">
-          <div class="section-head">
-            <h2>视觉轨迹</h2>
-            <button id="refreshVisionEventsBtn" class="text-button">刷新</button>
-          </div>
-          <div id="visionMeta" class="result-meta"></div>
-          <div id="visionList" class="timeline-list"></div>
-        </section>
-
-        <section class="panel-section">
-          <div class="section-head">
-            <h2>长期摘要</h2>
-            <button id="refreshLongTermBtn" class="text-button">刷新</button>
-          </div>
-          <div id="longTermMeta" class="result-meta"></div>
-          <div id="longTermList" class="timeline-list"></div>
+        <section class="panel-section collapsed-panel-section">
+          <details id="collapsedLongTermSection" class="collapsed-section">
+            <summary>长期摘要与日志</summary>
+            <section class="collapsed-panel-body">
+              <div class="section-head">
+                <h2>长期摘要</h2>
+                <button id="refreshLongTermBtn" class="text-button">刷新</button>
+              </div>
+              <div id="longTermMeta" class="result-meta"></div>
+              <div id="longTermList" class="timeline-list"></div>
+            </section>
+          </details>
         </section>
       </main>
 
@@ -253,27 +262,32 @@
           <div id="memoryItemsList" class="timeline-list"></div>
         </section>
 
-        <section class="panel-section">
-          <div class="section-head">
-            <h2>近期日志</h2>
-            <button id="refreshLogsBtn" class="text-button">刷新</button>
-          </div>
-          <div class="query-row">
-            <select id="logCategorySelect">
-              <option value="">全部类别</option>
-              <option value="system">system</option>
-              <option value="watch">watch</option>
-              <option value="capture">capture</option>
-              <option value="diff">diff</option>
-              <option value="ocr">ocr</option>
-              <option value="match">match</option>
-              <option value="alert">alert</option>
-              <option value="action">action</option>
-              <option value="api">api</option>
-            </select>
-          </div>
-          <div id="logMeta" class="result-meta"></div>
-          <div id="logList" class="log-list"></div>
+        <section class="panel-section collapsed-panel-section">
+          <details id="collapsedLogSection" class="collapsed-section">
+            <summary>近期日志</summary>
+            <section class="collapsed-panel-body">
+              <div class="section-head">
+                <h2>近期日志</h2>
+                <button id="refreshLogsBtn" class="text-button">刷新</button>
+              </div>
+              <div class="query-row">
+                <select id="logCategorySelect">
+                  <option value="">全部类别</option>
+                  <option value="system">system</option>
+                  <option value="watch">watch</option>
+                  <option value="capture">capture</option>
+                  <option value="diff">diff</option>
+                  <option value="ocr">ocr</option>
+                  <option value="match">match</option>
+                  <option value="alert">alert</option>
+                  <option value="action">action</option>
+                  <option value="api">api</option>
+                </select>
+              </div>
+              <div id="logMeta" class="result-meta"></div>
+              <div id="logList" class="log-list"></div>
+            </section>
+          </details>
         </section>
       </aside>
     </div>

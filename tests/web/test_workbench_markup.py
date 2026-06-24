@@ -48,6 +48,16 @@ def test_memory_panel_exposes_evidence_summary_anchor() -> None:
     assert 'id="memoryEvidenceSummary"' in html
 
 
+def test_low_frequency_panels_are_grouped_under_collapsed_sections() -> None:
+    html = Path("web/index.html").read_text(encoding="utf-8")
+    assert 'id="collapsedOcrSection"' in html
+    assert 'id="collapsedTraceSection"' in html
+    assert 'id="collapsedLongTermSection"' in html
+    assert 'id="collapsedLogSection"' in html
+    assert "<summary>更多 OCR 与轨迹</summary>" in html
+    assert "<summary>长期摘要与日志</summary>" in html
+
+
 def test_roi_editor_anchors_remain_available_for_target_switch_reset_flow() -> None:
     html = Path("web/index.html").read_text(encoding="utf-8")
     assert 'id="roiEditorEmpty"' in html
