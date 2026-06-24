@@ -78,11 +78,18 @@ class OllamaService:
             raise RuntimeError(f"Ollama 视觉调用失败: {exc}") from exc
         response = json.loads(raw)
         text = str(response.get("response") or "").strip()
-        summary = text.splitlines()[0].strip() if text else ""
+        lines = [line.strip(" -•\t") for line in text.splitlines() if line.strip()]
+        summary = lines[0].strip() if lines else ""
+        detail_lines = lines[1:6] if len(lines) > 1 else []
         return VisionResult(
             provider="ollama",
             model=model,
             summary=summary,
             labels=[],
-            attributes={"raw_text": text, "request_payload": payload},
+            attributes={
+                "raw_text": text,
+                "detail_lines": detail_lines,
+                "detail_count": len(detail_lines),
+                "request_payload": payload,
+            },
         )

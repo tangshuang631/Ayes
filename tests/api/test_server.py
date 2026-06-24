@@ -413,6 +413,16 @@ def test_timeline_recent_exposes_vision_trigger_reason_event() -> None:
         assert attrs.get("vision_model") == "Molmo-7B-D-0924"
 
 
+def test_ollama_vision_result_splits_detail_lines() -> None:
+    from ayes.vision.ollama import OllamaService
+
+    service = OllamaService()
+    raw_text = "主摘要\n- 红色按钮在右上\n- 图表趋势向下\n- 有一个弹窗"
+    lines = [line.strip(" -•\t") for line in raw_text.splitlines() if line.strip()]
+    assert lines[0] == "主摘要"
+    assert lines[1:] == ["红色按钮在右上", "图表趋势向下", "有一个弹窗"]
+
+
 def test_events_endpoint_returns_query_scope_metadata() -> None:
     client.post("/api/watch/load-screen")
     client.post("/api/watch/run-once")

@@ -125,6 +125,15 @@ function buildEventDetailLines(item) {
     if (qualityParts.length) {
       lines.push(`OCR质量: ${qualityParts.join(" | ")}`);
     }
+    if (Array.isArray(attrs.vision_reasons) && attrs.vision_reasons.length) {
+      lines.push(`视觉触发原因: ${attrs.vision_reasons.join(" | ")}`);
+    }
+    if (attrs.vision_blocked_reason) {
+      lines.push(`视觉阻断原因: ${attrs.vision_blocked_reason}`);
+    }
+    if (Array.isArray(attrs.detail_lines) && attrs.detail_lines.length) {
+      lines.push(`视觉细节: ${attrs.detail_lines.slice(0, 3).join(" | ")}`);
+    }
   }
   if (item.text?.ocr_text) {
     lines.push(`OCR: ${item.text.ocr_text}`);
