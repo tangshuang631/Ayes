@@ -249,6 +249,7 @@ def test_plan_watch_spec_endpoint_emits_region_and_refresh_questions() -> None:
     kinds = [item["kind"] for item in payload["questions"]]
     assert "region_scope" in kinds
     assert "region_definition" in kinds
+    assert "region_binding" in kinds
     assert "refresh_click_enable" in kinds
     refresh_intent = next(item for item in payload["action_intents"] if item["action_type"] == "refresh_click")
     assert "actions.refresh_click.point" in refresh_intent["missing_fields"]
@@ -321,6 +322,60 @@ def test_confirm_plan_endpoint_merges_region_and_refresh_confirmations() -> None
     assert refresh_click["point"] == {"x": 100, "y": 120}
     assert len(payload["spec"]["target"]["regions"]) == 2
     assert payload["plan"]["region_intents"][0]["name"] == "价格区"
+
+
+def test_confirm_plan_endpoint_prefers_region_bindings_for_final_regions() -> None:
+    plan_response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_region_bindings",
+            "prompt": "帮我监控 Safari 页面里的价格和库存，只看两个重点区域",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert plan_response.status_code == 200
+    plan_payload = plan_response.json()
+    price_intent = next(item for item in plan_payload["region_intents"] if item["name"] == "价格区")
+    stock_intent = next(item for item in plan_payload["region_intents"] if item["name"] == "库存区")
+    response = client.post(
+        "/api/watch/confirm-plan",
+        json={
+            "plan": plan_payload,
+            "confirmations": {
+                "region_bindings": [
+                    {
+                        "region_intent_id": price_intent["region_intent_id"],
+                        "region_id": "roi_price",
+                        "name": "价格区",
+                        "x": 120,
+                        "y": 240,
+                        "w": 360,
+                        "h": 160,
+                        "coordinate_space": "target",
+                        "source": "screenshot_annotation",
+                    },
+                    {
+                        "region_intent_id": stock_intent["region_intent_id"],
+                        "region_id": "roi_stock",
+                        "name": "库存区",
+                        "x": 120,
+                        "y": 420,
+                        "w": 360,
+                        "h": 120,
+                        "coordinate_space": "target",
+                        "source": "external_selector",
+                    },
+                ]
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    regions = payload["spec"]["target"]["regions"]
+    assert len(regions) == 2
+    assert regions[0]["region_id"] == "roi_price"
+    assert regions[1]["region_id"] == "roi_stock"
+    assert payload["plan"]["region_bindings"][0]["source"] == "screenshot_annotation"
 
 
 def test_watch_config_endpoint_supports_process_target_and_refresh_click() -> None:

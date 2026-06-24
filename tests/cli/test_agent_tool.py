@@ -236,6 +236,54 @@ def test_agent_tool_confirm_plan_posts_region_and_refresh_confirmations(monkeypa
     assert '"status": "loaded"' in capsys.readouterr().out
 
 
+def test_agent_tool_confirm_plan_posts_region_bindings(monkeypatch, tmp_path, capsys) -> None:
+    recorded = {}
+    plan_path = tmp_path / "plan_bindings.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "task_id": "task_plan_bindings",
+                "draft_spec": {
+                    "spec_version": "1.0",
+                    "mode": "observe",
+                    "target": {"type": "process", "process_name": "Safari"},
+                    "watch_intent": {"enabled": False, "summary": "", "queries": []},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "loaded", "task_id": "task_plan_bindings"}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "confirm-plan",
+            "--plan-file",
+            str(plan_path),
+            "--region-binding",
+            "ri_price|roi_price|价格区|120|240|360|160|target|screenshot_annotation",
+            "--region-binding",
+            "ri_stock|roi_stock|库存区|120|420|360|120|target|external_selector",
+        ]
+    )
+
+    assert exit_code == 0
+    bindings = recorded["payload"]["confirmations"]["region_bindings"]
+    assert len(bindings) == 2
+    assert bindings[0]["region_intent_id"] == "ri_price"
+    assert bindings[0]["region_id"] == "roi_price"
+    assert bindings[0]["source"] == "screenshot_annotation"
+    assert bindings[1]["source"] == "external_selector"
+    assert '"status": "loaded"' in capsys.readouterr().out
+
+
 def test_agent_tool_confirm_plan_posts_plan_file(monkeypatch, tmp_path, capsys) -> None:
     recorded = {}
     plan_path = tmp_path / "plan.json"

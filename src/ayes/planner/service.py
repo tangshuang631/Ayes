@@ -164,6 +164,23 @@ class WatchSpecPlanner:
         if isinstance(regions, list) and regions:
             spec_payload.setdefault("target", {})["regions"] = regions
 
+        region_bindings = confirmations.get("region_bindings")
+        if isinstance(region_bindings, list) and region_bindings:
+            spec_payload.setdefault("target", {})["regions"] = [
+                {
+                    "region_id": item["region_id"],
+                    "name": item["name"],
+                    "x": int(item["x"]),
+                    "y": int(item["y"]),
+                    "w": int(item["w"]),
+                    "h": int(item["h"]),
+                    "coordinate_space": item.get("coordinate_space") or "target",
+                    "enabled": True,
+                }
+                for item in region_bindings
+            ]
+            payload["region_bindings"] = region_bindings
+
         region_intents = confirmations.get("region_intents")
         if isinstance(region_intents, list) and region_intents:
             payload["region_intents"] = region_intents
@@ -242,6 +259,15 @@ class WatchSpecPlanner:
                     field="target.regions",
                     prompt="已识别出重点区域意图，请确认这些区域名称和用途是否正确。",
                     suggested_answer="保留价格区和库存区",
+                )
+            )
+            questions.append(
+                PlanQuestion(
+                    question_id="q_region_binding",
+                    kind="region_binding",
+                    field="target.regions",
+                    prompt="这些重点区域还没有坐标绑定，请提供外部选择器或截图标注结果。",
+                    suggested_answer="后续提供 region_bindings 结果",
                 )
             )
         return intents, questions

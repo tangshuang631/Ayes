@@ -252,7 +252,7 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
         "watch.confirm_plan": {
             "method": "POST",
             "path": "/api/watch/confirm-plan",
-            "request": {"plan": "必填", "confirmations": "可选"},
+            "request": {"plan": "必填", "confirmations": "可选", "region_bindings": "推荐放在 confirmations 下"},
             "response_keys": ["status", "task_id", "mode", "spec", "target"],
         },
         "watch.status": {

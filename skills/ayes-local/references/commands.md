@@ -126,12 +126,45 @@ ayes-agent-local confirm-plan \
 - `region_intents[]`：智能体应向用户确认区域名称、用途，以及是否真的需要这些区域
 - `action_intents[]`：智能体应确认是否启用刷新点击、频率多少、是否已有点击点
 
+当 `questions[]` 中出现 `region_binding` 时，标准做法不是让智能体口头问像素坐标，而是：
+
+1. 调外部选择器或截图标注器
+2. 获取 `region_bindings[]`
+3. 再把这些绑定结果传给 `confirm-plan`
+
+如果使用本地命令行确认，可把绑定结果转成多次 `--region-binding`：
+
+```bash
+ayes-agent-local confirm-plan \
+  --plan-file /tmp/task_price.plan.json \
+  --region-binding "ri_price|roi_price|价格区|120|240|360|160|target|screenshot_annotation" \
+  --region-binding "ri_stock|roi_stock|库存区|120|420|360|120|target|external_selector"
+```
+
 推荐补问顺序：
 
 1. 先处理 `target_missing`
 2. 再处理 `region_scope / region_definition`
 3. 再处理 `refresh_click_enable / refresh_click_interval / refresh_click_point`
 4. 最后处理 `webhook_missing` 等执行前缺口
+
+推荐的 `region_bindings[]` 结构：
+
+```json
+[
+  {
+    "region_intent_id": "ri_price",
+    "region_id": "roi_price",
+    "name": "价格区",
+    "x": 120,
+    "y": 240,
+    "w": 360,
+    "h": 160,
+    "coordinate_space": "target",
+    "source": "screenshot_annotation"
+  }
+]
+```
 
 屏幕观察任务：
 

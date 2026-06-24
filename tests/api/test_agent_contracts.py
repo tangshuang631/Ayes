@@ -17,6 +17,7 @@ def test_agent_contracts_endpoint_exposes_expected_routes() -> None:
     assert "questions" in payload["watch.plan"]["response_keys"]
     assert "region_intents" in payload["watch.plan"]["response_keys"]
     assert "action_intents" in payload["watch.plan"]["response_keys"]
+    assert "region_bindings" in payload["watch.confirm_plan"]["request"]
     assert "snapshot.inspect" in payload
     assert "timeline.recent" in payload
     assert payload["timeline.query"]["path"] == "/api/ask"

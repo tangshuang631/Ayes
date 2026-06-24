@@ -38,6 +38,7 @@ Use this skill when the request is about:
    - 优先读取返回的 `questions[]`
    - 按顺序逐条补问，不要跳过 required 问题
    - 读取 `region_intents[]`，用来确认“价格区/库存区/报错区”等区域用途
+   - 如果出现 `region_binding` 问题，优先去拿外部选择器或截图标注器返回的 `region_bindings[]`
    - 读取 `action_intents[]`，用来确认是否启用 refresh_click 以及还缺什么
    - 再读取 `missing_fields / ambiguities / confirmation_summary`
    - 让用户确认或补齐缺失项后，再用 `ayes-agent-local confirm-plan ...`
@@ -123,8 +124,9 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 1. 先问目标是否正确
 2. 再问是否监控整个目标还是重点区域
 3. 如果是多区域，按 `region_intents[]` 逐条确认区域名称和用途
-4. 如果有刷新动作，按 `action_intents[]` 确认是否启用、频率是多少、坐标是否已绑定
-5. 最后再补 webhook 和其他执行前缺口
+4. 如果出现 `region_binding` 问题，去拿 `region_bindings[]`，不要让用户口头报像素坐标
+5. 如果有刷新动作，按 `action_intents[]` 确认是否启用、频率是多少、坐标是否已绑定
+6. 最后再补 webhook 和其他执行前缺口
 
 ## Escalation Back To Workbench
 

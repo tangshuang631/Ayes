@@ -160,6 +160,8 @@ def _build_confirm_plan_payload(args: argparse.Namespace) -> Dict[str, Any]:
         confirmations["use_entire_target"] = True
     if args.region_intent:
         confirmations["region_intents"] = [_parse_region_intent(item) for item in args.region_intent]
+    if args.region_binding:
+        confirmations["region_bindings"] = [_parse_region_binding(item) for item in args.region_binding]
     if args.refresh_click_enabled:
         confirmations["refresh_click_enabled"] = True
     if args.refresh_click_interval_sec is not None:
@@ -184,6 +186,27 @@ def _parse_region_intent(raw: str) -> Dict[str, Any]:
     if not name:
         raise RuntimeError("region_intent 名称不能为空")
     return {"name": name, "purpose": purpose, "required": True, "status": "needs_binding"}
+
+
+def _parse_region_binding(raw: str) -> Dict[str, Any]:
+    text = str(raw or "").strip()
+    parts = text.split("|")
+    if len(parts) != 9:
+        raise RuntimeError("region_binding 必须是 region_intent_id|region_id|name|x|y|w|h|coordinate_space|source")
+    region_intent_id, region_id, name, x, y, w, h, coordinate_space, source = [item.strip() for item in parts]
+    if not region_intent_id or not region_id or not name:
+        raise RuntimeError("region_binding 的 region_intent_id、region_id、name 不能为空")
+    return {
+        "region_intent_id": region_intent_id,
+        "region_id": region_id,
+        "name": name,
+        "x": int(x),
+        "y": int(y),
+        "w": int(w),
+        "h": int(h),
+        "coordinate_space": coordinate_space or "target",
+        "source": source or "manual_coordinates",
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -216,6 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_plan_parser.add_argument("--webhook-url", default=None)
     confirm_plan_parser.add_argument("--use-entire-target", action="store_true")
     confirm_plan_parser.add_argument("--region-intent", action="append", default=[])
+    confirm_plan_parser.add_argument("--region-binding", action="append", default=[])
     confirm_plan_parser.add_argument("--refresh-click-enabled", action="store_true")
     confirm_plan_parser.add_argument("--refresh-click-interval-sec", type=int, default=None)
     confirm_plan_parser.add_argument("--refresh-click-coordinate-space", choices=["window", "screen"], default=None)
