@@ -35,6 +35,25 @@ class AppState:
         self._last_long_term_event_index: int = 0
         self.log_store.write(category="system", level="info", message="Ayes AppState 初始化完成")
 
+    def _prune_expired_long_term_summaries(self, *, task_id: str, now: Optional[float] = None) -> int:
+        if self.current_spec is None or not self.current_spec.memory.long_term.enabled:
+            return 0
+        current_now = now if now is not None else time.time()
+        cutoff_timestamp = current_now - (self.current_spec.memory.long_term.retain_hours * 60 * 60)
+        removed = self.sqlite_store.delete_long_term_summaries_before(task_id=task_id, cutoff_timestamp=cutoff_timestamp)
+        if removed:
+            self.log_store.write(
+                category="watch",
+                level="info",
+                message=f"已清理过期长期摘要 {removed} 条",
+                task_id=task_id,
+                metadata={
+                    "cutoff_timestamp": cutoff_timestamp,
+                    "retain_hours": self.current_spec.memory.long_term.retain_hours,
+                },
+            )
+        return removed
+
     def _runner_log_sink(self, payload: dict) -> None:
         self.log_store.write(
             category=str(payload.get("category") or "system"),
@@ -95,6 +114,7 @@ class AppState:
             summary=summary["summary"],
             payload=summary,
         )
+        self._prune_expired_long_term_summaries(task_id=self.current_task_id, now=summary["window_end"])
         self._last_long_term_summary_at = summary["window_end"]
         self._last_long_term_event_index = len(events)
         self.log_store.write(

@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from ayes.api.server import app, state
 from ayes.config.models import WatchSpec
+from ayes.storage.sqlite_store import SQLiteStore
 
 
 client = TestClient(app)
@@ -100,3 +101,66 @@ def test_periodic_long_term_summary_uses_summary_interval_minutes() -> None:
     items = state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
     assert len(items) >= 2
     state.clear_runner()
+
+
+def test_sqlite_store_deletes_expired_long_term_summaries(tmp_path) -> None:
+    store = SQLiteStore(str(tmp_path / "ayes.db"))
+    store.insert_long_term_summary(
+        summary_id="lts_old",
+        task_id="task_cleanup",
+        window_start=100.0,
+        window_end=120.0,
+        summary="old",
+        payload={"summary_id": "lts_old", "task_id": "task_cleanup", "window_start": 100.0, "window_end": 120.0, "summary": "old", "event_count": 1, "event_ids": ["evt_old"]},
+    )
+    store.insert_long_term_summary(
+        summary_id="lts_new",
+        task_id="task_cleanup",
+        window_start=7000.0,
+        window_end=7200.0,
+        summary="new",
+        payload={"summary_id": "lts_new", "task_id": "task_cleanup", "window_start": 7000.0, "window_end": 7200.0, "summary": "new", "event_count": 1, "event_ids": ["evt_new"]},
+    )
+
+    removed = store.delete_long_term_summaries_before(task_id="task_cleanup", cutoff_timestamp=3600.0)
+
+    assert removed == 1
+    items = store.list_long_term_summaries(task_id="task_cleanup", limit=20)
+    assert [item["summary_id"] for item in items] == ["lts_new"]
+
+
+def test_clear_runner_prunes_expired_long_term_summaries_and_logs_it() -> None:
+    task_id = f"task_long_term_prune_{uuid4().hex}"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+            "memory": {
+                "long_term": {
+                    "enabled": True,
+                    "retain_hours": 1,
+                    "max_retain_hours": 72,
+                    "summary_interval_minutes": 5,
+                }
+            },
+        }
+    )
+    state.sqlite_store.insert_long_term_summary(
+        summary_id=f"lts_expired_{uuid4().hex}",
+        task_id=task_id,
+        window_start=10.0,
+        window_end=20.0,
+        summary="expired",
+        payload={"summary_id": "expired", "task_id": task_id, "window_start": 10.0, "window_end": 20.0, "summary": "expired", "event_count": 1, "event_ids": ["evt_expired"]},
+    )
+    runner = state.set_runner(spec, task_id=task_id)
+    runner.run_once(now=7200.0)
+
+    state.clear_runner()
+
+    items = state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
+    assert all(item["window_end"] >= 3600.0 for item in items)
+    logs = state.sqlite_store.list_logs(task_id=task_id, category="watch", limit=50)
+    assert any("已清理过期长期摘要" in item["message"] for item in logs)

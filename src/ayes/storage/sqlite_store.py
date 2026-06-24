@@ -301,3 +301,15 @@ class SQLiteStore:
             if any(lowered in haystack.lower() for haystack in haystacks):
                 matched.append(item)
         return matched
+
+    def delete_long_term_summaries_before(self, *, task_id: str, cutoff_timestamp: float) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM long_term_summaries
+                WHERE task_id = ? AND window_end < ?
+                """,
+                (task_id, cutoff_timestamp),
+            )
+            connection.commit()
+            return int(cursor.rowcount or 0)
