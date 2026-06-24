@@ -366,6 +366,53 @@ def test_timeline_recent_exposes_structured_watch_match_fields() -> None:
         assert watch_match.get("matched_unit") == "cny"
 
 
+def test_timeline_recent_exposes_vision_trigger_reason_event() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_vision_reason",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_chart",
+                        "name": "图表区",
+                        "x": 0,
+                        "y": 0,
+                        "w": 120,
+                        "h": 120,
+                        "coordinate_space": "target",
+                        "enabled": True,
+                    }
+                ],
+            },
+            "vision": {
+                "enabled": True,
+                "provider": "ollama",
+                "model": "Molmo-7B-D-0924",
+                "trigger_when_ocr_sparse": True,
+                "ocr_sparse_min_chars": 999,
+                "trigger_on_visual_regions": True,
+                "trigger_on_watch_intent": False,
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    response = client.post("/api/watch/run-once")
+    assert response.status_code == 200
+    timeline_response = client.get("/api/timeline/recent", params={"task_id": "task_vision_reason", "minutes": 5, "limit": 50})
+    assert timeline_response.status_code == 200
+    items = timeline_response.json()["items"]
+    vision_reason_event = next((item for item in items if item.get("event_type") == "vision_triggered"), None)
+    if vision_reason_event is not None:
+        attrs = ((vision_reason_event.get("visual") or {}).get("attributes") or {})
+        assert attrs.get("vision_triggered") is True
+        assert isinstance(attrs.get("vision_reasons"), list)
+        assert attrs.get("vision_model") == "Molmo-7B-D-0924"
+
+
 def test_events_endpoint_returns_query_scope_metadata() -> None:
     client.post("/api/watch/load-screen")
     client.post("/api/watch/run-once")

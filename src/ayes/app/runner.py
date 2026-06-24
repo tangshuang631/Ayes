@@ -133,7 +133,22 @@ class WatchRunner:
                 match_events = self._maybe_build_watch_match_events(event)
                 emitted.extend(match_events)
                 emitted.extend(self._maybe_emit_alert_events(match_events))
-                if self._should_run_vision_enhancement(region=region, ocr_char_count=ocr_result.char_count):
+                should_run_vision, vision_reasons, vision_blocked_reason = self._evaluate_vision_enhancement(
+                    region=region,
+                    ocr_char_count=ocr_result.char_count,
+                )
+                if vision_reasons:
+                    vision_audit_event = self._build_vision_decision_event(
+                        now=now,
+                        frame=frame,
+                        region=region,
+                        triggered=should_run_vision,
+                        reasons=vision_reasons,
+                        blocked_reason=vision_blocked_reason,
+                    )
+                    self._record_event(vision_audit_event)
+                    emitted.append(vision_audit_event)
+                if should_run_vision:
                     vision_event = self._maybe_build_vision_event(
                         now=now,
                         frame=cropped,
@@ -402,9 +417,9 @@ class WatchRunner:
     def _bbox_is_normalized(self, values: List[float]) -> bool:
         return bool(values) and all(0.0 <= value <= 1.0 for value in values)
 
-    def _should_run_vision_enhancement(self, *, region: Optional[TargetRegion], ocr_char_count: int) -> bool:
+    def _evaluate_vision_enhancement(self, *, region: Optional[TargetRegion], ocr_char_count: int):
         if not self.spec.vision.enabled:
-            return False
+            return False, [], "vision_disabled"
         if self._is_vision_rate_limited():
             self._write_log(
                 category="vision",
@@ -412,20 +427,69 @@ class WatchRunner:
                 message="视觉增强命中速率限制，当前轮次跳过",
                 metadata={"max_calls_per_minute": self.spec.vision.max_calls_per_minute},
             )
-            return False
+            return False, ["rate_limited"], "rate_limited"
+        reasons = []
         if self.spec.vision.trigger_when_ocr_sparse and ocr_char_count < self.spec.vision.ocr_sparse_min_chars:
-            return True
+            reasons.append("ocr_sparse")
         if self.spec.vision.trigger_on_visual_regions and region is not None:
             region_name = (region.name or "").lower()
             visual_keywords = ["图", "图表", "图片", "chart", "image", "icon", "按钮"]
             if any(keyword in region_name for keyword in visual_keywords):
-                return True
+                reasons.append("visual_region")
         if self.spec.vision.trigger_on_watch_intent and self.spec.watch_intent.enabled:
             haystack = " ".join(self.spec.watch_intent.queries).lower()
             visual_keywords = ["图", "图表", "图片", "chart", "image", "icon", "颜色", "按钮"]
             if any(keyword in haystack for keyword in visual_keywords):
-                return True
-        return False
+                reasons.append("watch_intent_visual")
+        return bool(reasons), reasons, ""
+
+    def _build_vision_decision_event(
+        self,
+        *,
+        now: float,
+        frame: CaptureFrame,
+        region: Optional[TargetRegion],
+        triggered: bool,
+        reasons: List[str],
+        blocked_reason: str,
+    ):
+        event_type = "vision_triggered" if triggered else "vision_skipped"
+        summary = (
+            f"视觉增强已触发: {', '.join(reasons)}"
+            if triggered
+            else f"视觉增强已跳过: {blocked_reason or ', '.join(reasons) or 'no_reason'}"
+        )
+        event = build_event(
+            task_id=self.task_id,
+            spec_version=self.spec.spec_version,
+            task_mode=self.spec.mode,
+            timestamp=now,
+            source="vision",
+            event_type=event_type,
+            priority="medium",
+            confidence=0.82 if triggered else 0.76,
+            target=EventTarget(type=self.spec.target.type, process_name=self.spec.target.process_name, screen_id=self.spec.target.screen_id),
+            observability=Observability(True, True, True, True, "ok"),
+            summary=summary,
+        )
+        event_region = self._event_region_from_target_region(region, frame)
+        return replace(
+            event,
+            region=event_region,
+            visual=EventVisual(
+                summary=summary,
+                labels=[event_type, *reasons],
+                attributes={
+                    "vision_triggered": triggered,
+                    "vision_reasons": reasons,
+                    "vision_blocked_reason": blocked_reason,
+                    "vision_model": self.spec.vision.model,
+                    "vision_provider": self.spec.vision.provider,
+                },
+                provider=self.spec.vision.provider,
+            ),
+            tags=["vision", event_type, *reasons],
+        )
 
     def _maybe_build_vision_event(
         self,
