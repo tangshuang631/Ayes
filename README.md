@@ -194,6 +194,27 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local
 "$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local" status
 ```
 
+如果要验证“后台持续运行 + agent 回读 + webhook 不依赖智能体回复”的完整链路，可再运行：
+
+```bash
+cd /Users/apple/Desktop/2026/Ayes
+python3 scripts/smoke_ayes_local_skill.py --webhook-url "你的企业微信 webhook 地址"
+```
+
+这个 smoke 会：
+
+- 安装临时 `ayes-local` skill
+- 调用安装后的 `ayes-agent-local`
+- 装载 triggered 任务
+- 启动监控并执行一次采样
+- 回读 `status / recent / alerts / screenshot / memory-items / logs / ask`
+
+设计原则是：
+
+- webhook 通知由 Ayes 后台服务直接负责
+- Codex / OpenClaw 只负责启动、回读和解释
+- 即使智能体当时没有立刻回复，也不应影响 webhook 是否发送成功
+
 `ayes-local` 的目标不是替代后台服务，而是让 Codex / OpenClaw / 其他 Agent 可以稳定复用：
 
 - 当前监控状态

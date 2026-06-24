@@ -1040,8 +1040,6 @@ class WatchRunner:
             self.event_sink(event)
 
     def _send_alert(self, event):
-        if not os.environ.get(self.spec.alert.webhook_url_env):
-            return False, f"未配置 webhook 环境变量: {self.spec.alert.webhook_url_env}"
         return self._alert_notifier.send(event=event, alert_config=self.spec.alert)
 
     def _build_alert_dedupe_key(self, event) -> str:

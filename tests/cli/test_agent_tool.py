@@ -67,6 +67,45 @@ def test_agent_tool_recent_builds_expected_path(monkeypatch, capsys) -> None:
     assert '"ok": true' in capsys.readouterr().out
 
 
+def test_agent_tool_alerts_builds_expected_path(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["base_url"] = base_url
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"items": [], "count": 0}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["alerts", "--task-id", "task_demo", "--minutes", "15", "--limit", "5"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/alerts/recent?task_id=task_demo&minutes=15&limit=5"
+    assert recorded["method"] == "GET"
+    assert recorded["payload"] is None
+    assert '"count": 0' in capsys.readouterr().out
+
+
+def test_agent_tool_run_once_posts_to_watch_run_once(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"events": [], "status": {"has_runner": True}}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["run-once"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/watch/run-once"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"] == {}
+    assert '"has_runner": true' in capsys.readouterr().out
+
+
 def test_agent_tool_load_spec_posts_minimal_payload(monkeypatch, capsys) -> None:
     recorded = {}
 
@@ -91,6 +130,8 @@ def test_agent_tool_load_spec_posts_minimal_payload(monkeypatch, capsys) -> None
             "Google Chrome",
             "--query",
             "价格低于 299",
+            "--webhook-url",
+            "http://127.0.0.1:18999/webhook",
         ]
     )
 
@@ -102,4 +143,5 @@ def test_agent_tool_load_spec_posts_minimal_payload(monkeypatch, capsys) -> None
     assert recorded["payload"]["target"] == {"type": "process", "process_name": "Google Chrome"}
     assert recorded["payload"]["watch_intent"]["enabled"] is True
     assert recorded["payload"]["watch_intent"]["queries"] == ["价格低于 299"]
+    assert recorded["payload"]["alert"]["webhook_url"] == "http://127.0.0.1:18999/webhook"
     assert '"status": "loaded"' in capsys.readouterr().out

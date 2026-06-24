@@ -152,3 +152,21 @@ def test_watch_spec_supports_multi_regions_and_vision_config() -> None:
     assert spec.target.regions[0].region_id == "roi_main"
     assert spec.vision.enabled is True
     assert spec.vision.model == "Molmo-7B-D-0924"
+
+
+def test_alert_config_accepts_direct_webhook_url_for_local_smoke() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "triggered",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": True, "queries": ["Codex"]},
+            "alert": {
+                "enabled": True,
+                "channel": "wecom_webhook",
+                "webhook_url": "http://127.0.0.1:18999/webhook",
+            },
+        }
+    )
+    assert spec.alert.enabled is True
+    assert spec.alert.webhook_url == "http://127.0.0.1:18999/webhook"

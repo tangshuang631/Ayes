@@ -111,6 +111,12 @@ def _build_load_spec_payload(args: argparse.Namespace) -> Dict[str, Any]:
     }
     if args.long_term_hours is not None:
         payload["memory"] = {"long_term_hours": args.long_term_hours}
+    if args.webhook_url:
+        payload["alert"] = {
+            "enabled": True,
+            "channel": "wecom_webhook",
+            "webhook_url": args.webhook_url,
+        }
     if args.enable_vision:
         payload["vision"] = {"enabled": True, "provider": args.vision_provider, "model": args.vision_model}
     return payload
@@ -126,6 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("status", help="读取当前监控状态")
     subparsers.add_parser("targets", help="读取目标候选摘要")
     subparsers.add_parser("start", help="启动当前已装载的持续监控")
+    subparsers.add_parser("run-once", help="执行一次即时采样")
     subparsers.add_parser("stop", help="停止当前持续监控")
 
     task_parser = subparsers.add_parser("task", help="读取指定任务快照")
@@ -135,6 +142,11 @@ def build_parser() -> argparse.ArgumentParser:
     recent_parser.add_argument("--task-id", default=None)
     recent_parser.add_argument("--minutes", type=int, default=5)
     recent_parser.add_argument("--limit", type=int, default=20)
+
+    alerts_parser = subparsers.add_parser("alerts", help="读取最近告警审计结果")
+    alerts_parser.add_argument("--task-id", default=None)
+    alerts_parser.add_argument("--minutes", type=int, default=15)
+    alerts_parser.add_argument("--limit", type=int, default=20)
 
     long_term_parser = subparsers.add_parser("long-term", help="读取长期摘要")
     long_term_parser.add_argument("--task-id", default=None)
@@ -176,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     load_spec_parser.add_argument("--max-fps", type=int, default=2)
     load_spec_parser.add_argument("--skip-ocr-when-no-change", action="store_true")
     load_spec_parser.add_argument("--long-term-hours", type=int, default=None)
+    load_spec_parser.add_argument("--webhook-url", default=None)
     load_spec_parser.add_argument("--enable-vision", action="store_true")
     load_spec_parser.add_argument("--vision-provider", default="ollama")
     load_spec_parser.add_argument("--vision-model", default=None)
@@ -197,12 +210,17 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
         return _request_json(base_url, "/api/targets")
     if args.command == "start":
         return _request_json(base_url, "/api/watch/start", method="POST", payload={})
+    if args.command == "run-once":
+        return _request_json(base_url, "/api/watch/run-once", method="POST", payload={})
     if args.command == "stop":
         return _request_json(base_url, "/api/watch/stop", method="POST", payload={})
     if args.command == "task":
         return _request_json(base_url, f"/api/watch/task/{args.task_id}")
     if args.command == "recent":
         path = _build_query_path("/api/timeline/recent", task_id=args.task_id, minutes=args.minutes, limit=args.limit)
+        return _request_json(base_url, path)
+    if args.command == "alerts":
+        path = _build_query_path("/api/alerts/recent", task_id=args.task_id, minutes=args.minutes, limit=args.limit)
         return _request_json(base_url, path)
     if args.command == "long-term":
         path = _build_query_path("/api/timeline/long-term", task_id=args.task_id, hours=args.hours, limit=args.limit)

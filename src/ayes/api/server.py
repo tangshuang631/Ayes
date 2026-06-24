@@ -455,6 +455,31 @@ def get_logs(
     )
 
 
+@app.get("/api/alerts/recent")
+def get_recent_alerts(
+    task_id: Optional[str] = None,
+    minutes: int = Query(15, ge=1, le=60),
+    limit: int = Query(20, ge=1, le=100),
+) -> JSONResponse:
+    resolved_task_id = _resolve_task_id(task_id)
+    if not resolved_task_id:
+        return JSONResponse({"items": [], "task_id": None, "minutes": minutes, "limit": limit, "count": 0})
+    since_timestamp = time.time() - (minutes * 60)
+    items = state.sqlite_store.list_events(task_id=resolved_task_id, source="alert", since_timestamp=since_timestamp, limit=limit)
+    for item in items:
+        item["location_summary"] = describe_location_summary(item)
+        item["preview_overlay"] = build_preview_overlay(item)
+    return JSONResponse(
+        {
+            "items": items,
+            "task_id": resolved_task_id,
+            "minutes": minutes,
+            "limit": limit,
+            "count": len(items),
+        }
+    )
+
+
 @app.get("/api/ocr/snippets")
 def get_ocr_snippets(
     task_id: Optional[str] = None,

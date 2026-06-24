@@ -61,7 +61,24 @@ ayes-agent-local ensure-service
 - 最近几小时问题，优先调用 `ask --hours` 或 `long-term --hours`
 - 回答中必须明确任务、时间范围、关键证据和结论
 
-## 6. 重启后长期记忆看不到
+## 6. 监控命中了但 Codex 没有立刻回复
+
+这不应影响告警是否送达。
+
+正确预期是：
+
+- webhook 通知由后台服务直接发送
+- Codex / OpenClaw 只是后续查询和解释通道
+
+排查顺序：
+
+1. 先看 `alerts --minutes 15`
+2. 再看 `logs --minutes 15`
+3. 再问 `ask --minutes 5` 或 `ask --hours 24`
+
+如果 `alerts` 里已有 `alert_sent`，说明工具已经通知成功，只是智能体当时没有在线回复。
+
+## 7. 重启后长期记忆看不到
 
 先确认：
 

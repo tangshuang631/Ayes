@@ -237,6 +237,11 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "path": "/api/watch/start",
             "response_keys": ["status"],
         },
+        "watch.run_once": {
+            "method": "POST",
+            "path": "/api/watch/run-once",
+            "response_keys": ["events", "status"],
+        },
         "watch.stop": {
             "method": "POST",
             "path": "/api/watch/stop",
@@ -283,6 +288,12 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "path": "/api/logs",
             "query": {"task_id": "可选", "category": "可选", "minutes": "可选"},
             "response_keys": ["items"],
+        },
+        "alerts.recent": {
+            "method": "GET",
+            "path": "/api/alerts/recent",
+            "query": {"task_id": "可选", "minutes": "1-60", "limit": "1-100"},
+            "response_keys": ["task_id", "minutes", "limit", "count", "items"],
         },
         "vision.models": {
             "method": "GET",

@@ -312,6 +312,7 @@ class AlertConfig:
     enabled: bool = False
     channel: str = "wecom_webhook"
     webhook_url_env: str = "AYES_WECOM_WEBHOOK_URL"
+    webhook_url: str = ""
     priority_threshold: str = "medium"
     cooldown_sec: int = 120
     dedupe_window_sec: int = 300
@@ -321,10 +322,18 @@ class AlertConfig:
         priority_threshold = _require_str(data.get("priority_threshold", "medium"), "alert.priority_threshold")
         if priority_threshold not in {"low", "medium", "high"}:
             raise ConfigError("alert.priority_threshold 必须是 low、medium 或 high")
+        raw_webhook_url = data.get("webhook_url", "")
+        if raw_webhook_url is None:
+            webhook_url = ""
+        elif isinstance(raw_webhook_url, str):
+            webhook_url = raw_webhook_url.strip()
+        else:
+            raise ConfigError("alert.webhook_url 必须是字符串")
         return cls(
             enabled=_require_bool(data.get("enabled", False), "alert.enabled"),
             channel=_require_str(data.get("channel", "wecom_webhook"), "alert.channel"),
             webhook_url_env=_require_str(data.get("webhook_url_env", "AYES_WECOM_WEBHOOK_URL"), "alert.webhook_url_env"),
+            webhook_url=webhook_url,
             priority_threshold=priority_threshold,
             cooldown_sec=_require_int(data.get("cooldown_sec", 120), "alert.cooldown_sec", 0),
             dedupe_window_sec=_require_int(data.get("dedupe_window_sec", 300), "alert.dedupe_window_sec", 0),

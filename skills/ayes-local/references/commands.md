@@ -39,16 +39,20 @@ ayes-agent-local task --task-id task_web
 ```bash
 ayes-agent-local screenshot --task-id task_web
 ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
+ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
 ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 20
 ayes-agent-local logs --task-id task_web --minutes 15
+ayes-agent-local run-once
 ```
 
 用途：
 
 - `screenshot`：读取最近截图路径与 ROI 覆盖信息
 - `recent`：读取最近时间线事件
+- `alerts`：读取最近告警审计结果
 - `memory-items`：读取短期记忆事件明细
 - `logs`：读取近期日志
+- `run-once`：执行一次即时采样，适合安装后 smoke 或人工核验
 
 ## 4. 提问
 
@@ -69,6 +73,13 @@ ayes-agent-local ask --task-id task_web --hours 24 --question "今天这个进�
 - `minutes` 主要走短期详细链路
 - `hours` 主要走长期摘要链路
 - 若用户问“最近 xx 小时”，应显式带 `--hours`
+
+如果用户问“刚才有没有真的通知出去”或“为什么没通知”，优先读取：
+
+```bash
+ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
+ayes-agent-local logs --task-id task_web --minutes 15
+```
 
 ## 5. 启停监控
 
@@ -103,6 +114,7 @@ ayes-agent-local load-spec \
   --target-type process \
   --process-name "Google Chrome" \
   --query "价格低于 299" \
+  --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx" \
   --screenshot-interval-ms 500 \
   --ocr-interval-ms 500 \
   --change-detection-interval-ms 500

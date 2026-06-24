@@ -2,9 +2,13 @@ from fastapi.testclient import TestClient
 
 from ayes.api.server import app, state
 from ayes.capture.models import CaptureFrame, CaptureResult
+from ayes.events.factory import build_event
+from ayes.events.models import EventTarget, Observability
 from ayes.ocr.models import OCRResult, OCRTextBlock
 from PIL import Image
 from io import BytesIO
+import time
+from uuid import uuid4
 
 
 client = TestClient(app)
@@ -119,6 +123,49 @@ def test_logs_endpoint_supports_task_and_category_filters() -> None:
     assert payload["category"] == "watch"
     assert payload["minutes"] == 15
     assert "count" in payload
+
+
+def test_alerts_endpoint_returns_only_alert_source_events() -> None:
+    task_id = f"task_alert_api_{uuid4().hex}"
+    now = time.time()
+    state.sqlite_store.insert_event(
+        build_event(
+            task_id=task_id,
+            spec_version="1.0",
+            task_mode="triggered",
+            timestamp=now,
+            source="alert",
+            event_type="alert_sent",
+            priority="medium",
+            confidence=1.0,
+            target=EventTarget(type="screen", screen_id=1),
+            observability=Observability(True, True, True, True, "ok"),
+            summary="告警发送成功",
+        )
+    )
+    state.sqlite_store.insert_event(
+        build_event(
+            task_id=task_id,
+            spec_version="1.0",
+            task_mode="triggered",
+            timestamp=now + 0.1,
+            source="ocr",
+            event_type="text_change",
+            priority="medium",
+            confidence=1.0,
+            target=EventTarget(type="screen", screen_id=1),
+            observability=Observability(True, True, True, True, "ok"),
+            summary="OCR 变化",
+        )
+    )
+
+    response = client.get("/api/alerts/recent", params={"task_id": task_id, "minutes": 15, "limit": 20})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == task_id
+    assert payload["count"] == 1
+    assert payload["items"][0]["source"] == "alert"
+    assert payload["items"][0]["event_type"] == "alert_sent"
 
 
 def test_targets_endpoint_returns_screen_and_window_sections() -> None:

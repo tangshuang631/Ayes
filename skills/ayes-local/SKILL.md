@@ -30,6 +30,7 @@ Use this skill when the request is about:
 2. 如果用户是在追问最近情况：
    - 先读 `ayes-agent-local screenshot`
    - 再读 `ayes-agent-local recent`
+   - 如果问题和提醒有关，补读 `ayes-agent-local alerts`
    - 必要时补 `ayes-agent-local memory-items` 和 `ayes-agent-local logs`
    - 最后用 `ayes-agent-local ask --question "..."` 组织回答
 3. 如果用户要求开始或恢复监控：
@@ -53,10 +54,12 @@ ayes-agent-local ensure-service
 ayes-agent-local contracts
 ayes-agent-local status
 ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
+ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
 ayes-agent-local screenshot --task-id task_web
 ayes-agent-local ask --task-id task_web --minutes 5 --question "最近几分钟发生了什么"
 ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 20
 ayes-agent-local logs --task-id task_web --minutes 15
+ayes-agent-local run-once
 ayes-agent-local start
 ayes-agent-local stop
 ```
@@ -73,6 +76,7 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 - `/api/watch/status`
 - `/api/watch/task/{task_id}`
 - `/api/timeline/recent`
+- `/api/alerts/recent`
 - `/api/timeline/long-term`
 - `/api/memory/items`
 - `/api/logs`
@@ -90,6 +94,12 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 3. 关键证据事件
 4. 结论
 5. 如果证据不足，明确说证据不足并指出应该回到工作台调整哪里
+
+如果用户问的是“有没有通知到我”或“为什么没通知”，不要只看普通事件，必须优先结合：
+
+- 最近告警审计结果
+- 近期日志
+- 相关截图与时间范围
 
 不要把 Ayes 当成无边界视觉理解系统。它当前的核心仍是：
 
