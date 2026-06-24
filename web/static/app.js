@@ -104,6 +104,28 @@ function buildEventDetailLines(item) {
   if (item.visual?.summary) {
     lines.push(`视觉: ${item.visual.summary}`);
   }
+  if (item.visual?.attributes && Object.keys(item.visual.attributes).length) {
+    const attrs = item.visual.attributes;
+    const qualityParts = [];
+    if (attrs.ocr_provider) {
+      qualityParts.push(`provider=${attrs.ocr_provider}`);
+    }
+    if (attrs.ocr_char_count !== undefined) {
+      qualityParts.push(`字符=${attrs.ocr_char_count}`);
+    }
+    if (attrs.ocr_block_count !== undefined) {
+      qualityParts.push(`块=${attrs.ocr_block_count}`);
+    }
+    if (attrs.ocr_avg_confidence !== undefined) {
+      qualityParts.push(`平均置信度=${attrs.ocr_avg_confidence}`);
+    }
+    if (attrs.ocr_sparse) {
+      qualityParts.push("稀疏结果");
+    }
+    if (qualityParts.length) {
+      lines.push(`OCR质量: ${qualityParts.join(" | ")}`);
+    }
+  }
   if (item.text?.ocr_text) {
     lines.push(`OCR: ${item.text.ocr_text}`);
   }

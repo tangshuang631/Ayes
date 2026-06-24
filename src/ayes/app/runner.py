@@ -269,6 +269,12 @@ class WatchRunner:
             region_frame=frame,
             region=region,
         )
+        block_items = list(blocks or [])
+        avg_confidence = 0.0
+        if block_items:
+            avg_confidence = sum(float(item.confidence) for item in block_items) / len(block_items)
+        char_count = len((text or "").strip())
+        sparse_text = char_count < int(self.spec.vision.ocr_sparse_min_chars or 12)
         return replace(
             event,
             region=event_region,
@@ -286,10 +292,24 @@ class WatchRunner:
                         line_index=item.line_index,
                         block_type=item.block_type,
                     )
-                    for item in (blocks or [])
+                    for item in block_items
                 ],
             ),
-            visual=EventVisual(),
+            visual=EventVisual(
+                summary=(
+                    f"OCR {provider} | 字符 {char_count} | 块 {len(block_items)} | 平均置信度 {avg_confidence:.2f}"
+                    + (" | 稀疏" if sparse_text else "")
+                ),
+                labels=[label for label in ["ocr_sparse" if sparse_text else "", "ocr_empty" if not text else ""] if label],
+                attributes={
+                    "ocr_provider": provider,
+                    "ocr_char_count": char_count,
+                    "ocr_block_count": len(block_items),
+                    "ocr_avg_confidence": round(avg_confidence, 4),
+                    "ocr_sparse": sparse_text,
+                },
+                provider=provider,
+            ),
             tags=["ocr", provider],
             evidence_refs=evidence_refs,
         )

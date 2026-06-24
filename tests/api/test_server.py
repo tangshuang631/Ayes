@@ -302,6 +302,14 @@ def test_timeline_recent_exposes_region_visual_and_text_blocks() -> None:
         assert "blocks" in (item.get("text") or {})
         assert "location_summary" in item
         assert "preview_overlay" in item
+        ocr_item = next((entry for entry in items if entry.get("source") == "ocr"), item)
+        visual = ocr_item.get("visual") or {}
+        attrs = visual.get("attributes") or {}
+        if ocr_item.get("source") == "ocr":
+            assert "ocr_provider" in attrs
+            assert "ocr_char_count" in attrs
+            assert "ocr_block_count" in attrs
+            assert "ocr_avg_confidence" in attrs
         blocks = (item.get("text") or {}).get("blocks") or []
         if blocks:
             assert "rect" in blocks[0]
