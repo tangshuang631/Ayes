@@ -31,6 +31,8 @@ class AppState:
         self._frontend_session_ttl_sec = 30.0
         self._background_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._last_long_term_summary_at: Optional[float] = None
+        self._last_long_term_event_index: int = 0
         self.log_store.write(category="system", level="info", message="Ayes AppState 初始化完成")
 
     def _runner_log_sink(self, payload: dict) -> None:
@@ -61,24 +63,61 @@ class AppState:
             spec=task_payload["spec"],
             created_at=task_payload["created_at"],
         )
+        self._last_long_term_summary_at = None
+        self._last_long_term_event_index = 0
         self.log_store.write(category="watch", level="info", message="监控任务已装载", task_id=task_id)
         return self.current_runner
 
+    def _flush_long_term_summary(self, *, force: bool = False) -> None:
+        if self.current_runner is None or self.current_spec is None or self.current_task_id is None:
+            return
+        if not self.current_spec.memory.long_term.enabled:
+            return
+        events = self.current_runner.events
+        if not events:
+            return
+        summary_interval_seconds = max(int(self.current_spec.memory.long_term.summary_interval_minutes), 1) * 60
+        latest_event_at = events[-1].timestamp
+        if not force and self._last_long_term_summary_at is not None:
+            if latest_event_at - self._last_long_term_summary_at < summary_interval_seconds:
+                return
+        if self._last_long_term_event_index >= len(events):
+            return
+        pending_events = events[self._last_long_term_event_index :]
+        if not pending_events:
+            return
+        summary = build_long_term_summary(task_id=self.current_task_id, events=pending_events)
+        self.sqlite_store.insert_long_term_summary(
+            summary_id=summary["summary_id"],
+            task_id=summary["task_id"],
+            window_start=summary["window_start"],
+            window_end=summary["window_end"],
+            summary=summary["summary"],
+            payload=summary,
+        )
+        self._last_long_term_summary_at = summary["window_end"]
+        self._last_long_term_event_index = len(events)
+        self.log_store.write(
+            category="watch",
+            level="info",
+            message="长期摘要已生成",
+            task_id=self.current_task_id,
+            metadata={
+                "window_start": summary["window_start"],
+                "window_end": summary["window_end"],
+                "event_count": summary["event_count"],
+                "forced": force,
+            },
+        )
+
     def clear_runner(self) -> None:
         self.stop_background_watch()
-        if self.current_runner is not None and self.current_runner.events:
-            summary = build_long_term_summary(task_id=self.current_task_id or "task_web", events=self.current_runner.events)
-            self.sqlite_store.insert_long_term_summary(
-                summary_id=summary["summary_id"],
-                task_id=summary["task_id"],
-                window_start=summary["window_start"],
-                window_end=summary["window_end"],
-                summary=summary["summary"],
-                payload=summary,
-            )
+        self._flush_long_term_summary(force=True)
         self.current_runner = None
         self.current_spec = None
         self.current_task_id = None
+        self._last_long_term_summary_at = None
+        self._last_long_term_event_index = 0
         self.log_store.write(category="watch", level="info", message="监控任务已停止")
 
     def start_background_watch(self) -> bool:
@@ -103,6 +142,7 @@ class AppState:
                                 task_id=self.current_task_id,
                                 metadata={"event_type": event.event_type},
                             )
+                    self._flush_long_term_summary(force=False)
                 except Exception as exc:  # pragma: no cover - defensive logging path
                     self.log_store.write(
                         category="watch",
