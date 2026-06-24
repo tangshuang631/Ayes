@@ -138,6 +138,70 @@ function buildTaskSnapshotSummary(snapshot, status) {
   ].join("\n");
 }
 
+function buildStatusBlockOverlay(status) {
+  const recentOcrRead = status.recent_ocr_read || {};
+  const blocks = Array.isArray(recentOcrRead.blocks_preview) ? recentOcrRead.blocks_preview : [];
+  const first = blocks.find((item) => item && item.rect_norm && Object.keys(item.rect_norm).length);
+  if (first) {
+    return {
+      kind: "block",
+      label: first.text || recentOcrRead.location_summary || "最近 OCR 块",
+      rect_norm: first.rect_norm || {},
+    };
+  }
+  return { kind: "none", label: "", rect_norm: {} };
+}
+
+function renderStatusRecentBlocks(status) {
+  const container = document.getElementById("statusRecentBlocks");
+  if (!container) {
+    return;
+  }
+  const recentOcrRead = status.recent_ocr_read || {};
+  const blocks = Array.isArray(recentOcrRead.blocks_preview) ? recentOcrRead.blocks_preview : [];
+  if (!blocks.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = blocks.slice(0, 3).map((block, index) => {
+    const metaParts = [];
+    if (block.direction) {
+      metaParts.push(`方向 ${block.direction}`);
+    }
+    if (block.confidence !== null && block.confidence !== undefined) {
+      metaParts.push(`置信度 ${Number(block.confidence).toFixed(2)}`);
+    }
+    if (block.rect_norm && Object.keys(block.rect_norm).length) {
+      metaParts.push(`rect_norm ${JSON.stringify(block.rect_norm)}`);
+    }
+    return `
+      <div class="status-block-item">
+        <div class="status-block-title">块 ${index + 1}: ${block.text || "空文本"}</div>
+        <div class="status-block-meta">${metaParts.join(" | ") || "无额外坐标信息"}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderStatusEvidencePreview(status) {
+  const container = document.getElementById("statusEvidencePreview");
+  if (!container) {
+    return;
+  }
+  const path = status.last_screenshot_path;
+  if (!path) {
+    container.innerHTML = "";
+    return;
+  }
+  const overlay = buildStatusBlockOverlay(status);
+  const src = path.startsWith("/") ? `${path}?t=${Date.now()}` : `/${path}?t=${Date.now()}`;
+  const label = overlay.label || "当前截图";
+  container.innerHTML = `
+    <div class="result-meta">当前截图定位参考</div>
+    ${buildOverlayFrameHtml(src, label, overlay)}
+  `;
+}
+
 function buildEventDetailLines(item) {
   const lines = [];
   lines.push(`${formatTimestamp(item.timestamp)} | ${item.source || "-"} | ${item.priority || "-"}`);
@@ -1175,6 +1239,8 @@ async function refreshStatus() {
   const runtimeMeta = document.getElementById("runtimeMeta");
   runtimeMeta.textContent = buildTaskSnapshotSummary(status.task_snapshot, status);
   renderRawStatusSummary(status);
+  renderStatusRecentBlocks(status);
+  renderStatusEvidencePreview(status);
   renderMemoryContextSummary(status);
   renderFollowupQuestions(status);
   renderQuickQuestions();

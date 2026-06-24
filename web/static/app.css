@@ -423,6 +423,44 @@ select {
   word-break: break-word;
 }
 
+.status-block-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.status-block-item {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-quiet);
+}
+
+.status-block-title {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.status-block-meta {
+  margin-top: 4px;
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.status-evidence-preview {
+  margin-bottom: 12px;
+}
+
+.status-evidence-preview .evidence-preview-frame {
+  max-width: 280px;
+}
+
 #runtimeMeta {
   margin-top: 12px;
   margin-bottom: 12px;
