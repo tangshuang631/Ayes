@@ -8,6 +8,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+
+def ensure_project_src_on_path(root_dir: Path | None = None) -> Path:
+    resolved_root = (root_dir or Path(__file__).resolve().parents[1]).resolve()
+    src_dir = resolved_root / "src"
+    src_text = str(src_dir)
+    if src_text not in sys.path:
+        sys.path.insert(0, src_text)
+    return src_dir
+
+
+ensure_project_src_on_path()
+
 from ayes.app.service_control import default_service_config
 
 

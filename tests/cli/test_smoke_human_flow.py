@@ -3,6 +3,42 @@ from urllib.error import URLError
 from scripts import smoke_human_flow
 
 
+def test_ensure_project_src_on_path_inserts_src_dir(monkeypatch, tmp_path) -> None:
+    root_dir = tmp_path / "Ayes"
+    src_dir = root_dir / "src"
+    src_dir.mkdir(parents=True)
+    monkeypatch.setattr(smoke_human_flow.sys, "path", ["existing"])
+
+    smoke_human_flow.ensure_project_src_on_path(root_dir)
+
+    assert smoke_human_flow.sys.path[0] == str(src_dir)
+    assert "existing" in smoke_human_flow.sys.path
+
+
+def test_maybe_ensure_local_service_started_uses_default_base_url() -> None:
+    calls: list[str] = []
+
+    smoke_human_flow.maybe_ensure_local_service_started(
+        "http://127.0.0.1:8770",
+        ensure_service_started_fn=lambda: calls.append("started"),
+        default_base_url="http://127.0.0.1:8770",
+    )
+
+    assert calls == ["started"]
+
+
+def test_maybe_ensure_local_service_started_skips_non_default_base_url() -> None:
+    calls: list[str] = []
+
+    smoke_human_flow.maybe_ensure_local_service_started(
+        "http://127.0.0.1:9999",
+        ensure_service_started_fn=lambda: calls.append("started"),
+        default_base_url="http://127.0.0.1:8770",
+    )
+
+    assert calls == []
+
+
 def test_wait_for_service_ready_retries_until_status_available() -> None:
     calls = {"count": 0}
 

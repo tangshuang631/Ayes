@@ -14,6 +14,23 @@
           <h1>屏幕感知工作台</h1>
           <p class="muted">以 OCR 为主链路，持续记录目标画面、变化、记忆与告警证据。</p>
         </section>
+        <section id="gettingStartedGuide" class="panel-section">
+          <div class="section-head">
+            <h2>开始使用</h2>
+          </div>
+          <div id="gettingStartedStepTarget" class="guide-step">
+            1. 先在下方选择屏幕或进程目标，确认预览图是你真正想监控的画面。
+          </div>
+          <div id="gettingStartedStepConfig" class="guide-step">
+            2. 在任务配置里选择 observe 或 triggered，并框选一个或多个 ROI。
+          </div>
+          <div id="gettingStartedStepRun" class="guide-step">
+            3. 点击“装载任务”，再点“开始持续监控”或“执行一次”。
+          </div>
+          <div id="gettingStartedStepAsk" class="guide-step">
+            4. 在右侧查看证据、事件和问答结果；要给 Agent 用时优先走 ayes-agent 或 Ayes skill。
+          </div>
+        </section>
         <section class="panel-section">
           <div class="section-head">
             <h2>监控目标</h2>
@@ -114,24 +131,27 @@
             </section>
           </details>
         </section>
-        <section class="panel-section">
-          <div class="section-head">
-            <h2>任务与时间范围</h2>
-          </div>
-          <div class="query-row">
-            <input id="taskIdInput" placeholder="任务 id，留空表示当前任务" />
-          </div>
-          <div class="query-row">
-            <input id="memoryMinutes" type="number" min="1" max="15" value="5" />
-            <button id="refreshTimelineBtn" class="text-button">刷新时间线</button>
-          </div>
-          <div class="query-row">
-            <input id="longTermHoursInput" type="number" min="1" max="72" value="24" placeholder="长期摘要小时范围" />
-            <button id="refreshLongTermScopedBtn" class="text-button">按小时刷新长期摘要</button>
-          </div>
-          <div class="query-row">
-            <button id="applyTaskScopeBtn" class="text-button">应用当前任务范围</button>
-          </div>
+        <section class="panel-section collapsed-panel-section">
+          <details id="taskScopeSection" class="collapsed-section">
+            <summary>任务与时间范围</summary>
+            <section class="collapsed-panel-body">
+              <div class="result-meta">只有在切换历史任务、限制时间范围或查看长期摘要时才需要这里。</div>
+              <div class="query-row">
+                <input id="taskIdInput" placeholder="任务 id，留空表示当前任务" />
+              </div>
+              <div class="query-row">
+                <input id="memoryMinutes" type="number" min="1" max="15" value="5" />
+                <button id="refreshTimelineBtn" class="text-button">刷新时间线</button>
+              </div>
+              <div class="query-row">
+                <input id="longTermHoursInput" type="number" min="1" max="72" value="24" placeholder="长期摘要小时范围" />
+                <button id="refreshLongTermScopedBtn" class="text-button">按小时刷新长期摘要</button>
+              </div>
+              <div class="query-row">
+                <button id="applyTaskScopeBtn" class="text-button">应用当前任务范围</button>
+              </div>
+            </section>
+          </details>
         </section>
       </aside>
 

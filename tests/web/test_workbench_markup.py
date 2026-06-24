@@ -62,6 +62,21 @@ def test_workbench_exposes_agent_entry_anchors() -> None:
     assert 'id="agentContractsView"' in html
 
 
+def test_workbench_exposes_getting_started_flow_anchors() -> None:
+    html = Path("web/index.html").read_text(encoding="utf-8")
+    assert 'id="gettingStartedGuide"' in html
+    assert 'id="gettingStartedStepTarget"' in html
+    assert 'id="gettingStartedStepConfig"' in html
+    assert 'id="gettingStartedStepRun"' in html
+    assert 'id="gettingStartedStepAsk"' in html
+
+
+def test_task_scope_section_is_folded_by_default() -> None:
+    html = Path("web/index.html").read_text(encoding="utf-8")
+    assert 'id="taskScopeSection"' in html
+    assert "<summary>任务与时间范围</summary>" in html
+
+
 def test_low_frequency_panels_are_grouped_under_collapsed_sections() -> None:
     html = Path("web/index.html").read_text(encoding="utf-8")
     assert 'id="collapsedOcrSection"' in html

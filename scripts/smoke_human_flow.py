@@ -5,11 +5,29 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import sys
 import time
 import urllib.parse
 import urllib.request
 from typing import Any, Dict
+
+
+DEFAULT_BASE_URL = "http://127.0.0.1:8770"
+
+
+def ensure_project_src_on_path(root_dir: Path | None = None) -> Path:
+    resolved_root = (root_dir or Path(__file__).resolve().parents[1]).resolve()
+    src_dir = resolved_root / "src"
+    src_text = str(src_dir)
+    if src_text not in sys.path:
+        sys.path.insert(0, src_text)
+    return src_dir
+
+
+ensure_project_src_on_path()
+
+from ayes.app.service_control import default_service_config, ensure_service_started
 
 
 def request_json(base_url: str, path: str, payload: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -21,6 +39,20 @@ def request_json(base_url: str, path: str, payload: Dict[str, Any] | None = None
     request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=15) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def maybe_ensure_local_service_started(
+    base_url: str,
+    *,
+    ensure_service_started_fn=None,
+    default_base_url: str = DEFAULT_BASE_URL,
+) -> None:
+    if base_url.rstrip("/") != default_base_url.rstrip("/"):
+        return
+    callback = ensure_service_started_fn
+    if callback is None:
+        callback = lambda: ensure_service_started(default_service_config())
+    callback()
 
 
 def wait_for_service_ready(
@@ -132,13 +164,14 @@ def collect_smoke_summary(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ayes minimal human-verifiable smoke flow")
-    parser.add_argument("--base-url", default="http://127.0.0.1:8770", help="Ayes service base url")
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Ayes service base url")
     parser.add_argument("--task-id", default="task_smoke_human_flow", help="task id used for this smoke run")
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/")
     task_id = args.task_id
 
+    maybe_ensure_local_service_started(base_url)
     if not wait_for_service_ready(base_url):
         print("smoke failed: service did not become ready in time", file=sys.stderr)
         return 1

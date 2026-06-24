@@ -118,6 +118,18 @@ def launch_service(config: ServiceConfig) -> None:
     )
 
 
+def read_log_tail(path: Path, *, max_chars: int = 400) -> str:
+    if not path.exists():
+        return ""
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if len(content) <= max_chars:
+        return content.strip()
+    return content[-max_chars:].strip()
+
+
 def ensure_service_started(
     config: ServiceConfig,
     *,
@@ -138,6 +150,9 @@ def ensure_service_started(
 
     launch_callback(config)
     if not wait_until_ready_callback(config):
+        log_tail = read_log_tail(config.log_file)
+        if log_tail:
+            raise RuntimeError(f"Ayes 后台服务启动后未在预期时间内就绪。最近日志: {log_tail}")
         raise RuntimeError("Ayes 后台服务启动后未在预期时间内就绪。")
     return "started"
 

@@ -92,13 +92,13 @@ PYTHONPATH=src python3 -m ayes.cli.main check-watch runtime/mvp-triggered-screen
 
 ```bash
 cd /Users/apple/Desktop/2026/Ayes
-PYTHONPATH=src python3 -m uvicorn ayes.api.server:app --host 127.0.0.1 --port 8765
+/bin/zsh scripts/start_ayes_service.sh
 ```
 
 2. 浏览器打开：
 
 ```text
-http://127.0.0.1:8765/
+http://127.0.0.1:8770/
 ```
 
 3. 在页面中测试以下链路：
@@ -136,6 +136,8 @@ http://127.0.0.1:8765/
 cd /Users/apple/Desktop/2026/Ayes
 python3 scripts/smoke_human_flow.py --base-url http://127.0.0.1:8770
 ```
+
+如果本地后台还没启动，当前 smoke 会先尝试复用或拉起默认本地服务，再等待 `/api/status` 就绪。
 
 当前 smoke 会验证最小主链路：
 
