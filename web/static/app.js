@@ -21,6 +21,10 @@ function getMinutes() {
   return document.getElementById("memoryMinutes").value || "5";
 }
 
+function getLongTermHours() {
+  return document.getElementById("longTermHoursInput").value || "24";
+}
+
 function buildScopedUrl(basePath, extra = {}) {
   const params = new URLSearchParams();
   const taskId = getTaskId();
@@ -795,13 +799,14 @@ function renderMemoryItems(payload) {
 
 function renderLongTerm(payload) {
   const items = payload.items || [];
-  renderPanelMeta("longTermMeta", buildScopeMetaText(payload, { limit: 20 }));
+  const hoursLabel = payload.hours ? `${payload.hours} 小时` : "最近摘要";
+  renderPanelMeta("longTermMeta", buildScopeMetaText(payload, { limit: payload.limit || 20, range: hoursLabel }));
   const container = document.getElementById("longTermList");
   container.innerHTML = "";
   if (!items.length) {
     const node = document.createElement("div");
     node.className = "empty-state";
-    node.textContent = `当前任务还没有长期摘要。${buildScopeMetaText(payload, { limit: 20 })}`;
+    node.textContent = `当前任务还没有长期摘要。${buildScopeMetaText(payload, { limit: payload.limit || 20, range: hoursLabel })}`;
     container.appendChild(node);
     return;
   }
@@ -956,7 +961,13 @@ async function refreshVisionEvents() {
 }
 
 async function refreshLongTerm() {
-  const data = await requestJson(buildScopedUrl("/api/timeline/long-term", { limit: "20", minutes: null }));
+  const hours = getLongTermHours();
+  const data = await requestJson(buildScopedUrl("/api/timeline/long-term", { limit: "20", minutes: null, hours }));
+  renderLongTerm(data);
+}
+
+async function refreshLongTermUnscoped() {
+  const data = await requestJson(buildScopedUrl("/api/timeline/long-term", { limit: "20", minutes: null, hours: null }));
   renderLongTerm(data);
 }
 
@@ -1163,7 +1174,8 @@ document.getElementById("refreshTimelineBtn").onclick = async () => {
   await refreshEvents();
   await refreshLongTerm();
 };
-document.getElementById("refreshLongTermBtn").onclick = refreshLongTerm;
+document.getElementById("refreshLongTermBtn").onclick = refreshLongTermUnscoped;
+document.getElementById("refreshLongTermScopedBtn").onclick = refreshLongTerm;
 document.getElementById("applyConfigBtn").onclick = applyConfiguredWatch;
 document.getElementById("applyTaskScopeBtn").onclick = async () => {
   await refreshStatus();
