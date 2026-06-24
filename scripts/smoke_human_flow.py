@@ -70,10 +70,12 @@ def main() -> int:
     snippets = request_json(base_url, f"/api/ocr/snippets?task_id={urllib.parse.quote(task_id)}&minutes=5&limit=20")
     logs = request_json(base_url, f"/api/logs?task_id={urllib.parse.quote(task_id)}&minutes=15")
     ask = request_json(base_url, f"/api/ask?task_id={urllib.parse.quote(task_id)}&question={urllib.parse.quote('最近发生了什么')}&minutes=5")
+    memory_items = request_json(base_url, f"/api/memory/items?task_id={urllib.parse.quote(task_id)}&minutes=5&limit=20")
 
     timeline_items = timeline.get("items") or []
     snippet_items = snippets.get("items") or []
     ask_events = ask.get("matched_events") or []
+    memory_entry_items = memory_items.get("items") or []
 
     summary = {
         "task_id": task_id,
@@ -87,6 +89,8 @@ def main() -> int:
         "ask_answer": ask.get("answer"),
         "ask_matched_event_count": len(ask_events),
         "ask_time_range": ask.get("time_range"),
+        "memory_item_count": len(memory_entry_items),
+        "memory_first_preview_overlay": (memory_entry_items[0] if memory_entry_items else {}).get("preview_overlay"),
     }
 
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -99,6 +103,9 @@ def main() -> int:
         return 1
     if not isinstance(snippet_items, list):
         print("smoke failed: snippet items malformed", file=sys.stderr)
+        return 1
+    if not isinstance(memory_entry_items, list):
+        print("smoke failed: memory items malformed", file=sys.stderr)
         return 1
     if "answer" not in ask:
         print("smoke failed: ask response missing answer", file=sys.stderr)

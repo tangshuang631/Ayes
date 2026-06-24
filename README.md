@@ -125,6 +125,7 @@ python3 scripts/smoke_human_flow.py --base-url http://127.0.0.1:8770
 - 读取 `status`
 - 读取 `timeline.recent`
 - 读取 `ocr/snippets`
+- 读取 `memory/items`
 - 读取 `logs`
 - 读取 `ask`
 
@@ -133,5 +134,6 @@ python3 scripts/smoke_human_flow.py --base-url http://127.0.0.1:8770
 - `status_has_runner=true`
 - `timeline.recent` 返回 `items`
 - `ocr/snippets` 返回 `items`
+- `memory/items` 返回 `items`
 - `ask` 返回 `answer`
 - 若 timeline/snippet 中存在事件，应尽量带 `preview_overlay`
