@@ -625,7 +625,11 @@ function renderScreens(items) {
     const button = document.createElement("button");
     button.className = "candidate-button";
     button.innerHTML = `
-      ${item.preview_path ? `<img class="candidate-preview" src="${item.preview_path}?t=${Date.now()}" alt="屏幕预览" />` : ""}
+      ${
+        item.preview_path
+          ? `<img class="candidate-preview" src="${item.preview_path}?t=${Date.now()}" alt="屏幕预览" />`
+          : `<div class="candidate-preview placeholder">当前没有屏幕快照</div>`
+      }
       <div class="window-title">${item.name}</div>
       <div class="window-meta">${item.observability.label} | ${item.bounds.width}x${item.bounds.height}</div>
     `;
@@ -652,10 +656,15 @@ function renderTargetItems(containerId, items, type) {
     wrapper.className = "window-item";
     const button = document.createElement("button");
     button.className = "candidate-button";
+    const typeLabel = type === "process" ? "进程" : "窗口";
     button.innerHTML = `
-      ${item.preview_path ? `<img class="candidate-preview" src="${item.preview_path}?t=${Date.now()}" alt="候选预览" />` : ""}
+      ${
+        item.preview_path
+          ? `<img class="candidate-preview" src="${item.preview_path}?t=${Date.now()}" alt="候选预览" />`
+          : `<div class="candidate-preview placeholder">当前没有可展示快照</div>`
+      }
       <div class="window-title">${item.process_name || "未知进程"} ${item.title ? " / " + item.title : ""}</div>
-      <div class="window-meta">${item.is_business_candidate ? "推荐" : "候选"} | window_id=${item.window_id} | ${item.observability.label} | ${item.bounds.width}x${item.bounds.height}</div>
+      <div class="window-meta">${typeLabel} | ${item.is_business_candidate ? "推荐" : "候选"} | window_id=${item.window_id} | ${item.observability.label} | ${item.bounds.width}x${item.bounds.height}</div>
       <div class="candidate-tags">${item.preview_path ? "有快照" : "无快照"}${item.is_collapsed_default ? " | 默认折叠" : ""}</div>
     `;
     button.onclick = () => {
@@ -919,7 +928,7 @@ async function refreshStatus() {
   const status = await requestJson("/api/status");
   setText("statusView", status);
   const runtimeMeta = document.getElementById("runtimeMeta");
-  runtimeMeta.textContent = `任务已装载: ${status.has_runner ? "是" : "否"} | 持续监控: ${status.is_running ? "运行中" : "未运行"} | 动作计数: ${status.action_count ?? 0} | 命中计数: ${status.match_count ?? 0} | 告警计数: ${status.alert_count ?? 0} | 最近执行: ${status.last_run_at ? Math.floor(status.last_run_at) : "-"} | 最近事件: ${status.last_event_at ? Math.floor(status.last_event_at) : "-"} | 最近命中: ${status.last_match_at ? Math.floor(status.last_match_at) : "-"} | 最近错误: ${status.last_error || "-"}`;
+  runtimeMeta.textContent = `任务已装载: ${status.has_runner ? "是" : "否"} | 持续监控: ${status.is_running ? "运行中" : "未运行"} | 动作计数: ${status.action_count ?? 0} | 命中计数: ${status.match_count ?? 0} | 告警计数: ${status.alert_count ?? 0} | 最近执行: ${formatHealthTimestamp(status.last_run_at)} | 最近事件: ${formatHealthTimestamp(status.last_event_at)} | 最近命中: ${formatHealthTimestamp(status.last_match_at)} | 最近错误: ${status.last_error || "无"}`;
   const summary = document.getElementById("statusSummary");
   const ocrQuality = status.last_ocr_quality || {};
   const visionDecision = status.last_vision_decision || {};
