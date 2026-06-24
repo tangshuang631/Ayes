@@ -525,7 +525,7 @@ function buildEvidenceSummaryHtml(items) {
       metaParts.push(item.location_summary);
     }
     return `
-      <button class="answer-structured-item evidence-summary-button" type="button" data-target-event-id="${item.event_id || ""}">
+      <button class="answer-structured-item evidence-summary-button" type="button" data-target-event-id="${item.event_id || ""}" data-evidence-scope="memory">
         <div class="answer-structured-title">${item.summary || item.event_type || "证据事件"}</div>
         <div class="answer-structured-meta">${metaParts.join(" | ")}</div>
       </button>
@@ -548,6 +548,53 @@ function buildTimelineEventHtml(item) {
   `;
 }
 
+function renderSelectedEvidence(item, scope = "event") {
+  const meta = document.getElementById("selectedEvidenceMeta");
+  const summary = document.getElementById("selectedEvidenceSummary");
+  const preview = document.getElementById("selectedEvidencePreview");
+  if (!meta || !summary || !preview) {
+    return;
+  }
+  if (!item) {
+    meta.textContent = "点击近期事件或问答证据后，在这里查看更大的截图证据。";
+    summary.textContent = "当前还没有选中的证据事件。";
+    preview.innerHTML = "";
+    return;
+  }
+  const targetText = formatEventTarget(item.target);
+  const locationText = buildLocationSummary(item) || "暂无位置摘要";
+  const timeText = item.timestamp ? formatTimestamp(item.timestamp) : "暂无时间";
+  const primaryEvidenceRef = (item.evidence_refs || [])[0] || item.evidence_ref || "";
+  const primaryEvidenceSrc = primaryEvidenceRef
+    ? (primaryEvidenceRef.startsWith("/") ? primaryEvidenceRef : `/${primaryEvidenceRef}`)
+    : "";
+  meta.textContent = `来源: ${scope} | 事件: ${item.event_type || "-"} | 时间: ${timeText}`;
+  summary.innerHTML = [
+    `摘要: ${item.summary || item.preview || item.event_type || "无摘要"}`,
+    `目标: ${targetText || "-"}`,
+    `位置: ${locationText}`,
+    primaryEvidenceRef ? `证据文件: ${primaryEvidenceRef}` : "证据文件: 暂无",
+  ].join("<br />");
+  preview.innerHTML = primaryEvidenceSrc
+    ? buildOverlayFrameHtml(primaryEvidenceSrc, primaryEvidenceRef || "evidence", item.preview_overlay || { kind: "none", label: "", rect_norm: {} })
+    : `<div class="result-meta">该事件当前没有可直接预览的截图证据。</div>`;
+}
+
+function bindTimelineEvidenceActions(rootSelector, scope) {
+  document.querySelectorAll(`${rootSelector} [data-event-id]`).forEach((node) => {
+    node.onclick = () => {
+      const payload = node.getAttribute("data-event-payload");
+      if (!payload) {
+        return;
+      }
+      try {
+        renderSelectedEvidence(JSON.parse(payload), scope);
+      } catch (_) {
+      }
+    };
+  });
+}
+
 function bindEvidenceSummaryActions() {
   document.querySelectorAll("[data-target-event-id]").forEach((button) => {
     button.onclick = () => {
@@ -561,6 +608,13 @@ function bindEvidenceSummaryActions() {
       }
       target.scrollIntoView({ behavior: "smooth", block: "center" });
       target.classList.add("is-highlighted");
+      const payload = target.getAttribute("data-event-payload");
+      if (payload) {
+        try {
+          renderSelectedEvidence(JSON.parse(payload), "memory");
+        } catch (_) {
+        }
+      }
       window.setTimeout(() => target.classList.remove("is-highlighted"), 1800);
     };
   });
@@ -965,8 +1019,13 @@ function renderEvents(payload) {
     const node = document.createElement("div");
     node.className = "timeline-item";
     node.innerHTML = buildTimelineEventHtml(item);
+    const body = node.querySelector("[data-event-id]");
+    if (body) {
+      body.setAttribute("data-event-payload", JSON.stringify(item));
+    }
     container.appendChild(node);
   });
+  bindTimelineEvidenceActions("#eventList", "event");
 }
 
 function renderSnippets(payload) {
@@ -990,6 +1049,8 @@ function renderSnippets(payload) {
       <div class="timeline-meta">${item.summary || ""}\n${item.location_summary ? `位置: ${item.location_summary}\n` : ""}${item.ocr_text || ""}\n${formatTimestamp(item.timestamp)}</div>
       ${primaryEvidenceSrc ? `<div class="timeline-inline-preview">${buildOverlayFrameHtml(primaryEvidenceSrc, item.preview || item.evidence_ref, item.preview_overlay)}</div>` : ""}
     `;
+    node.setAttribute("data-event-payload", JSON.stringify(item));
+    node.onclick = () => renderSelectedEvidence(item, "snippet");
     container.appendChild(node);
   });
 }
@@ -1010,8 +1071,13 @@ function renderActionEvents(payload) {
     const node = document.createElement("div");
     node.className = "timeline-item";
     node.innerHTML = buildTimelineEventHtml(item);
+    const body = node.querySelector("[data-event-id]");
+    if (body) {
+      body.setAttribute("data-event-payload", JSON.stringify(item));
+    }
     container.appendChild(node);
   });
+  bindTimelineEvidenceActions("#actionList", "action");
 }
 
 function renderSimpleTimeline(id, metaId, payload, fallbackSourceLabel) {
@@ -1063,9 +1129,14 @@ function renderMemoryResult(payload) {
     const node = document.createElement("div");
     node.className = "timeline-item";
     node.innerHTML = buildTimelineEventHtml(item);
+    const body = node.querySelector("[data-event-id]");
+    if (body) {
+      body.setAttribute("data-event-payload", JSON.stringify(item));
+    }
     evidence.appendChild(node);
   });
   bindEvidenceSummaryActions();
+  bindTimelineEvidenceActions("#memoryEvidence", "memory");
 }
 
 function buildQuickQuestions() {
@@ -1199,8 +1270,13 @@ function renderMemoryItems(payload) {
     const node = document.createElement("div");
     node.className = "timeline-item";
     node.innerHTML = buildTimelineEventHtml(item);
+    const body = node.querySelector("[data-event-id]");
+    if (body) {
+      body.setAttribute("data-event-payload", JSON.stringify(item));
+    }
     container.appendChild(node);
   });
+  bindTimelineEvidenceActions("#memoryItemsList", "memory-item");
 }
 
 function renderLongTerm(payload) {

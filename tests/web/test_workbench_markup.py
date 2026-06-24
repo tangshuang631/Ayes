@@ -18,6 +18,13 @@ def test_screenshot_preview_section_includes_overlay_and_meta() -> None:
     assert 'id="screenshotPreview"' in html
 
 
+def test_workbench_exposes_shared_evidence_inspector_anchors() -> None:
+    html = Path("web/index.html").read_text(encoding="utf-8")
+    assert 'id="selectedEvidenceMeta"' in html
+    assert 'id="selectedEvidenceSummary"' in html
+    assert 'id="selectedEvidencePreview"' in html
+
+
 def test_workbench_still_exposes_selected_target_summary_anchor() -> None:
     html = Path("web/index.html").read_text(encoding="utf-8")
     assert 'id="selectedTargetSummary"' in html

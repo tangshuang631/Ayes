@@ -532,6 +532,15 @@ select {
   line-height: 1.6;
 }
 
+.evidence-inspector-preview {
+  margin-top: 8px;
+}
+
+.evidence-inspector-preview .evidence-preview-frame {
+  width: 100%;
+  max-width: none;
+}
+
 .answer-structured-list {
   display: flex;
   flex-direction: column;
