@@ -860,6 +860,33 @@ function renderMemoryResult(payload) {
   });
 }
 
+function buildQuickQuestions() {
+  const minutes = getMinutes();
+  return [
+    `最近 ${minutes} 分钟发生了什么`,
+    `最近 ${minutes} 分钟有命中条件或告警吗`,
+    `最近 ${minutes} 分钟有没有异常、报错或识别不到内容`,
+  ];
+}
+
+function renderQuickQuestions() {
+  const container = document.getElementById("memoryQuickQuestions");
+  if (!container) {
+    return;
+  }
+  const questions = buildQuickQuestions();
+  container.innerHTML = questions
+    .map((question, index) => `<button class="text-button quick-question-button" data-question-index="${index}" data-question="${question}">${question}</button>`)
+    .join("");
+  container.querySelectorAll("[data-question]").forEach((button) => {
+    button.onclick = async () => {
+      const question = button.getAttribute("data-question") || "";
+      document.getElementById("memoryKeyword").value = question;
+      await queryMemory();
+    };
+  });
+}
+
 function renderMemoryItems(payload) {
   const items = payload.items || [];
   renderPanelMeta("memoryItemsMeta", buildScopeMetaText(payload, { limit: 20 }));
@@ -1000,6 +1027,7 @@ async function refreshStatus() {
   const runtimeMeta = document.getElementById("runtimeMeta");
   runtimeMeta.textContent = buildTaskSnapshotSummary(status.task_snapshot, status);
   renderRawStatusSummary(status);
+  renderQuickQuestions();
   const taskInput = document.getElementById("taskIdInput");
   if (status.task_id) {
     taskInput.value = status.task_id;
@@ -1290,6 +1318,7 @@ document.getElementById("applyTaskScopeBtn").onclick = async () => {
   await refreshMemoryItems();
 };
 document.getElementById("logCategorySelect").onchange = refreshLogs;
+document.getElementById("memoryMinutes").onchange = renderQuickQuestions;
 document.getElementById("refreshVisionModelsBtn").onclick = refreshVisionModels;
 document.getElementById("resetRegionsBtn").onclick = () => {
   editableRegions = [];
@@ -1402,6 +1431,7 @@ window.addEventListener("beforeunload", () => {
 });
 
 notifyFrontendSessionOpen().finally(() => {
+  renderQuickQuestions();
   refreshStatus();
   refreshWindows();
   refreshEvents();

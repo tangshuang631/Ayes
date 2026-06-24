@@ -218,6 +218,20 @@ summary:focus-visible {
   border-color: var(--line-strong);
 }
 
+.quick-question-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.quick-question-button {
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 input,
 select,
 textarea {
