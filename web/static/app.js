@@ -930,15 +930,6 @@ async function refreshStatus() {
   setText("statusView", status);
   const runtimeMeta = document.getElementById("runtimeMeta");
   runtimeMeta.textContent = `任务: ${status.task_id || status.last_task_id || "-"} | 运行: ${status.is_running ? "持续监控中" : status.has_runner ? "已装载未运行" : "未装载"} | 前端连接: ${status.connected_frontends ?? 0} | 后台策略: ${status.can_shutdown_service ? "空闲可退出" : "保持运行"} | 最近执行: ${formatHealthTimestamp(status.last_run_at)} | 最近错误: ${status.last_error || "无"}`;
-  const summary = document.getElementById("statusSummary");
-  const captureTarget = status.last_capture_target || null;
-  const captureStatus = status.last_capture_status || "暂无";
-  summary.innerHTML = `
-    <div class="status-chip"><div class="status-chip-label">当前任务</div><div class="status-chip-value">${status.task_id || status.last_task_id || "-"}</div></div>
-    <div class="status-chip"><div class="status-chip-label">运行状态</div><div class="status-chip-value">${status.is_running ? "持续监控中" : status.has_runner ? "已装载未运行" : "未装载"}</div></div>
-    <div class="status-chip"><div class="status-chip-label">当前采集目标</div><div class="status-chip-value">${formatEventTarget(captureTarget)}</div></div>
-    <div class="status-chip"><div class="status-chip-label">最近采集状态</div><div class="status-chip-value">${captureStatus}</div></div>
-  `;
   renderRawStatusSummary(status);
   const taskInput = document.getElementById("taskIdInput");
   if (status.task_id) {
