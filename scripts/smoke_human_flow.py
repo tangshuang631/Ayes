@@ -83,6 +83,9 @@ def main() -> int:
     summary = {
         "task_id": task_id,
         "status_has_runner": status.get("has_runner"),
+        "status_last_ocr_quality": status.get("last_ocr_quality"),
+        "status_last_vision_decision": status.get("last_vision_decision"),
+        "status_last_vision_summary": status.get("last_vision_summary"),
         "timeline_event_count": len(timeline_items),
         "timeline_first_preview_overlay": (timeline_items[0] if timeline_items else {}).get("preview_overlay"),
         "timeline_first_ocr_quality": (((ocr_events[0] if ocr_events else {}).get("visual") or {}).get("attributes") or {}),
@@ -118,6 +121,15 @@ def main() -> int:
         return 1
     if "structured_vision_matches" not in ask:
         print("smoke failed: ask response missing structured_vision_matches", file=sys.stderr)
+        return 1
+    if "last_ocr_quality" not in status:
+        print("smoke failed: status missing last_ocr_quality", file=sys.stderr)
+        return 1
+    if "last_vision_decision" not in status:
+        print("smoke failed: status missing last_vision_decision", file=sys.stderr)
+        return 1
+    if "last_vision_summary" not in status:
+        print("smoke failed: status missing last_vision_summary", file=sys.stderr)
         return 1
     return 0
 
