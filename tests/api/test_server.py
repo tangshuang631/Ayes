@@ -3,6 +3,8 @@ from fastapi.testclient import TestClient
 from ayes.api.server import app, state
 from ayes.capture.models import CaptureFrame, CaptureResult
 from ayes.ocr.models import OCRResult
+from PIL import Image
+from io import BytesIO
 
 
 client = TestClient(app)
@@ -10,6 +12,9 @@ client = TestClient(app)
 
 class FakeCapture:
     def capture_main_display(self, *, timestamp: float) -> CaptureResult:
+        image = Image.new("RGB", (2, 2), color="white")
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
         return CaptureResult(
             ok=True,
             status="ok",
@@ -20,7 +25,7 @@ class FakeCapture:
                 target_id="main",
                 width=2,
                 height=2,
-                image_bytes=b"api-frame",
+                image_bytes=buffer.getvalue(),
             ),
         )
 
@@ -244,6 +249,55 @@ def test_ask_endpoint_returns_time_range_and_evidence_fields() -> None:
     assert "time_range" in payload
     assert "evidence_refs" in payload
     assert payload["time_scope_respected"] is True
+
+
+def test_screenshot_endpoint_returns_active_regions_overlay() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_screenshot_regions",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [
+                    {
+                        "region_id": "roi_main",
+                        "name": "价格区",
+                        "x": 10,
+                        "y": 20,
+                        "w": 30,
+                        "h": 40,
+                        "coordinate_space": "target",
+                        "enabled": True,
+                    },
+                    {
+                        "region_id": "roi_secondary",
+                        "name": "库存区",
+                        "x": 50,
+                        "y": 60,
+                        "w": 20,
+                        "h": 10,
+                        "coordinate_space": "target",
+                        "enabled": False,
+                    },
+                ],
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    assert state.current_runner is not None
+    state.current_runner.capture = FakeCapture()
+    client.post("/api/watch/run-once")
+
+    response = client.get("/api/screenshot")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "path" in payload
+    assert "regions" in payload
+    assert len(payload["regions"]) == 1
+    assert payload["regions"][0]["region_id"] == "roi_main"
 
 
 def test_memory_items_endpoint_returns_recent_event_items() -> None:

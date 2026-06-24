@@ -489,12 +489,24 @@ select {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  position: relative;
 }
 
 .preview-shell img {
   width: 100%;
   height: auto;
   display: block;
+}
+
+.screenshot-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.screenshot-overlay .roi-box {
+  border-color: #111111;
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .evidence-preview-grid {

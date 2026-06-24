@@ -54,6 +54,7 @@ class WatchRunner:
             change_detection_interval_ms=spec.sampling.change_detection_interval_ms,
         )
         self._previous_frame: Optional[CaptureFrame] = None
+        self._last_captured_frame: Optional[CaptureFrame] = None
         self._events = []
         self._last_match_event_id: Optional[str] = None
         self._last_refresh_click_at: Optional[float] = None
@@ -78,6 +79,10 @@ class WatchRunner:
     @property
     def last_event_at(self) -> Optional[float]:
         return self._last_event_at
+
+    @property
+    def last_captured_frame(self) -> Optional[CaptureFrame]:
+        return self._last_captured_frame
 
     def run_once(self, *, now: Optional[float] = None) -> List[object]:
         now = now or time.time()
@@ -110,6 +115,7 @@ class WatchRunner:
             self._record_event(event)
             return [event]
         frame = capture_result.frame
+        self._last_captured_frame = frame
         target_switched_event = self._maybe_build_target_switched_event(now, frame)
         if target_switched_event is not None:
             self._record_event(target_switched_event)

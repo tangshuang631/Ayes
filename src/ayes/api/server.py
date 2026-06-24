@@ -309,10 +309,10 @@ def run_watch_once() -> JSONResponse:
     if state.current_runner is None:
         return JSONResponse({"error": "当前没有已装载监控任务"}, status_code=400)
     events = [asdict(event) for event in state.current_runner.run_once()]
-    capture_result = state.current_runner.capture.capture_main_display(timestamp=time.time())
-    if capture_result.ok and capture_result.frame is not None:
+    latest_frame = state.current_runner.last_captured_frame
+    if latest_frame is not None:
         screenshot_path = Path("runtime/web-last-frame.png")
-        screenshot_path.write_bytes(capture_result.frame.image_bytes)
+        screenshot_path.write_bytes(latest_frame.image_bytes)
         state.last_screenshot_path = str(screenshot_path)
     state.log_store.write(category="watch", level="info", message="执行一次监控采样", task_id=state.current_task_id, metadata={"emitted_events": len(events)})
     return JSONResponse({"events": events, "status": state.status()})
@@ -499,11 +499,26 @@ def get_ocr_snippets(
 @app.get("/api/screenshot")
 def get_screenshot() -> JSONResponse:
     if not state.last_screenshot_path:
-        return JSONResponse({"path": None})
+        return JSONResponse({"path": None, "regions": [], "target": None})
     path = state.last_screenshot_path
     if not path.startswith("/"):
         path = "/" + path
-    return JSONResponse({"path": path})
+    regions = []
+    if state.current_spec is not None:
+        regions = [
+            {
+                "region_id": region.region_id,
+                "name": region.name,
+                "x": region.x,
+                "y": region.y,
+                "w": region.w,
+                "h": region.h,
+                "coordinate_space": region.coordinate_space,
+            }
+            for region in state.current_spec.target.regions
+            if region.enabled
+        ]
+    return JSONResponse({"path": path, "regions": regions, "target": asdict(state.current_spec.target) if state.current_spec else None})
 
 
 @app.get("/api/watch/status")

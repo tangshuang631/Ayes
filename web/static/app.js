@@ -244,6 +244,30 @@ function buildOverlayFrameHtml(src, label, overlay) {
   `;
 }
 
+function renderScreenshotRegions(regions) {
+  const overlay = document.getElementById("screenshotOverlay");
+  const image = document.getElementById("screenshotPreview");
+  overlay.innerHTML = "";
+  if (!image.naturalWidth || !image.clientWidth || !regions || !regions.length) {
+    return;
+  }
+  const scaleX = image.clientWidth / image.naturalWidth;
+  const scaleY = image.clientHeight / image.naturalHeight;
+  regions.forEach((region) => {
+    const box = document.createElement("div");
+    box.className = "roi-box";
+    box.style.left = `${Number(region.x || 0) * scaleX}px`;
+    box.style.top = `${Number(region.y || 0) * scaleY}px`;
+    box.style.width = `${Number(region.w || 0) * scaleX}px`;
+    box.style.height = `${Number(region.h || 0) * scaleY}px`;
+    const label = document.createElement("div");
+    label.className = "roi-label";
+    label.textContent = region.name || region.region_id || "ROI";
+    box.appendChild(label);
+    overlay.appendChild(box);
+  });
+}
+
 function buildEvidencePreviewHtml(items) {
   if (!items || !items.length) {
     return "";
@@ -1021,10 +1045,19 @@ async function queryMemory() {
 async function refreshScreenshot() {
   const data = await requestJson("/api/screenshot");
   const image = document.getElementById("screenshotPreview");
+  const meta = document.getElementById("screenshotMeta");
   if (data.path) {
+    image.onload = () => {
+      renderScreenshotRegions(data.regions || []);
+    };
     image.src = `/${data.path}?t=${Date.now()}`;
+    const targetLabel = formatEventTarget(data.target || null);
+    const regionCount = Array.isArray(data.regions) ? data.regions.length : 0;
+    meta.textContent = `当前目标: ${targetLabel} | 启用 ROI: ${regionCount}`;
   } else {
     image.removeAttribute("src");
+    document.getElementById("screenshotOverlay").innerHTML = "";
+    meta.textContent = "当前还没有可用截图。";
   }
 }
 
