@@ -499,7 +499,7 @@ def get_ocr_snippets(
 @app.get("/api/screenshot")
 def get_screenshot() -> JSONResponse:
     if not state.last_screenshot_path:
-        return JSONResponse({"path": None, "regions": [], "target": None, "capture_target": None, "capture_status": None})
+        return JSONResponse({"path": None, "regions": [], "target": None, "capture_target": None, "capture_status": None, "capture_timestamp": None})
     path = state.last_screenshot_path
     if not path.startswith("/"):
         path = "/" + path
@@ -526,6 +526,7 @@ def get_screenshot() -> JSONResponse:
             "target": asdict(state.current_spec.target) if state.current_spec else None,
             "capture_target": current_status.get("last_capture_target"),
             "capture_status": current_status.get("last_capture_status"),
+            "capture_timestamp": current_status.get("last_run_at"),
         }
     )
 

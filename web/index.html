@@ -133,7 +133,7 @@
       <main class="center-panel">
         <section class="panel-section">
           <div class="section-head">
-            <h2>运行状态</h2>
+            <h2>当前原始读屏</h2>
             <div class="inline-actions compact">
               <button id="startWatchBtn">开始持续监控</button>
               <button id="runOnceBtn">执行一次</button>
@@ -144,7 +144,10 @@
           <div id="statusRecentBlocks" class="status-block-list"></div>
           <div id="statusEvidencePreview" class="status-evidence-preview"></div>
           <div id="runtimeMeta" class="result-meta"></div>
-          <pre id="statusView" class="status-box"></pre>
+          <details class="collapsed-section raw-status-details">
+            <summary>展开原始状态 JSON</summary>
+            <pre id="statusView" class="status-box"></pre>
+          </details>
         </section>
 
         <section class="panel-section">

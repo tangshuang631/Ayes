@@ -141,6 +141,7 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
         }
         for ref in evidence_refs
     ]
+    lead_event = matched_events[0] if matched_events else {}
     return {
         "task_id": task_id,
         "question": question,
@@ -157,6 +158,12 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
         "structured_vision_matches": structured_vision_matches,
         "evidence_refs": evidence_refs,
         "evidence_previews": evidence_previews,
+        "lead_evidence": {
+            "event_id": lead_event.get("event_id"),
+            "timestamp": lead_event.get("timestamp"),
+            "summary": lead_event.get("summary") or lead_event.get("event_type") or "",
+            "location_summary": lead_event.get("location_summary") or "",
+        },
         "time_scope_respected": True,
     }
 

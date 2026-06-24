@@ -485,8 +485,10 @@ def test_screenshot_endpoint_returns_active_regions_overlay() -> None:
     payload = response.json()
     assert "path" in payload
     assert "regions" in payload
+    assert "capture_timestamp" in payload
     assert len(payload["regions"]) == 1
     assert payload["regions"][0]["region_id"] == "roi_main"
+    assert payload["capture_timestamp"] is not None
 
 
 def test_memory_items_endpoint_returns_recent_event_items() -> None:

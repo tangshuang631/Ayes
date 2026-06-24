@@ -11,6 +11,7 @@ let editableRegions = [];
 let roiPreviewSource = null;
 let roiDraftState = null;
 let lastAppliedSpecSignature = "";
+let latestScreenshotReference = null;
 const frontendSessionId = `web_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
 function getTaskId() {
@@ -1042,9 +1043,14 @@ function renderMemoryResult(payload) {
   const visionStructured = document.getElementById("memoryStructuredVisionMatches");
   const evidenceSummary = document.getElementById("memoryEvidenceSummary");
   const timeRange = payload.time_range || {};
+  const leadEvidence = payload.lead_evidence || {};
+  const screenshotTimeText = latestScreenshotReference?.capture_timestamp
+    ? formatTimestamp(latestScreenshotReference.capture_timestamp)
+    : "暂无";
   summary.innerHTML = `
     <div>结论: ${payload.answer || "暂无回答"}</div>
     <div>置信度: ${payload.confidence ?? "-"} | 证据事件: ${(payload.matched_events || []).length} | 实际命中时间: ${timeRange.from ? formatTimestamp(timeRange.from) : "-"} -> ${timeRange.to ? formatTimestamp(timeRange.to) : "-"} | 时间范围约束: ${payload.time_scope_respected ? "已遵守" : "未标记"}</div>
+    <div>首条证据时间: ${leadEvidence.timestamp ? formatTimestamp(leadEvidence.timestamp) : "-"} | 当前截图参考时间: ${screenshotTimeText}</div>
   `;
   structured.innerHTML = buildStructuredMatchesHtml(payload.structured_matches || []);
   visionStructured.innerHTML = buildStructuredVisionMatchesHtml(payload.structured_vision_matches || []);
@@ -1148,6 +1154,7 @@ function renderMemoryScreenshotReference(data) {
   if (!container) {
     return;
   }
+  latestScreenshotReference = data || null;
   if (!data.path) {
     container.innerHTML = `<div class="result-meta">当前还没有可用于提问核验的截图参考。</div>`;
     return;
@@ -1155,6 +1162,7 @@ function renderMemoryScreenshotReference(data) {
   const src = `/${data.path}?t=${Date.now()}`;
   const regionCount = Array.isArray(data.regions) ? data.regions.length : 0;
   const targetLabel = formatEventTarget(data.target || null);
+  const screenshotTime = data.capture_timestamp ? formatTimestamp(data.capture_timestamp) : "暂无";
   const overlay = (Array.isArray(data.regions) && data.regions.length)
     ? {
       kind: "region",
@@ -1168,7 +1176,7 @@ function renderMemoryScreenshotReference(data) {
     }
     : { kind: "none", label: "", rect_norm: {} };
   container.innerHTML = `
-    <div class="result-meta">当前截图参考: ${targetLabel} | 启用 ROI: ${regionCount}</div>
+    <div class="result-meta">当前截图参考: ${targetLabel} | 启用 ROI: ${regionCount} | 参考时间: ${screenshotTime}</div>
     <div class="memory-screenshot-reference-frame">
       ${buildOverlayFrameHtml(src, targetLabel || "当前截图", overlay)}
     </div>
@@ -1403,6 +1411,7 @@ async function refreshVisionModels() {
 
 async function queryMemory() {
   const keyword = document.getElementById("memoryKeyword").value;
+  await refreshScreenshot();
   const data = await requestJson(buildScopedUrl("/api/ask", { question: keyword || "最近发生了什么" }));
   renderMemoryResult(data);
 }

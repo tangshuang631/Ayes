@@ -31,6 +31,7 @@ def test_ask_endpoint_uses_recent_summary_for_generic_question() -> None:
     assert "time_range" in payload
     assert "evidence_refs" in payload
     assert "evidence_previews" in payload
+    assert "lead_evidence" in payload
     assert "time_scope_respected" in payload
     assert payload["time_scope_respected"] is True
     assert "memory_layers_used" in payload
@@ -40,6 +41,7 @@ def test_ask_endpoint_uses_recent_summary_for_generic_question() -> None:
         assert all(str(ref).startswith("runtime/evidence/") for ref in payload["evidence_refs"])
     if payload["evidence_previews"]:
         assert all(str(item.get("src", "")).startswith("/runtime/evidence/") for item in payload["evidence_previews"])
+    assert set(payload["lead_evidence"].keys()) >= {"event_id", "timestamp", "summary", "location_summary"}
 
 
 def test_ask_endpoint_answers_numeric_threshold_question_from_structured_match() -> None:

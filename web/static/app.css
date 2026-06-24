@@ -469,6 +469,21 @@ select {
   white-space: pre-wrap;
 }
 
+.raw-status-details {
+  margin-top: 10px;
+}
+
+.raw-status-details summary {
+  color: var(--text-soft);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.raw-status-details summary::-webkit-details-marker {
+  display: none;
+}
+
 .result-meta {
   margin-bottom: 8px;
   color: var(--text-mute);
@@ -749,7 +764,7 @@ select {
 }
 
 #statusView {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 #memoryView,
