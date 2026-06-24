@@ -6,12 +6,18 @@ import argparse
 from dataclasses import asdict
 
 from ayes.app.runner import WatchRunner
+from ayes.cli.agent_tool import main as agent_tool_main
 from ayes.cli.helpers import load_watch_spec, to_pretty_json
 from ayes.cli.spec_builder import build_window_observe_spec
 from ayes.targets.discovery.macos import MacOSWindowDiscovery
 
 
 def main() -> int:
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "agent-tool":
+        return agent_tool_main(sys.argv[2:])
+
     parser = argparse.ArgumentParser(prog="ayes")
     subparsers = parser.add_subparsers(dest="command")
 
@@ -41,6 +47,8 @@ def main() -> int:
     create_window_spec_parser = subparsers.add_parser("create-window-spec", help="基于 window id 生成最小窗口监控 spec")
     create_window_spec_parser.add_argument("window_id", type=int, help="窗口 id")
     create_window_spec_parser.add_argument("--output", default="runtime/mvp-observe-window.json", help="输出 spec 路径")
+
+    subparsers.add_parser("agent-tool", help="转发到面向 Agent 的本地 HTTP 薄工具")
 
     args = parser.parse_args()
     if args.command == "validate-spec":

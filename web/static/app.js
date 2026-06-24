@@ -14,6 +14,11 @@ let lastAppliedSpecSignature = "";
 let latestScreenshotReference = null;
 const frontendSessionId = `web_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
+async function refreshAgentContracts() {
+  const payload = await requestJson("/api/agent/contracts");
+  setText("agentContractsView", payload);
+}
+
 function getTaskId() {
   return document.getElementById("taskIdInput").value.trim();
 }
@@ -1714,6 +1719,7 @@ document.getElementById("applyTaskScopeBtn").onclick = async () => {
 document.getElementById("logCategorySelect").onchange = refreshLogs;
 document.getElementById("memoryMinutes").onchange = renderQuickQuestions;
 document.getElementById("refreshVisionModelsBtn").onclick = refreshVisionModels;
+document.getElementById("agentContractsBtn").onclick = refreshAgentContracts;
 document.getElementById("resetRegionsBtn").onclick = () => {
   editableRegions = [];
   syncRegionsTextarea();
@@ -1828,6 +1834,7 @@ notifyFrontendSessionOpen().finally(() => {
   renderQuickQuestions();
   refreshStatus();
   refreshWindows();
+  refreshAgentContracts();
   refreshEvents();
   refreshSnippets();
   refreshActionEvents();

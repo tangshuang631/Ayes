@@ -260,6 +260,12 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "query": {"task_id": "可选", "question": "必填", "minutes": "1-15"},
             "response_keys": ["task_id", "question", "minutes", "answer", "matched_events", "structured_matches", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
         },
+        "snapshot.inspect": {
+            "method": "GET",
+            "path": "/api/screenshot",
+            "query": {"task_id": "可选"},
+            "response_keys": ["path", "regions", "target", "capture_target", "capture_status", "capture_timestamp"],
+        },
         "memory.recent": {
             "method": "GET",
             "path": "/api/memory/recent",

@@ -2,6 +2,12 @@
 
 Ayes 是一个面向人类用户和 AI Agent 的视觉监控、时序记忆与问答工具。
 
+当前主入口路线：
+
+- `Ayes 本地后台服务`
+- `Ayes skill / 本地工具`
+- `Ayes 轻量 Web 工作台（配置 + 核验）`
+
 当前仓库先按文档约束落地第一阶段代码骨架：
 
 - `watch spec` 配置契约
@@ -10,6 +16,16 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉监控、时序记忆与�
 - macOS 窗口发现最小实现
 - 最小 OCR provider 链路
 - 最小短期记忆与问答链路
+- 面向 Agent 的本地 HTTP API 合同
+- 轻量 Web 工作台
+
+## 当前推荐使用方式
+
+1. 启动本地 Ayes 服务
+2. 用 Web 工作台选择监控目标与 ROI
+3. 装载任务并开始持续监控
+4. 通过 Web 工作台做人类核验
+5. 通过 Ayes skill 或本地工具把最近截图、事件、记忆和问答结果交给 Codex / Agent
 
 运行测试：
 
@@ -94,6 +110,7 @@ http://127.0.0.1:8765/
 - 查看“问答与短期记忆”是否返回最近结果
 - 查看“近期日志”是否追加 `执行一次监控采样`
 - 查看“当前截图预览”是否出现最近截图
+- 查看页面中的 Agent 入口摘要与 API 合同查看区
 
 4. 窗口目标测试：
 
@@ -130,6 +147,27 @@ python3 scripts/smoke_human_flow.py --base-url http://127.0.0.1:8770
 - 读取 `memory/items`
 - 读取 `logs`
 - 读取 `ask`
+
+## 当前 Agent / Skill 相关接口
+
+读取接口合同：
+
+```bash
+curl -s http://127.0.0.1:8770/api/agent/contracts
+```
+
+当前建议优先让 Agent 使用：
+
+- `/api/watch/load-configured`
+- `/api/watch/start`
+- `/api/watch/stop`
+- `/api/watch/status`
+- `/api/screenshot`
+- `/api/timeline/recent`
+- `/api/ask`
+- `/api/logs`
+
+后续将继续补仓库内可安装的 Ayes skill 和更薄的本地工具入口。
 
 当前补充能力：
 

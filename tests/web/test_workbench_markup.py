@@ -55,6 +55,13 @@ def test_memory_panel_exposes_evidence_summary_anchor() -> None:
     assert 'id="memoryEvidenceSummary"' in html
 
 
+def test_workbench_exposes_agent_entry_anchors() -> None:
+    html = Path("web/index.html").read_text(encoding="utf-8")
+    assert 'id="agentEntrySummary"' in html
+    assert 'id="agentContractsBtn"' in html
+    assert 'id="agentContractsView"' in html
+
+
 def test_low_frequency_panels_are_grouped_under_collapsed_sections() -> None:
     html = Path("web/index.html").read_text(encoding="utf-8")
     assert 'id="collapsedOcrSection"' in html

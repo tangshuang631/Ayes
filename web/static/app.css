@@ -589,9 +589,14 @@ select {
 }
 
 .check-row {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-quiet);
   color: var(--text-soft);
   font-size: 12px;
   white-space: nowrap;
@@ -599,7 +604,7 @@ select {
 
 .check-row input {
   width: auto;
-  min-height: auto;
+  min-height: 0;
   margin: 0;
 }
 

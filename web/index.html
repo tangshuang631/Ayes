@@ -59,37 +59,6 @@
             <label class="check-row"><input id="alertEnabledInput" type="checkbox" /> webhook</label>
             <label class="check-row"><input id="skipOcrInput" type="checkbox" checked /> 无变化跳过 OCR</label>
           </div>
-          <div class="subsection-head">视觉增强</div>
-          <div class="query-row two-columns">
-            <label class="check-row"><input id="visionEnabledInput" type="checkbox" /> 启用 Ollama 视觉辅助</label>
-            <input id="visionModelInput" value="Molmo-7B-D-0924" placeholder="Ollama 模型名" />
-          </div>
-          <div class="query-row two-columns">
-            <select id="visionModelSelect">
-              <option value="">使用手动模型名</option>
-            </select>
-            <button id="refreshVisionModelsBtn" class="text-button">读取本机模型</button>
-          </div>
-          <div class="query-row two-columns">
-            <label class="check-row"><input id="visionTriggerSparseInput" type="checkbox" checked /> OCR 结果太少时触发</label>
-            <input id="visionSparseCharsInput" type="number" min="0" value="12" placeholder="最少字符数阈值" />
-          </div>
-          <div class="subsection-head">受控刷新点击</div>
-          <div class="query-row two-columns">
-            <label class="check-row"><input id="refreshClickEnabledInput" type="checkbox" /> 启用刷新点击</label>
-            <select id="refreshCoordinateSpaceSelect">
-              <option value="window">window</option>
-              <option value="screen">screen</option>
-            </select>
-          </div>
-          <div class="query-row two-columns">
-            <input id="refreshPointXInput" type="number" min="0" value="100" placeholder="X" />
-            <input id="refreshPointYInput" type="number" min="0" value="200" placeholder="Y" />
-          </div>
-          <div class="query-row two-columns">
-            <input id="refreshIntervalInput" type="number" min="1" value="30" placeholder="刷新间隔秒" />
-            <input id="refreshCooldownInput" type="number" min="0" value="30" placeholder="冷却秒" />
-          </div>
           <div class="subsection-head">重点监控区域</div>
           <div class="result-meta">在当前已选目标预览图上拖拽框选多个 ROI。JSON 入口保留给调试和手工修正。</div>
           <div class="query-row">
@@ -108,6 +77,42 @@
           <div class="query-row">
             <textarea id="regionsJsonInput" class="regions-input" placeholder='区域 JSON，例如 [{"region_id":"roi_main","name":"价格区","x":120,"y":240,"w":300,"h":120,"coordinate_space":"target","enabled":true}]'></textarea>
           </div>
+          <details id="advancedSettingsSection" class="collapsed-section">
+            <summary>高级设置</summary>
+            <section class="collapsed-panel-body">
+              <div class="subsection-head">视觉增强</div>
+              <div class="query-row two-columns">
+                <label class="check-row"><input id="visionEnabledInput" type="checkbox" /> 启用 Ollama 视觉辅助</label>
+                <input id="visionModelInput" value="Molmo-7B-D-0924" placeholder="Ollama 模型名" />
+              </div>
+              <div class="query-row two-columns">
+                <select id="visionModelSelect">
+                  <option value="">使用手动模型名</option>
+                </select>
+                <button id="refreshVisionModelsBtn" class="text-button">读取本机模型</button>
+              </div>
+              <div class="query-row two-columns">
+                <label class="check-row"><input id="visionTriggerSparseInput" type="checkbox" checked /> OCR 结果太少时触发</label>
+                <input id="visionSparseCharsInput" type="number" min="0" value="12" placeholder="最少字符数阈值" />
+              </div>
+              <div class="subsection-head">受控刷新点击</div>
+              <div class="query-row two-columns">
+                <label class="check-row"><input id="refreshClickEnabledInput" type="checkbox" /> 启用刷新点击</label>
+                <select id="refreshCoordinateSpaceSelect">
+                  <option value="window">window</option>
+                  <option value="screen">screen</option>
+                </select>
+              </div>
+              <div class="query-row two-columns">
+                <input id="refreshPointXInput" type="number" min="0" value="100" placeholder="X" />
+                <input id="refreshPointYInput" type="number" min="0" value="200" placeholder="Y" />
+              </div>
+              <div class="query-row two-columns">
+                <input id="refreshIntervalInput" type="number" min="1" value="30" placeholder="刷新间隔秒" />
+                <input id="refreshCooldownInput" type="number" min="0" value="30" placeholder="冷却秒" />
+              </div>
+            </section>
+          </details>
         </section>
         <section class="panel-section">
           <div class="section-head">
@@ -237,6 +242,21 @@
       </main>
 
       <aside class="right-panel">
+        <section class="panel-section">
+          <div class="section-head">
+            <h2>Agent 入口</h2>
+            <button id="agentContractsBtn" class="text-button">查看接口合同</button>
+          </div>
+          <div id="agentEntrySummary" class="result-meta">推荐主入口：Ayes skill / ayes-agent 工具。当前页面主要用于目标选择、ROI 配置、启动监控和人工核验。</div>
+          <details class="collapsed-section">
+            <summary>展开当前 Agent 接入信息</summary>
+            <section class="collapsed-panel-body">
+              <div class="result-meta">建议顺序：1. 先在左侧选目标与 ROI；2. 装载任务；3. 开始持续监控；4. 通过 ayes-agent 或 skill 读取最近截图、事件、记忆与问答。</div>
+              <pre id="agentContractsView" class="result-box"></pre>
+            </section>
+          </details>
+        </section>
+
         <section class="panel-section">
           <div class="section-head">
             <h2>问答与短期记忆</h2>
