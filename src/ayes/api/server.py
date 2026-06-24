@@ -88,6 +88,42 @@ def _build_query_result_from_store(*, task_id: str, minutes: int, keyword: Optio
     )
 
 
+def _build_long_term_query_result_from_store(*, task_id: str, hours: int, keyword: Optional[str]) -> QueryResult:
+    items = state.sqlite_store.query_long_term_summaries(task_id=task_id, hours=hours, keyword=keyword, limit=100)
+    if not items:
+        return QueryResult(
+            answer=f"最近 {hours} 小时内未发现相关长期摘要。",
+            confidence=0.7,
+            matched_events=[],
+            memory_layers_used=["long_term_persisted"],
+        )
+    matched_events = []
+    for item in items:
+        matched_events.append(
+            TimelineEvent(
+                event_id=str(item.get("summary_id") or ""),
+                task_id=task_id,
+                spec_version="1.0",
+                task_mode="observe",
+                timestamp=float(item.get("window_end") or 0.0),
+                source="long_term",
+                event_type="long_term_summary",
+                priority="medium",
+                confidence=0.78,
+                target=EventTarget(type="screen"),
+                observability=Observability(True, False, False, True, "summary"),
+                summary=str(item.get("summary") or ""),
+            )
+        )
+    answer = "；".join(f"{item.get('summary') or '无摘要'}@{int(item.get('window_end') or 0)}" for item in items[-5:])
+    return QueryResult(
+        answer=answer,
+        confidence=0.78,
+        matched_events=matched_events[-5:],
+        memory_layers_used=["long_term_persisted"],
+    )
+
+
 def _event_from_payload(item: dict) -> TimelineEvent:
     text_payload = item.get("text") or {}
     block_payloads = text_payload.get("blocks") or []
@@ -366,6 +402,7 @@ def get_memory_items(
 def ask_question(
     question: str = Query(...),
     minutes: int = Query(5, ge=1, le=15),
+    hours: Optional[int] = Query(None, ge=1, le=72),
     task_id: Optional[str] = None,
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
@@ -378,7 +415,13 @@ def ask_question(
         keyword = None
     else:
         keyword = cleaned_question
-    if state.current_runner is not None and resolved_task_id == state.current_task_id:
+    if hours is not None:
+        result = _build_long_term_query_result_from_store(
+            task_id=resolved_task_id,
+            hours=hours,
+            keyword=keyword,
+        )
+    elif state.current_runner is not None and resolved_task_id == state.current_task_id:
         result = state.current_runner.ask_recent(minutes=minutes, keyword=keyword, question=question)
     else:
         result = _build_query_result_from_store(
@@ -387,8 +430,9 @@ def ask_question(
             keyword=keyword,
             question=question,
         )
-    state.log_store.write(category="api", level="info", message="执行一次问答查询", task_id=resolved_task_id, metadata={"question": question, "minutes": minutes})
-    return JSONResponse(build_query_result_payload(result=result, minutes=minutes, task_id=resolved_task_id, question=question))
+    state.log_store.write(category="api", level="info", message="执行一次问答查询", task_id=resolved_task_id, metadata={"question": question, "minutes": minutes, "hours": hours})
+    effective_minutes = (hours * 60) if hours is not None else minutes
+    return JSONResponse(build_query_result_payload(result=result, minutes=effective_minutes, task_id=resolved_task_id, question=question))
 
 
 @app.get("/api/logs")
@@ -501,12 +545,12 @@ def timeline_recent(
 
 
 @app.get("/api/timeline/long-term")
-def timeline_long_term(task_id: Optional[str] = None, limit: int = Query(20, ge=1, le=100)) -> JSONResponse:
+def timeline_long_term(task_id: Optional[str] = None, hours: Optional[int] = Query(None, ge=1, le=72), limit: int = Query(20, ge=1, le=100)) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
-        return JSONResponse({"items": [], "task_id": None, "limit": limit, "count": 0})
-    items = state.sqlite_store.list_long_term_summaries(task_id=resolved_task_id, limit=limit)
-    return JSONResponse({"items": items, "task_id": resolved_task_id, "limit": limit, "count": len(items)})
+        return JSONResponse({"items": [], "task_id": None, "hours": hours, "limit": limit, "count": 0})
+    items = state.sqlite_store.query_long_term_summaries(task_id=resolved_task_id, hours=hours, limit=limit) if hours is not None else state.sqlite_store.list_long_term_summaries(task_id=resolved_task_id, limit=limit)
+    return JSONResponse({"items": items, "task_id": resolved_task_id, "hours": hours, "limit": limit, "count": len(items)})
 
 
 @app.get("/api/agent/contracts")

@@ -292,3 +292,22 @@ def test_ask_payload_exposes_structured_vision_matches() -> None:
     assert first["model"] == "Molmo-7B-D-0924"
     assert first["region_name"] == "图表区"
     assert first["detail_lines"] == ["下降图表位于中间", "右上有红色按钮"]
+
+
+def test_ask_endpoint_supports_long_term_hours_scope() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = state.set_runner(spec, task_id="task_long_term_ask")
+    runner.run_once()
+    state.clear_runner()
+    response = client.get("/api/ask", params={"question": "最近24小时发生了什么", "hours": 24, "task_id": "task_long_term_ask"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["memory_layers_used"] == ["long_term_persisted"]
+    assert payload["time_scope_respected"] is True

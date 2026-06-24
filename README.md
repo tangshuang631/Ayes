@@ -129,6 +129,12 @@ python3 scripts/smoke_human_flow.py --base-url http://127.0.0.1:8770
 - 读取 `logs`
 - 读取 `ask`
 
+当前补充能力：
+
+- `/api/timeline/long-term` 已支持可选 `hours` 范围过滤
+- `/api/ask` 已支持显式 `hours` 参数，用于超过 15 分钟窗口的长期摘要问答
+- 当用户传入 `hours` 时，问答链路会优先走长期轻量记忆层，而不是错误回落到短期记忆
+
 当前阶段的最低通过标准：
 
 - `status_has_runner=true`

@@ -270,3 +270,34 @@ class SQLiteStore:
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def query_long_term_summaries(
+        self,
+        *,
+        task_id: str,
+        hours: int,
+        keyword: Optional[str] = None,
+        now: Optional[float] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        import time
+
+        current_now = now if now is not None else time.time()
+        since_timestamp = current_now - (hours * 60 * 60)
+        query = "SELECT payload_json FROM long_term_summaries WHERE task_id = ? AND window_end >= ? ORDER BY window_end DESC LIMIT ?"
+        params: list[Any] = [task_id, since_timestamp, limit]
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        items = [json.loads(row[0]) for row in rows]
+        if not keyword:
+            return list(reversed(items))
+        lowered = keyword.lower()
+        matched: List[Dict[str, Any]] = []
+        for item in reversed(items):
+            haystacks = [
+                str(item.get("summary") or ""),
+                " ".join(str(event_id) for event_id in (item.get("event_ids") or [])),
+            ]
+            if any(lowered in haystack.lower() for haystack in haystacks):
+                matched.append(item)
+        return matched
