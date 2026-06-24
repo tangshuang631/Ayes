@@ -100,6 +100,16 @@ function formatEventTarget(target) {
   return parts.join(" / ") || target.type || "-";
 }
 
+function buildRegionSummaryFromSpecTarget(target) {
+  const regions = Array.isArray(target?.regions) ? target.regions.filter((item) => item && item.enabled !== false) : [];
+  if (!regions.length) {
+    return "全目标";
+  }
+  const names = regions.map((item) => item.name || item.region_id || "ROI").slice(0, 3);
+  const extra = regions.length > 3 ? ` 等 ${regions.length} 个 ROI` : `共 ${regions.length} 个 ROI`;
+  return `${names.join(" / ")} | ${extra}`;
+}
+
 function buildEventDetailLines(item) {
   const lines = [];
   lines.push(`${formatTimestamp(item.timestamp)} | ${item.source || "-"} | ${item.priority || "-"}`);
@@ -593,16 +603,16 @@ function setSelectedTarget(target) {
     return;
   }
   if (target.type === "screen") {
-    summary.textContent = `已选目标: 主屏幕 / screen_id=${target.screen_id}`;
+    summary.textContent = `已选目标: 主屏幕 / screen_id=${target.screen_id} | ROI: ${buildRegionSummaryFromSpecTarget(target)}`;
     document.getElementById("targetModeSelect").value = "selected_screen";
     return;
   }
   if (target.type === "process") {
-    summary.textContent = `已选目标: ${target.process_name || "未知进程"} / process`;
+    summary.textContent = `已选目标: ${target.process_name || "未知进程"} / process | ROI: ${buildRegionSummaryFromSpecTarget(target)}`;
     document.getElementById("targetModeSelect").value = "selected_process";
     return;
   }
-  summary.textContent = `已选目标: ${target.process_name || "未知进程"}${target.title ? ` / ${target.title}` : ""} / window_id=${target.window_id}`;
+  summary.textContent = `已选目标: ${target.process_name || "未知进程"}${target.title ? ` / ${target.title}` : ""} / window_id=${target.window_id} | ROI: ${buildRegionSummaryFromSpecTarget(target)}`;
   document.getElementById("targetModeSelect").value = target.type === "process" ? "selected_process" : "selected_window";
 }
 
@@ -913,9 +923,11 @@ function renderRawStatusSummary(status) {
   const container = document.getElementById("statusRawSummary");
   const captureTarget = status.last_capture_target || null;
   const captureStatus = status.last_capture_status || "暂无";
+  const taskTarget = status.target || {};
   const ocrQuality = status.last_ocr_quality || {};
   const visionDecision = status.last_vision_decision || {};
   const visionSummary = status.last_vision_summary || {};
+  const targetSummaryText = `${formatEventTarget(captureTarget)} | ${taskTarget.type || "未装载"} | ROI: ${buildRegionSummaryFromSpecTarget(taskTarget)}`;
   const ocrSummaryText = ocrQuality.provider
     ? `${ocrQuality.provider} | 字符 ${ocrQuality.char_count ?? 0} | 块 ${ocrQuality.block_count ?? 0}${ocrQuality.sparse ? " | 稀疏结果" : ""}`
     : "暂无 OCR 读取结果";
@@ -928,7 +940,7 @@ function renderRawStatusSummary(status) {
   container.innerHTML = `
     <div class="status-raw-line">
       <div class="status-raw-label">当前读取目标</div>
-      <div class="status-raw-value">${formatEventTarget(captureTarget)}</div>
+      <div class="status-raw-value">${targetSummaryText}</div>
     </div>
     <div class="status-raw-line">
       <div class="status-raw-label">最近一次读取状态</div>
