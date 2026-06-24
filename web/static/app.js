@@ -439,10 +439,10 @@ function buildEvidenceSummaryHtml(items) {
       metaParts.push(item.location_summary);
     }
     return `
-      <div class="answer-structured-item">
+      <button class="answer-structured-item evidence-summary-button" type="button" data-target-event-id="${item.event_id || ""}">
         <div class="answer-structured-title">${item.summary || item.event_type || "证据事件"}</div>
         <div class="answer-structured-meta">${metaParts.join(" | ")}</div>
-      </div>
+      </button>
     `;
   }).join("");
 }
@@ -454,10 +454,30 @@ function buildTimelineEventHtml(item) {
     ? `<div class="timeline-inline-preview">${buildOverlayFrameHtml(primaryEvidenceSrc, primaryEvidenceRef, item.preview_overlay)}</div>`
     : buildEvidencePreviewHtmlFromRefs(item.evidence_refs || []);
   return `
-    <div class="timeline-title">${item.event_type}</div>
-    <div class="timeline-meta">${item.summary || ""}\n${buildEventDetailLines(item)}</div>
-    ${previewHtml}
+    <div class="timeline-event-body" data-event-id="${item.event_id || ""}">
+      <div class="timeline-title">${item.event_type}</div>
+      <div class="timeline-meta">${item.summary || ""}\n${buildEventDetailLines(item)}</div>
+      ${previewHtml}
+    </div>
   `;
+}
+
+function bindEvidenceSummaryActions() {
+  document.querySelectorAll("[data-target-event-id]").forEach((button) => {
+    button.onclick = () => {
+      const eventId = button.getAttribute("data-target-event-id");
+      if (!eventId) {
+        return;
+      }
+      const target = document.querySelector(`#memoryEvidence [data-event-id="${eventId}"]`);
+      if (!target) {
+        return;
+      }
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("is-highlighted");
+      window.setTimeout(() => target.classList.remove("is-highlighted"), 1800);
+    };
+  });
 }
 
 function nextRegionId() {
@@ -884,6 +904,7 @@ function renderMemoryResult(payload) {
     node.innerHTML = buildTimelineEventHtml(item);
     evidence.appendChild(node);
   });
+  bindEvidenceSummaryActions();
 }
 
 function buildQuickQuestions() {
