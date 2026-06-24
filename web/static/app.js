@@ -904,6 +904,38 @@ function renderMemoryContextSummary(status) {
   container.innerHTML = lines.join("<br />");
 }
 
+function renderMemoryScreenshotReference(data) {
+  const container = document.getElementById("memoryScreenshotReference");
+  if (!container) {
+    return;
+  }
+  if (!data.path) {
+    container.innerHTML = `<div class="result-meta">当前还没有可用于提问核验的截图参考。</div>`;
+    return;
+  }
+  const src = `/${data.path}?t=${Date.now()}`;
+  const regionCount = Array.isArray(data.regions) ? data.regions.length : 0;
+  const targetLabel = formatEventTarget(data.target || null);
+  const overlay = (Array.isArray(data.regions) && data.regions.length)
+    ? {
+      kind: "region",
+      label: regionCount > 1 ? `已启用 ${regionCount} 个 ROI` : (data.regions[0].name || data.regions[0].region_id || "ROI"),
+      rect_norm: {
+        x: Number(data.regions[0].x_norm || 0),
+        y: Number(data.regions[0].y_norm || 0),
+        w: Number(data.regions[0].w_norm || 0),
+        h: Number(data.regions[0].h_norm || 0),
+      },
+    }
+    : { kind: "none", label: "", rect_norm: {} };
+  container.innerHTML = `
+    <div class="result-meta">当前截图参考: ${targetLabel} | 启用 ROI: ${regionCount}</div>
+    <div class="memory-screenshot-reference-frame">
+      ${buildOverlayFrameHtml(src, targetLabel || "当前截图", overlay)}
+    </div>
+  `;
+}
+
 function renderMemoryItems(payload) {
   const items = payload.items || [];
   renderPanelMeta("memoryItemsMeta", buildScopeMetaText(payload, { limit: 20 }));
@@ -1150,6 +1182,7 @@ async function refreshScreenshot() {
     document.getElementById("screenshotOverlay").innerHTML = "";
     meta.textContent = "当前还没有可用截图。";
   }
+  renderMemoryScreenshotReference(data);
 }
 
 async function applyConfiguredWatch() {

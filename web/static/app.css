@@ -232,6 +232,15 @@ summary:focus-visible {
   line-height: 1.4;
 }
 
+.answer-screenshot-reference {
+  margin-bottom: 8px;
+}
+
+.memory-screenshot-reference-frame {
+  max-width: 240px;
+  margin-bottom: 8px;
+}
+
 input,
 select,
 textarea {
