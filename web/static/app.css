@@ -399,15 +399,12 @@ select {
 
 .status-raw-summary {
   margin-bottom: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-quiet);
+  padding: 4px 0 0;
 }
 
 .status-raw-line + .status-raw-line {
-  margin-top: 10px;
-  padding-top: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--line);
 }
 
@@ -424,6 +421,14 @@ select {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+#runtimeMeta {
+  margin-top: 12px;
+  margin-bottom: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  white-space: pre-wrap;
 }
 
 .result-meta {

@@ -23,6 +23,24 @@ def request_json(base_url: str, path: str, payload: Dict[str, Any] | None = None
         return json.loads(response.read().decode("utf-8"))
 
 
+def wait_for_service_ready(
+    base_url: str,
+    *,
+    attempts: int = 20,
+    sleep_sec: float = 0.5,
+    request_json_fn=request_json,
+) -> bool:
+    for _ in range(max(attempts, 1)):
+        try:
+            payload = request_json_fn(base_url, "/api/status")
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            return True
+        time.sleep(max(sleep_sec, 0))
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ayes minimal human-verifiable smoke flow")
     parser.add_argument("--base-url", default="http://127.0.0.1:8770", help="Ayes service base url")
@@ -31,6 +49,10 @@ def main() -> int:
 
     base_url = args.base_url.rstrip("/")
     task_id = args.task_id
+
+    if not wait_for_service_ready(base_url):
+        print("smoke failed: service did not become ready in time", file=sys.stderr)
+        return 1
 
     load_payload = {
         "task_id": task_id,
