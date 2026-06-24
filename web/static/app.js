@@ -691,17 +691,6 @@ function renderTargetItems(containerId, items, type) {
   });
 }
 
-function renderWindows(items) {
-  renderTargetItems("windowList", items, "window");
-}
-
-function renderCollapsedWindows(items) {
-  renderTargetItems("collapsedWindowList", items, "window");
-  const section = document.getElementById("collapsedWindowSection");
-  section.open = false;
-  section.style.display = items.length ? "block" : "none";
-}
-
 function renderProcesses(items) {
   renderTargetItems("processList", items, "process");
 }
@@ -973,8 +962,6 @@ async function refreshStatus() {
 async function refreshWindows() {
   const data = await requestJson("/api/targets");
   renderScreens(data.screens || []);
-  renderWindows(data.windows || []);
-  renderCollapsedWindows(data.collapsed_windows || []);
   renderProcesses(data.processes || []);
   renderCollapsedProcesses(data.collapsed_processes || []);
   const collapseRule = data.collapse_rule || {};
