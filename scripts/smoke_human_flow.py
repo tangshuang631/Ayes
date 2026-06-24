@@ -86,6 +86,9 @@ def main() -> int:
         "status_last_ocr_quality": status.get("last_ocr_quality"),
         "status_last_vision_decision": status.get("last_vision_decision"),
         "status_last_vision_summary": status.get("last_vision_summary"),
+        "status_latest_key_event": status.get("latest_key_event"),
+        "status_recent_ocr_read": status.get("recent_ocr_read"),
+        "status_activity_status": status.get("activity_status"),
         "timeline_event_count": len(timeline_items),
         "timeline_first_preview_overlay": (timeline_items[0] if timeline_items else {}).get("preview_overlay"),
         "timeline_first_ocr_quality": (((ocr_events[0] if ocr_events else {}).get("visual") or {}).get("attributes") or {}),
@@ -130,6 +133,15 @@ def main() -> int:
         return 1
     if "last_vision_summary" not in status:
         print("smoke failed: status missing last_vision_summary", file=sys.stderr)
+        return 1
+    if "latest_key_event" not in status:
+        print("smoke failed: status missing latest_key_event", file=sys.stderr)
+        return 1
+    if "recent_ocr_read" not in status:
+        print("smoke failed: status missing recent_ocr_read", file=sys.stderr)
+        return 1
+    if "activity_status" not in status:
+        print("smoke failed: status missing activity_status", file=sys.stderr)
         return 1
     return 0
 
