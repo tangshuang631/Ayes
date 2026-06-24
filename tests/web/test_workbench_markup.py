@@ -32,3 +32,8 @@ def test_memory_panel_exposes_context_summary_anchor() -> None:
 def test_memory_panel_exposes_screenshot_reference_anchor() -> None:
     html = Path("web/index.html").read_text(encoding="utf-8")
     assert 'id="memoryScreenshotReference"' in html
+
+
+def test_memory_panel_exposes_follow_up_question_anchor() -> None:
+    html = Path("web/index.html").read_text(encoding="utf-8")
+    assert 'id="memoryFollowupQuestions"' in html

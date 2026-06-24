@@ -887,6 +887,43 @@ function renderQuickQuestions() {
   });
 }
 
+function buildFollowupQuestions(status) {
+  const questions = [];
+  const recentOcrRead = status.recent_ocr_read || {};
+  const latestKeyEvent = status.latest_key_event || {};
+  if (recentOcrRead.full_text) {
+    questions.push("最近 OCR 里最值得注意的内容是什么");
+    if (recentOcrRead.location_summary) {
+      questions.push(`最近 OCR 内容主要出现在什么位置`);
+    }
+  }
+  if (latestKeyEvent.summary) {
+    questions.push("最近关键事件说明了什么变化");
+  }
+  if (!questions.length) {
+    questions.push(`最近 ${getMinutes()} 分钟最值得继续追问的内容是什么`);
+  }
+  return questions.slice(0, 3);
+}
+
+function renderFollowupQuestions(status) {
+  const container = document.getElementById("memoryFollowupQuestions");
+  if (!container) {
+    return;
+  }
+  const questions = buildFollowupQuestions(status);
+  container.innerHTML = questions
+    .map((question, index) => `<button class="text-button quick-question-button" data-followup-index="${index}" data-followup-question="${question}">${question}</button>`)
+    .join("");
+  container.querySelectorAll("[data-followup-question]").forEach((button) => {
+    button.onclick = async () => {
+      const question = button.getAttribute("data-followup-question") || "";
+      document.getElementById("memoryKeyword").value = question;
+      await queryMemory();
+    };
+  });
+}
+
 function renderMemoryContextSummary(status) {
   const container = document.getElementById("memoryContextSummary");
   if (!container) {
@@ -1077,6 +1114,7 @@ async function refreshStatus() {
   runtimeMeta.textContent = buildTaskSnapshotSummary(status.task_snapshot, status);
   renderRawStatusSummary(status);
   renderMemoryContextSummary(status);
+  renderFollowupQuestions(status);
   renderQuickQuestions();
   const taskInput = document.getElementById("taskIdInput");
   if (status.task_id) {
