@@ -887,6 +887,23 @@ function renderQuickQuestions() {
   });
 }
 
+function renderMemoryContextSummary(status) {
+  const container = document.getElementById("memoryContextSummary");
+  if (!container) {
+    return;
+  }
+  const activity = status.activity_status || {};
+  const recentOcrRead = status.recent_ocr_read || {};
+  const latestKeyEvent = status.latest_key_event || {};
+  const lines = [
+    `当前核验范围: 最近 ${getMinutes()} 分钟`,
+    activity.summary ? `监控状态: ${activity.summary}` : "",
+    recentOcrRead.full_text ? `最近 OCR: ${recentOcrRead.full_text.slice(0, 80)}` : "最近 OCR: 暂无",
+    latestKeyEvent.summary ? `最近关键事件: ${latestKeyEvent.summary}` : "最近关键事件: 暂无",
+  ].filter(Boolean);
+  container.innerHTML = lines.join("<br />");
+}
+
 function renderMemoryItems(payload) {
   const items = payload.items || [];
   renderPanelMeta("memoryItemsMeta", buildScopeMetaText(payload, { limit: 20 }));
@@ -1027,6 +1044,7 @@ async function refreshStatus() {
   const runtimeMeta = document.getElementById("runtimeMeta");
   runtimeMeta.textContent = buildTaskSnapshotSummary(status.task_snapshot, status);
   renderRawStatusSummary(status);
+  renderMemoryContextSummary(status);
   renderQuickQuestions();
   const taskInput = document.getElementById("taskIdInput");
   if (status.task_id) {
