@@ -355,6 +355,49 @@ class AppState:
             }
         return None
 
+    def _build_activity_status(self, *, now: float) -> dict:
+        if self.current_runner is None:
+            return {
+                "state": "not_running",
+                "summary": "当前未装载监控任务",
+                "seconds_since_run": None,
+                "seconds_since_event": None,
+            }
+        last_run_at = self.current_runner.last_run_at
+        last_event_at = self.current_runner.last_event_at
+        seconds_since_run = round(now - last_run_at, 2) if last_run_at is not None else None
+        seconds_since_event = round(now - last_event_at, 2) if last_event_at is not None else None
+        run_interval_sec = max(float(self.current_spec.sampling.screenshot_interval_ms if self.current_spec else 1000) / 1000.0, 0.2)
+        fresh_threshold = max(run_interval_sec * 3.0, 3.0)
+        stale_threshold = max(run_interval_sec * 10.0, 10.0)
+        if seconds_since_run is None:
+            return {
+                "state": "idle",
+                "summary": "任务已装载，尚未执行采样",
+                "seconds_since_run": None,
+                "seconds_since_event": seconds_since_event,
+            }
+        if seconds_since_event is not None and seconds_since_event <= fresh_threshold:
+            return {
+                "state": "fresh",
+                "summary": f"最近 {seconds_since_event:.1f} 秒内仍有新事件，监控链路活跃",
+                "seconds_since_run": seconds_since_run,
+                "seconds_since_event": seconds_since_event,
+            }
+        if seconds_since_run <= stale_threshold:
+            return {
+                "state": "idle",
+                "summary": f"最近 {seconds_since_run:.1f} 秒内执行过采样，但暂无更新事件",
+                "seconds_since_run": seconds_since_run,
+                "seconds_since_event": seconds_since_event,
+            }
+        return {
+            "state": "stale",
+            "summary": f"距离最近一次采样已 {seconds_since_run:.1f} 秒，需检查监控是否停滞",
+            "seconds_since_run": seconds_since_run,
+            "seconds_since_event": seconds_since_event,
+        }
+
     def status(self) -> dict:
         action_count = 0
         match_count = 0
@@ -422,9 +465,11 @@ class AppState:
                         last_capture_target = asdict(target)
                 if last_capture_status is not None and last_capture_target is not None:
                     break
+        now = time.time()
         health_summary = self._build_health_summary(task_id=resolved_task_id)
         latest_key_event = self._build_latest_key_event()
         recent_ocr_read = self._build_recent_ocr_read()
+        activity_status = self._build_activity_status(now=now)
         return {
             "has_runner": self.current_runner is not None,
             "is_running": self.is_background_running(),
@@ -449,10 +494,11 @@ class AppState:
             "last_capture_status": last_capture_status,
             "latest_key_event": latest_key_event,
             "recent_ocr_read": recent_ocr_read,
+            "activity_status": activity_status,
             "task_snapshot": self._build_task_snapshot(),
             "health_summary": health_summary,
             "last_error": self.last_error,
             "log_count": len(self.log_store.list_entries()),
             "last_screenshot_path": self.last_screenshot_path,
-            "updated_at": time.time(),
+            "updated_at": now,
         }

@@ -111,14 +111,16 @@ function buildRegionSummaryFromSpecTarget(target) {
 }
 
 function buildTaskSnapshotSummary(snapshot, status) {
+  const activity = status.activity_status || {};
+  const activityText = activity.summary ? ` | 活跃度: ${activity.summary}` : "";
   if (!snapshot) {
-    return `任务: ${status.task_id || status.last_task_id || "-"} | 运行: ${status.is_running ? "持续监控中" : status.has_runner ? "已装载未运行" : "未装载"} | 前端连接: ${status.connected_frontends ?? 0} | 后台策略: ${status.can_shutdown_service ? "空闲可退出" : "保持运行"} | 最近执行: ${formatHealthTimestamp(status.last_run_at)} | 最近错误: ${status.last_error || "无"}`;
+    return `任务: ${status.task_id || status.last_task_id || "-"} | 运行: ${status.is_running ? "持续监控中" : status.has_runner ? "已装载未运行" : "未装载"} | 前端连接: ${status.connected_frontends ?? 0} | 后台策略: ${status.can_shutdown_service ? "空闲可退出" : "保持运行"} | 最近执行: ${formatHealthTimestamp(status.last_run_at)}${activityText} | 最近错误: ${status.last_error || "无"}`;
   }
   const regionNames = Array.isArray(snapshot.region_names) && snapshot.region_names.length ? snapshot.region_names.join(" / ") : "全目标";
   const visionText = snapshot.vision_enabled ? `视觉: 开 / ${snapshot.vision_model || "-"}` : "视觉: 关";
   const alertText = snapshot.alert_enabled ? "告警: 开" : "告警: 关";
   const refreshText = snapshot.refresh_click_enabled ? "刷新点击: 开" : "刷新点击: 关";
-  return `任务: ${status.task_id || status.last_task_id || "-"} | 模式: ${snapshot.mode} | 目标: ${snapshot.target_type} | ROI: ${snapshot.region_count} | ${regionNames} | 截图 ${snapshot.sampling?.screenshot_interval_ms ?? "-"}ms | OCR ${snapshot.sampling?.ocr_interval_ms ?? "-"}ms | ${visionText} | ${alertText} | ${refreshText} | 最近执行: ${formatHealthTimestamp(status.last_run_at)} | 最近错误: ${status.last_error || "无"}`;
+  return `任务: ${status.task_id || status.last_task_id || "-"} | 模式: ${snapshot.mode} | 目标: ${snapshot.target_type} | ROI: ${snapshot.region_count} | ${regionNames} | 截图 ${snapshot.sampling?.screenshot_interval_ms ?? "-"}ms | OCR ${snapshot.sampling?.ocr_interval_ms ?? "-"}ms | ${visionText} | ${alertText} | ${refreshText} | 最近执行: ${formatHealthTimestamp(status.last_run_at)}${activityText} | 最近错误: ${status.last_error || "无"}`;
 }
 
 function buildEventDetailLines(item) {

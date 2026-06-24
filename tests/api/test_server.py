@@ -387,6 +387,33 @@ def test_status_endpoint_exposes_recent_ocr_blocks_preview() -> None:
     assert "direction" in recent_ocr["blocks_preview"][0]
 
 
+def test_status_endpoint_exposes_activity_status_summary() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_status_activity",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    assert state.current_runner is not None
+    state.current_runner.capture = FakeCapture()
+    state.current_runner.ocr = FakeNumericOCR()
+    client.post("/api/watch/run-once")
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    activity = payload["activity_status"]
+    assert activity is not None
+    assert activity["state"] in {"fresh", "idle", "stale"}
+    assert "summary" in activity
+    assert "seconds_since_run" in activity
+    assert "seconds_since_event" in activity
+
+
 def test_ocr_snippets_endpoint_returns_recent_text_fragments() -> None:
     client.post("/api/watch/load-screen")
     client.post("/api/watch/run-once")
