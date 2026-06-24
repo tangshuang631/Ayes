@@ -224,12 +224,14 @@ def test_minimal_human_verifiable_monitoring_flow() -> None:
     snippets = client.get("/api/ocr/snippets", params={"task_id": "task_human_flow", "minutes": 5, "limit": 20})
     logs = client.get("/api/logs", params={"task_id": "task_human_flow", "minutes": 15})
     ask = client.get("/api/ask", params={"task_id": "task_human_flow", "question": "最近发生了什么", "minutes": 5})
+    memory_items = client.get("/api/memory/items", params={"task_id": "task_human_flow", "minutes": 5, "limit": 20})
 
     assert status.status_code == 200
     assert timeline.status_code == 200
     assert snippets.status_code == 200
     assert logs.status_code == 200
     assert ask.status_code == 200
+    assert memory_items.status_code == 200
 
     timeline_items = timeline.json()["items"]
     assert isinstance(timeline_items, list)
@@ -245,3 +247,5 @@ def test_minimal_human_verifiable_monitoring_flow() -> None:
     assert "answer" in ask_payload
     assert "matched_events" in ask_payload
     assert "time_range" in ask_payload
+    memory_items_payload = memory_items.json()
+    assert "items" in memory_items_payload

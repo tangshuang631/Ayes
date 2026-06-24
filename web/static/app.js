@@ -703,6 +703,26 @@ function renderMemoryResult(payload) {
   });
 }
 
+function renderMemoryItems(payload) {
+  const items = payload.items || [];
+  renderPanelMeta("memoryItemsMeta", buildScopeMetaText(payload, { limit: 20 }));
+  const container = document.getElementById("memoryItemsList");
+  container.innerHTML = "";
+  if (!items.length) {
+    const node = document.createElement("div");
+    node.className = "empty-state";
+    node.textContent = `当前范围内没有最近记忆条目。${buildScopeMetaText(payload, { limit: 20 })}`;
+    container.appendChild(node);
+    return;
+  }
+  items.slice().reverse().forEach((item) => {
+    const node = document.createElement("div");
+    node.className = "timeline-item";
+    node.innerHTML = buildTimelineEventHtml(item);
+    container.appendChild(node);
+  });
+}
+
 function renderLongTerm(payload) {
   const items = payload.items || [];
   renderPanelMeta("longTermMeta", buildScopeMetaText(payload, { limit: 20 }));
@@ -821,6 +841,12 @@ async function refreshLogs() {
   const category = document.getElementById("logCategorySelect").value;
   const data = await requestJson(buildScopedUrl("/api/logs", { category }));
   renderLogs(data);
+}
+
+async function refreshMemoryItems() {
+  const keyword = document.getElementById("memoryKeyword").value.trim();
+  const data = await requestJson(buildScopedUrl("/api/memory/items", { limit: "20", keyword }));
+  renderMemoryItems(data);
 }
 
 async function refreshVisionModels() {
@@ -992,6 +1018,7 @@ document.getElementById("runOnceBtn").onclick = async () => {
   await refreshAlertEvents();
   await refreshLogs();
   await queryMemory();
+  await refreshMemoryItems();
   await refreshScreenshot();
 };
 document.getElementById("stopWatchBtn").onclick = async () => {
@@ -1020,6 +1047,7 @@ document.getElementById("applyTaskScopeBtn").onclick = async () => {
   await refreshLongTerm();
   await refreshLogs();
   await queryMemory();
+  await refreshMemoryItems();
 };
 document.getElementById("logCategorySelect").onchange = refreshLogs;
 document.getElementById("refreshVisionModelsBtn").onclick = refreshVisionModels;
@@ -1144,6 +1172,7 @@ notifyFrontendSessionOpen().finally(() => {
   refreshLongTerm();
   refreshLogs();
   refreshScreenshot();
+  refreshMemoryItems();
   refreshVisionModels();
   ensureStatusPolling();
   ensureSessionHeartbeat();

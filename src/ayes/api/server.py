@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ayes.app.state import AppState
-from ayes.api.contracts import build_agent_contract_payload, build_preview_overlay, build_query_result_payload, describe_location_summary
+from ayes.api.contracts import build_agent_contract_payload, build_memory_items_payload, build_preview_overlay, build_query_result_payload, describe_location_summary
 from ayes.cli.spec_builder import build_window_observe_spec
 from ayes.config.models import WatchSpec
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, TimelineEvent, WatchMatch
@@ -341,6 +341,25 @@ def get_recent_memory(
         question=keyword or "最近发生了什么",
     )
     return JSONResponse(build_query_result_payload(result=result, minutes=minutes, task_id=resolved_task_id, question=keyword or "最近发生了什么"))
+
+
+@app.get("/api/memory/items")
+def get_memory_items(
+    minutes: int = Query(5, ge=1, le=15),
+    limit: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = None,
+    task_id: Optional[str] = None,
+) -> JSONResponse:
+    resolved_task_id = _resolve_task_id(task_id)
+    if not resolved_task_id:
+        return JSONResponse({"task_id": None, "minutes": minutes, "limit": limit, "count": 0, "items": []})
+    items = state.sqlite_store.query_events(
+        task_id=resolved_task_id,
+        minutes=minutes,
+        keyword=keyword,
+        limit=limit,
+    )
+    return JSONResponse(build_memory_items_payload(items=items, task_id=resolved_task_id, minutes=minutes, limit=limit))
 
 
 @app.get("/api/ask")

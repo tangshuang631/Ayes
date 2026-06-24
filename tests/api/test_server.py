@@ -224,6 +224,22 @@ def test_ask_endpoint_returns_time_range_and_evidence_fields() -> None:
     assert payload["time_scope_respected"] is True
 
 
+def test_memory_items_endpoint_returns_recent_event_items() -> None:
+    client.post("/api/watch/load-screen")
+    client.post("/api/watch/run-once")
+    response = client.get("/api/memory/items", params={"task_id": "task_web", "minutes": 5, "limit": 20})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == "task_web"
+    assert payload["minutes"] == 5
+    assert payload["limit"] == 20
+    assert "count" in payload
+    assert isinstance(payload["items"], list)
+    if payload["items"]:
+        assert "location_summary" in payload["items"][0]
+        assert "preview_overlay" in payload["items"][0]
+
+
 def test_targets_endpoint_exposes_preview_and_collapse_metadata() -> None:
     response = client.get("/api/targets")
     assert response.status_code == 200

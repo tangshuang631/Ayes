@@ -133,6 +133,22 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
     }
 
 
+def build_memory_items_payload(*, items: List[Dict[str, Any]], task_id: str, minutes: int, limit: int) -> Dict[str, Any]:
+    normalized: List[Dict[str, Any]] = []
+    for item in items:
+        event = dict(item)
+        event["location_summary"] = describe_location_summary(event)
+        event["preview_overlay"] = build_preview_overlay(event)
+        normalized.append(event)
+    return {
+        "task_id": task_id,
+        "minutes": minutes,
+        "limit": limit,
+        "count": len(normalized),
+        "items": normalized,
+    }
+
+
 def _format_time_text(timestamp: Any) -> str:
     if timestamp in {None, ""}:
         return ""
@@ -214,6 +230,12 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "path": "/api/memory/recent",
             "query": {"task_id": "可选", "minutes": "1-15", "keyword": "可选"},
             "response_keys": ["task_id", "minutes", "answer", "matched_events", "structured_matches", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
+        },
+        "memory.items": {
+            "method": "GET",
+            "path": "/api/memory/items",
+            "query": {"task_id": "可选", "minutes": "1-15", "limit": "1-100", "keyword": "可选"},
+            "response_keys": ["task_id", "minutes", "limit", "count", "items"],
         },
         "logs.recent": {
             "method": "GET",
