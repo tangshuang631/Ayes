@@ -113,10 +113,14 @@ function buildRegionSummaryFromSpecTarget(target) {
 function buildTaskSnapshotSummary(snapshot, status) {
   const activity = status.activity_status || {};
   const activityLine = activity.summary ? `活跃度: ${activity.summary}` : "活跃度: 暂无";
+  const captureTargetText = formatEventTarget(status.last_capture_target || status.target || null);
+  const runningLine = `后台持续监控: ${status.is_running ? "是" : "否"} | 前端连接: ${status.connected_frontends ?? 0}`;
   if (!snapshot) {
     return [
       `任务: ${status.task_id || status.last_task_id || "-"}`,
       `运行: ${status.is_running ? "持续监控中" : status.has_runner ? "已装载未运行" : "未装载"}`,
+      runningLine,
+      `最近捕获目标: ${captureTargetText}`,
       activityLine,
       `最近执行: ${formatHealthTimestamp(status.last_run_at)}`,
       `最近错误: ${status.last_error || "无"}`,
@@ -132,6 +136,8 @@ function buildTaskSnapshotSummary(snapshot, status) {
     `区域: ${regionNames}`,
     `采样: 截图 ${snapshot.sampling?.screenshot_interval_ms ?? "-"}ms | OCR ${snapshot.sampling?.ocr_interval_ms ?? "-"}ms`,
     `${visionText} | ${alertText} | ${refreshText}`,
+    runningLine,
+    `最近捕获目标: ${captureTargetText}`,
     activityLine,
     `最近执行: ${formatHealthTimestamp(status.last_run_at)}`,
     `最近错误: ${status.last_error || "无"}`,
@@ -1410,9 +1416,14 @@ async function refreshScreenshot() {
       renderScreenshotRegions(data.regions || []);
     };
     image.src = `/${data.path}?t=${Date.now()}`;
-    const targetLabel = formatEventTarget(data.target || null);
+    const captureTargetLabel = formatEventTarget(data.capture_target || null);
+    const configuredTargetLabel = formatEventTarget(data.target || null);
     const regionCount = Array.isArray(data.regions) ? data.regions.length : 0;
-    meta.textContent = `当前目标: ${targetLabel} | 启用 ROI: ${regionCount}`;
+    const captureStatus = data.capture_status || "暂无";
+    const targetText = captureTargetLabel && configuredTargetLabel && captureTargetLabel !== configuredTargetLabel
+      ? `当前截图: ${captureTargetLabel} | 配置目标: ${configuredTargetLabel}`
+      : `当前截图: ${captureTargetLabel || configuredTargetLabel}`;
+    meta.textContent = `${targetText} | 启用 ROI: ${regionCount} | 采集状态: ${captureStatus}`;
   } else {
     image.removeAttribute("src");
     document.getElementById("screenshotOverlay").innerHTML = "";

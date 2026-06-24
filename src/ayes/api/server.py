@@ -499,7 +499,7 @@ def get_ocr_snippets(
 @app.get("/api/screenshot")
 def get_screenshot() -> JSONResponse:
     if not state.last_screenshot_path:
-        return JSONResponse({"path": None, "regions": [], "target": None})
+        return JSONResponse({"path": None, "regions": [], "target": None, "capture_target": None, "capture_status": None})
     path = state.last_screenshot_path
     if not path.startswith("/"):
         path = "/" + path
@@ -518,7 +518,16 @@ def get_screenshot() -> JSONResponse:
             for region in state.current_spec.target.regions
             if region.enabled
         ]
-    return JSONResponse({"path": path, "regions": regions, "target": asdict(state.current_spec.target) if state.current_spec else None})
+    current_status = state.status()
+    return JSONResponse(
+        {
+            "path": path,
+            "regions": regions,
+            "target": asdict(state.current_spec.target) if state.current_spec else None,
+            "capture_target": current_status.get("last_capture_target"),
+            "capture_status": current_status.get("last_capture_status"),
+        }
+    )
 
 
 @app.get("/api/watch/status")

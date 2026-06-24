@@ -15,6 +15,7 @@ def test_screenshot_preview_section_includes_overlay_and_meta() -> None:
     html = Path("web/index.html").read_text(encoding="utf-8")
     assert 'id="screenshotMeta"' in html
     assert 'id="screenshotOverlay"' in html
+    assert 'id="screenshotPreview"' in html
 
 
 def test_workbench_still_exposes_selected_target_summary_anchor() -> None:
