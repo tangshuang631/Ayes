@@ -233,6 +233,38 @@ textarea {
   font-weight: 600;
 }
 
+.health-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.health-item {
+  min-height: 70px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.health-item.is-alert {
+  border-color: #d1a6a6;
+  background: #fff7f7;
+}
+
+.health-item-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.health-item-value {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
 .result-meta {
   margin-bottom: 8px;
   color: var(--muted);
@@ -487,6 +519,10 @@ textarea {
   }
 
   .status-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .health-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

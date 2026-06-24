@@ -268,6 +268,10 @@ def test_minimal_human_verifiable_monitoring_flow() -> None:
     memory_items = client.get("/api/memory/items", params={"task_id": "task_human_flow", "minutes": 5, "limit": 20})
 
     assert status.status_code == 200
+    status_payload = status.json()
+    assert "health_summary" in status_payload
+    assert "recent_memory" in status_payload["health_summary"]
+    assert "recent_logs" in status_payload["health_summary"]
     assert timeline.status_code == 200
     assert snippets.status_code == 200
     assert logs.status_code == 200

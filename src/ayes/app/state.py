@@ -158,6 +158,60 @@ class AppState:
     def can_shutdown_service(self) -> bool:
         return (not self.is_background_running()) and self.connected_frontends() == 0
 
+    def _build_health_summary(self, *, task_id: Optional[str]) -> dict:
+        if not task_id:
+            return {
+                "last_match": None,
+                "last_alert": None,
+                "recent_memory": {"count": 0, "latest_timestamp": None},
+                "recent_logs": {"count": 0, "error_count": 0, "warn_count": 0, "latest_timestamp": None},
+            }
+        recent_events = self.sqlite_store.query_events(task_id=task_id, minutes=15, limit=200)
+        recent_logs = self.sqlite_store.list_logs(task_id=task_id, since_timestamp=time.time() - (15 * 60), limit=200)
+        last_match = None
+        last_alert = None
+        for item in recent_events:
+            source = str(item.get("source") or "")
+            if source == "semantic_match":
+                last_match = {
+                    "summary": item.get("summary") or item.get("event_type") or "",
+                    "event_type": item.get("event_type") or "",
+                    "timestamp": item.get("timestamp"),
+                }
+            if source == "alert":
+                last_alert = {
+                    "summary": item.get("summary") or item.get("event_type") or "",
+                    "event_type": item.get("event_type") or "",
+                    "timestamp": item.get("timestamp"),
+                }
+        error_count = 0
+        warn_count = 0
+        latest_log_timestamp = None
+        for entry in recent_logs:
+            level = str(entry.get("level") or "").lower()
+            if level == "error":
+                error_count += 1
+            elif level in {"warn", "warning"}:
+                warn_count += 1
+            entry_timestamp = entry.get("timestamp")
+            if entry_timestamp is not None:
+                latest_log_timestamp = entry_timestamp
+        latest_memory_timestamp = recent_events[-1].get("timestamp") if recent_events else None
+        return {
+            "last_match": last_match,
+            "last_alert": last_alert,
+            "recent_memory": {
+                "count": len(recent_events),
+                "latest_timestamp": latest_memory_timestamp,
+            },
+            "recent_logs": {
+                "count": len(recent_logs),
+                "error_count": error_count,
+                "warn_count": warn_count,
+                "latest_timestamp": latest_log_timestamp,
+            },
+        }
+
     def status(self) -> dict:
         action_count = 0
         match_count = 0
@@ -166,6 +220,7 @@ class AppState:
         last_ocr_quality = None
         last_vision_summary = None
         last_vision_decision = None
+        resolved_task_id = self.current_task_id or self.last_task_id
         if self.current_runner is not None:
             for event in self.current_runner.events:
                 source = getattr(event, "source", "")
@@ -206,6 +261,7 @@ class AppState:
                         "provider": attrs.get("vision_provider") or "",
                         "timestamp": getattr(event, "timestamp", None),
                     }
+        health_summary = self._build_health_summary(task_id=resolved_task_id)
         return {
             "has_runner": self.current_runner is not None,
             "is_running": self.is_background_running(),
@@ -226,6 +282,7 @@ class AppState:
             "last_ocr_quality": last_ocr_quality,
             "last_vision_summary": last_vision_summary,
             "last_vision_decision": last_vision_decision,
+            "health_summary": health_summary,
             "last_error": self.last_error,
             "log_count": len(self.log_store.list_entries()),
             "last_screenshot_path": self.last_screenshot_path,

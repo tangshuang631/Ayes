@@ -36,6 +36,23 @@ def test_status_endpoint_returns_basic_state() -> None:
     payload = response.json()
     assert "has_runner" in payload
     assert "is_running" in payload
+    assert "health_summary" in payload
+
+
+def test_status_endpoint_includes_health_summary_diagnostics() -> None:
+    client.post("/api/watch/load-screen")
+    client.post("/api/watch/run-once")
+    response = client.get("/api/status")
+    assert response.status_code == 200
+    payload = response.json()
+    health = payload["health_summary"]
+    assert "last_match" in health
+    assert "last_alert" in health
+    assert "recent_memory" in health
+    assert "recent_logs" in health
+    assert "count" in health["recent_memory"]
+    assert "error_count" in health["recent_logs"]
+    assert "warn_count" in health["recent_logs"]
 
 
 def test_windows_endpoint_returns_items_key() -> None:

@@ -840,6 +840,38 @@ function renderLogs(payload) {
   });
 }
 
+function formatHealthTimestamp(timestamp) {
+  return timestamp ? formatTimestamp(timestamp) : "暂无";
+}
+
+function renderHealthSummary(status) {
+  const health = status.health_summary || {};
+  const lastMatch = health.last_match || null;
+  const lastAlert = health.last_alert || null;
+  const recentMemory = health.recent_memory || {};
+  const recentLogs = health.recent_logs || {};
+  const hasLogIssue = (recentLogs.error_count || 0) > 0 || (recentLogs.warn_count || 0) > 0 || Boolean(status.last_error);
+  const container = document.getElementById("healthSummary");
+  container.innerHTML = `
+    <div class="health-item">
+      <div class="health-item-label">最近命中</div>
+      <div class="health-item-value">${lastMatch ? `${lastMatch.summary || lastMatch.event_type || "已命中"}\n${formatHealthTimestamp(lastMatch.timestamp)}` : "15 分钟内暂无命中"}</div>
+    </div>
+    <div class="health-item${lastAlert ? " is-alert" : ""}">
+      <div class="health-item-label">最近告警</div>
+      <div class="health-item-value">${lastAlert ? `${lastAlert.summary || lastAlert.event_type || "已告警"}\n${formatHealthTimestamp(lastAlert.timestamp)}` : "15 分钟内暂无告警"}</div>
+    </div>
+    <div class="health-item">
+      <div class="health-item-label">近期记忆</div>
+      <div class="health-item-value">${recentMemory.count ?? 0} 条\n最近: ${formatHealthTimestamp(recentMemory.latest_timestamp)}</div>
+    </div>
+    <div class="health-item${hasLogIssue ? " is-alert" : ""}">
+      <div class="health-item-label">近期日志健康</div>
+      <div class="health-item-value">${recentLogs.count ?? 0} 条 / 错误 ${(recentLogs.error_count ?? 0)} / 警告 ${(recentLogs.warn_count ?? 0)}\n最近: ${formatHealthTimestamp(recentLogs.latest_timestamp)}</div>
+    </div>
+  `;
+}
+
 async function refreshStatus() {
   const status = await requestJson("/api/status");
   setText("statusView", status);
@@ -867,6 +899,7 @@ async function refreshStatus() {
     <div class="status-chip"><div class="status-chip-label">最近视觉决策</div><div class="status-chip-value">${visionDecisionText}</div></div>
     <div class="status-chip"><div class="status-chip-label">最近视觉结果</div><div class="status-chip-value">${visionSummaryText}</div></div>
   `;
+  renderHealthSummary(status);
   const taskInput = document.getElementById("taskIdInput");
   if (status.task_id) {
     taskInput.value = status.task_id;
