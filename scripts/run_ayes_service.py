@@ -8,19 +8,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from ayes.app.service_control import default_service_config
+
 
 def main() -> int:
-    root_dir = Path(__file__).resolve().parents[1]
-    runtime_dir = root_dir / "runtime"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    log_path = runtime_dir / "ayes-server.log"
-    pid_path = runtime_dir / "ayes-server.pid"
+    config = default_service_config(Path(__file__).resolve().parents[1])
+    config.runtime_dir.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
-    src_path = str(root_dir / "src")
+    src_path = str(config.root_dir / "src")
     env["PYTHONPATH"] = src_path if not env.get("PYTHONPATH") else f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
 
-    with log_path.open("ab") as log_file:
+    with config.log_file.open("ab") as log_file:
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -28,11 +27,11 @@ def main() -> int:
                 "uvicorn",
                 "ayes.api.server:app",
                 "--host",
-                "127.0.0.1",
+                config.host,
                 "--port",
-                "8770",
+                str(config.port),
             ],
-            cwd=str(root_dir),
+            cwd=str(config.root_dir),
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=log_file,
@@ -41,7 +40,7 @@ def main() -> int:
             close_fds=True,
         )
 
-    pid_path.write_text(str(process.pid), encoding="utf-8")
+    config.pid_file.write_text(str(process.pid), encoding="utf-8")
     return 0
 
 
