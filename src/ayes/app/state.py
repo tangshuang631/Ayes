@@ -260,6 +260,8 @@ class AppState:
         last_ocr_quality = None
         last_vision_summary = None
         last_vision_decision = None
+        last_capture_target = None
+        last_capture_status = None
         resolved_task_id = self.current_task_id or self.last_task_id
         if self.current_runner is not None:
             for event in self.current_runner.events:
@@ -301,6 +303,22 @@ class AppState:
                         "provider": attrs.get("vision_provider") or "",
                         "timestamp": getattr(event, "timestamp", None),
                     }
+            for event in reversed(self.current_runner.events):
+                if last_capture_status is None:
+                    last_capture_status = getattr(getattr(event, "observability", None), "capture_status", None)
+                target = getattr(event, "target", None)
+                if last_capture_target is None and target is not None:
+                    if any(
+                        [
+                            getattr(target, "window_id", None),
+                            getattr(target, "window_title", ""),
+                            getattr(target, "process_name", ""),
+                            getattr(target, "screen_id", None),
+                        ]
+                    ):
+                        last_capture_target = asdict(target)
+                if last_capture_status is not None and last_capture_target is not None:
+                    break
         health_summary = self._build_health_summary(task_id=resolved_task_id)
         return {
             "has_runner": self.current_runner is not None,
@@ -322,6 +340,8 @@ class AppState:
             "last_ocr_quality": last_ocr_quality,
             "last_vision_summary": last_vision_summary,
             "last_vision_decision": last_vision_decision,
+            "last_capture_target": last_capture_target,
+            "last_capture_status": last_capture_status,
             "health_summary": health_summary,
             "last_error": self.last_error,
             "log_count": len(self.log_store.list_entries()),

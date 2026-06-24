@@ -219,7 +219,7 @@ class WatchRunner:
             event_type="capture_status",
             priority="medium",
             confidence=1.0,
-            target=EventTarget(type=self.spec.target.type, process_name=self.spec.target.process_name, screen_id=self.spec.target.screen_id),
+            target=self._default_event_target(),
             observability=Observability(
                 has_metadata=True,
                 has_pixels=False,
@@ -239,7 +239,7 @@ class WatchRunner:
                     status="window_not_found",
                     message=f"窗口 {self.spec.target.window_id} 当前未发现，无法继续采集",
                 )
-            return self.capture.capture_window(candidate, timestamp=now)
+            return self._capture_window_candidate(candidate, now=now)
         if self.spec.target.type == "process":
             candidate = self.discovery.get_primary_window_for_process(
                 process_name=self.spec.target.process_name,
@@ -253,8 +253,59 @@ class WatchRunner:
                     status="process_window_not_found",
                     message=f"进程 {process_label} 当前未找到可采集业务窗口",
                 )
-            return self.capture.capture_window(candidate, timestamp=now)
-        return self.capture.capture_main_display(timestamp=now)
+            return self._capture_window_candidate(candidate, now=now)
+        result = self.capture.capture_main_display(timestamp=now)
+        if result.ok and result.frame is not None:
+            frame = replace(
+                result.frame,
+                metadata={
+                    **(result.frame.metadata or {}),
+                    "screen_id": self.spec.target.screen_id,
+                },
+            )
+            return replace(result, frame=frame)
+        return result
+
+    def _capture_window_candidate(self, candidate, *, now: float) -> CaptureResult:
+        result = self.capture.capture_window(candidate, timestamp=now)
+        if not result.ok or result.frame is None:
+            return result
+        frame = replace(
+            result.frame,
+            metadata={
+                **(result.frame.metadata or {}),
+                "process_id": candidate.process_id,
+                "process_name": candidate.process_name,
+                "window_id": candidate.window_id,
+                "window_title": candidate.title,
+                "window_state": "onscreen" if candidate.is_onscreen else "offscreen",
+                "screen_id": self.spec.target.screen_id,
+            },
+        )
+        return replace(result, frame=frame)
+
+    def _default_event_target(self) -> EventTarget:
+        return EventTarget(
+            type=self.spec.target.type,
+            process_name=self.spec.target.process_name,
+            process_id=self.spec.target.process_id,
+            window_id=self.spec.target.window_id,
+            screen_id=self.spec.target.screen_id,
+        )
+
+    def _event_target_from_frame(self, frame: Optional[CaptureFrame]) -> EventTarget:
+        if frame is None:
+            return self._default_event_target()
+        metadata = frame.metadata or {}
+        return EventTarget(
+            type=self.spec.target.type,
+            process_name=metadata.get("process_name") or self.spec.target.process_name,
+            process_id=metadata.get("process_id") or self.spec.target.process_id,
+            window_id=metadata.get("window_id") or self.spec.target.window_id,
+            screen_id=metadata.get("screen_id") or self.spec.target.screen_id,
+            window_title=str(metadata.get("window_title") or ""),
+            window_state=str(metadata.get("window_state") or "unknown"),
+        )
 
     def _build_visual_event(self, now: float, frame: CaptureFrame, event_type: str, summary: str):
         return build_event(
@@ -266,7 +317,7 @@ class WatchRunner:
             event_type=event_type,
             priority="low",
             confidence=0.9,
-            target=EventTarget(type=self.spec.target.type, process_name=self.spec.target.process_name, screen_id=self.spec.target.screen_id),
+            target=self._event_target_from_frame(frame),
             observability=Observability(
                 has_metadata=True,
                 has_pixels=True,
@@ -298,7 +349,7 @@ class WatchRunner:
             event_type="text_change",
             priority="medium",
             confidence=0.88 if text else 0.55,
-            target=EventTarget(type=self.spec.target.type, process_name=self.spec.target.process_name, screen_id=self.spec.target.screen_id),
+            target=self._event_target_from_frame(target_frame or frame),
             observability=Observability(
                 has_metadata=True,
                 has_pixels=True,
@@ -499,7 +550,7 @@ class WatchRunner:
             event_type=event_type,
             priority="medium",
             confidence=0.82 if triggered else 0.76,
-            target=EventTarget(type=self.spec.target.type, process_name=self.spec.target.process_name, screen_id=self.spec.target.screen_id),
+            target=self._event_target_from_frame(frame),
             observability=Observability(True, True, True, True, "ok"),
             summary=summary,
         )
@@ -568,7 +619,7 @@ class WatchRunner:
             event_type="visual_summary",
             priority="medium",
             confidence=0.68,
-            target=EventTarget(type=self.spec.target.type, process_name=self.spec.target.process_name, screen_id=self.spec.target.screen_id),
+            target=self._event_target_from_frame(target_frame),
             observability=Observability(
                 has_metadata=True,
                 has_pixels=True,
@@ -884,7 +935,7 @@ class WatchRunner:
                 event_type="refresh_click",
                 priority="low",
                 confidence=1.0,
-                target=EventTarget(type=self.spec.target.type, process_name=self.spec.target.process_name, screen_id=self.spec.target.screen_id),
+                target=self._default_event_target(),
                 observability=Observability(
                     has_metadata=True,
                     has_pixels=False,
@@ -903,7 +954,7 @@ class WatchRunner:
             event_type="refresh_click_skipped",
             priority="low",
             confidence=1.0,
-            target=EventTarget(type=self.spec.target.type, process_name=self.spec.target.process_name, screen_id=self.spec.target.screen_id),
+            target=self._default_event_target(),
             observability=Observability(
                 has_metadata=True,
                 has_pixels=False,

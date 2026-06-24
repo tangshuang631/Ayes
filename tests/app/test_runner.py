@@ -180,6 +180,10 @@ def test_runner_process_target_captures_primary_process_window() -> None:
     events = runner.run_once(now=100.0)
 
     assert len(events) == 1
+    assert events[0].target.type == "process"
+    assert events[0].target.process_name == "TargetApp"
+    assert events[0].target.window_id == 42
+    assert events[0].target.window_title == "商品页"
     assert runner.capture.window_calls == [42]
     assert runner.capture.main_display_calls == 0
 

@@ -77,9 +77,33 @@ function buildLocationSummary(item) {
   return "";
 }
 
+function formatEventTarget(target) {
+  if (!target) {
+    return "-";
+  }
+  if (target.type === "screen") {
+    return `screen_id=${target.screen_id || 1}`;
+  }
+  const parts = [];
+  if (target.process_name) {
+    parts.push(target.process_name);
+  }
+  if (target.window_title) {
+    parts.push(target.window_title);
+  }
+  if (target.window_id !== null && target.window_id !== undefined) {
+    parts.push(`window_id=${target.window_id}`);
+  }
+  if (target.window_state && target.window_state !== "unknown") {
+    parts.push(target.window_state === "onscreen" ? "onscreen" : target.window_state);
+  }
+  return parts.join(" / ") || target.type || "-";
+}
+
 function buildEventDetailLines(item) {
   const lines = [];
   lines.push(`${formatTimestamp(item.timestamp)} | ${item.source || "-"} | ${item.priority || "-"}`);
+  lines.push(`目标: ${formatEventTarget(item.target)}`);
   lines.push(buildRegionMeta(item));
   if (buildLocationSummary(item)) {
     lines.push(`位置: ${buildLocationSummary(item)}`);
@@ -900,6 +924,8 @@ async function refreshStatus() {
   const ocrQuality = status.last_ocr_quality || {};
   const visionDecision = status.last_vision_decision || {};
   const visionSummary = status.last_vision_summary || {};
+  const captureTarget = status.last_capture_target || null;
+  const captureStatus = status.last_capture_status || "暂无";
   const ocrSummaryText = ocrQuality.provider
     ? `${ocrQuality.provider} / 字符 ${ocrQuality.char_count ?? 0} / 块 ${ocrQuality.block_count ?? 0}${ocrQuality.sparse ? " / 稀疏" : ""}`
     : "暂无";
@@ -912,8 +938,10 @@ async function refreshStatus() {
   summary.innerHTML = `
     <div class="status-chip"><div class="status-chip-label">当前任务</div><div class="status-chip-value">${status.task_id || status.last_task_id || "-"}</div></div>
     <div class="status-chip"><div class="status-chip-label">运行状态</div><div class="status-chip-value">${status.is_running ? "持续监控中" : status.has_runner ? "已装载未运行" : "未装载"}</div></div>
+    <div class="status-chip"><div class="status-chip-label">当前采集目标</div><div class="status-chip-value">${formatEventTarget(captureTarget)}</div></div>
     <div class="status-chip"><div class="status-chip-label">最近命中 / 告警</div><div class="status-chip-value">${status.match_count ?? 0} / ${status.alert_count ?? 0}</div></div>
     <div class="status-chip"><div class="status-chip-label">前端连接 / 后台策略</div><div class="status-chip-value">${status.connected_frontends ?? 0} / ${status.can_shutdown_service ? "可退出" : "保持运行"}</div></div>
+    <div class="status-chip"><div class="status-chip-label">最近采集状态</div><div class="status-chip-value">${captureStatus}</div></div>
     <div class="status-chip"><div class="status-chip-label">最近 OCR 质量</div><div class="status-chip-value">${ocrSummaryText}</div></div>
     <div class="status-chip"><div class="status-chip-label">最近视觉决策</div><div class="status-chip-value">${visionDecisionText}</div></div>
     <div class="status-chip"><div class="status-chip-label">最近视觉结果</div><div class="status-chip-value">${visionSummaryText}</div></div>
