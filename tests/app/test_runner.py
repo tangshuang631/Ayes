@@ -2,6 +2,7 @@ from ayes.app.runner import WatchRunner
 from ayes.capture.models import CaptureFrame, CaptureResult
 from ayes.config.models import WatchSpec
 from ayes.ocr.models import OCRResult, OCRTextBlock
+from ayes.targets.models import Bounds, ObservabilityStatus, WindowCandidate
 from ayes.vision.models import VisionResult
 from PIL import Image
 from io import BytesIO
@@ -19,9 +20,12 @@ def make_png_bytes(color: str) -> bytes:
 class FakeCapture:
     def __init__(self) -> None:
         self.calls = 0
+        self.main_display_calls = 0
+        self.window_calls = []
 
     def capture_main_display(self, *, timestamp: float) -> CaptureResult:
         self.calls += 1
+        self.main_display_calls += 1
         payload = make_png_bytes("white") if self.calls == 1 else make_png_bytes("black")
         return CaptureResult(
             ok=True,
@@ -36,6 +40,52 @@ class FakeCapture:
                 image_bytes=payload,
             ),
         )
+
+    def capture_window(self, candidate: WindowCandidate, *, timestamp: float) -> CaptureResult:
+        self.calls += 1
+        self.window_calls.append(candidate.window_id)
+        return CaptureResult(
+            ok=True,
+            status="ok",
+            frame=CaptureFrame(
+                frame_id=f"window_{candidate.window_id}_{self.calls}",
+                timestamp=timestamp,
+                target_type="window",
+                target_id=str(candidate.window_id),
+                width=max(candidate.bounds.width, 2),
+                height=max(candidate.bounds.height, 2),
+                image_bytes=make_png_bytes("blue"),
+            ),
+        )
+
+
+class FakeDiscovery:
+    def __init__(self, *, window_by_id=None, process_window=None) -> None:
+        self.window_by_id = window_by_id
+        self.process_window = process_window
+
+    def get_window_by_id(self, window_id: int):
+        if self.window_by_id is not None and self.window_by_id.window_id == window_id:
+            return self.window_by_id
+        return None
+
+    def get_primary_window_for_process(self, *, process_name=None, process_id=None, only_observable=True):
+        return self.process_window
+
+
+def make_window_candidate(*, window_id: int, process_id: int = 100, process_name: str = "TargetApp") -> WindowCandidate:
+    return WindowCandidate(
+        window_id=window_id,
+        process_id=process_id,
+        process_name=process_name,
+        title="商品页",
+        bounds=Bounds(x=10, y=10, width=1280, height=720),
+        layer=0,
+        is_onscreen=True,
+        observability=ObservabilityStatus(code="observable", label="可观测", has_pixels=True, is_recommended=True),
+        is_business_candidate=True,
+        metadata={},
+    )
 
 
 class FakeOCR:
@@ -104,6 +154,93 @@ def test_runner_writes_ocr_event_and_supports_recent_query() -> None:
     result = runner.ask_recent(minutes=5, keyword="库存", now=102.0)
     assert len(result.matched_events) >= 1
     assert "库存" in result.answer
+
+
+def test_runner_process_target_captures_primary_process_window() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "TargetApp"},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = FakeCapture()
+    runner.discovery = FakeDiscovery(process_window=make_window_candidate(window_id=42))
+    runner.ocr = FakeOCR()
+
+    events = runner.run_once(now=100.0)
+
+    assert len(events) == 1
+    assert runner.capture.window_calls == [42]
+    assert runner.capture.main_display_calls == 0
+
+
+def test_runner_process_target_emits_capture_status_when_process_window_missing() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "TargetApp"},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = FakeCapture()
+    runner.discovery = FakeDiscovery(process_window=None)
+    runner.ocr = FakeOCR()
+
+    events = runner.run_once(now=100.0)
+
+    assert len(events) == 1
+    assert events[0].event_type == "capture_status"
+    assert events[0].observability.capture_status == "process_window_not_found"
+    assert runner.capture.main_display_calls == 0
+
+
+def test_runner_process_target_writes_warning_log_when_process_window_missing() -> None:
+    logs = []
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "TargetApp"},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec, log_sink=logs.append)
+    runner.capture = FakeCapture()
+    runner.discovery = FakeDiscovery(process_window=None)
+    runner.ocr = FakeOCR()
+
+    runner.run_once(now=100.0)
+
+    assert logs
+    assert logs[-1]["category"] == "capture"
+    assert logs[-1]["level"] == "warning"
+    assert "未找到可采集业务窗口" in logs[-1]["message"]
 
 
 def test_runner_emits_refresh_click_events_when_action_enabled() -> None:

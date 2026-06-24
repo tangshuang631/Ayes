@@ -208,6 +208,10 @@ v1 正式支持：
 - 默认 `include_all_windows = true`
 - 默认 `only_observable_windows = true`
 - 无画面或无业务价值窗口不进入主监控链路
+- v1 运行时按采样 tick 动态解析该进程下的“代表业务窗口”，并以该窗口画面作为当前采集源
+- `process` 目标不表示“同时拼接采集该进程全部窗口”
+- 如果当前没有找到满足约束的可采集业务窗口，必须输出显式 `capture_status`，不能静默退回整屏截图
+- 当 `target.regions[].coordinate_space = target` 时，ROI 坐标以当前 tick 解析出的代表业务窗口画面为参照
 
 ### 4.2 window
 
@@ -217,6 +221,7 @@ v1 正式支持：
 
 - 必须提供 `window_id`
 - 适合用户从预览列表点击绑定
+- 如果该 `window_id` 当前无法再被枚举或无法继续绑定，必须输出显式 `capture_status`，不能静默退回整屏截图
 
 ### 4.3 screen
 

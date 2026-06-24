@@ -31,6 +31,38 @@ class MacOSWindowDiscovery:
                 return candidate
         return None
 
+    def list_windows_for_process(
+        self,
+        *,
+        process_name: Optional[str] = None,
+        process_id: Optional[int] = None,
+        only_observable: bool = True,
+    ) -> List[WindowCandidate]:
+        candidates = [
+            item
+            for item in self.list_windows()
+            if self._matches_process(item, process_name=process_name, process_id=process_id)
+        ]
+        if only_observable:
+            candidates = [item for item in candidates if item.observability.is_recommended]
+        return candidates
+
+    def get_primary_window_for_process(
+        self,
+        *,
+        process_name: Optional[str] = None,
+        process_id: Optional[int] = None,
+        only_observable: bool = True,
+    ) -> Optional[WindowCandidate]:
+        candidates = self.list_windows_for_process(
+            process_name=process_name,
+            process_id=process_id,
+            only_observable=only_observable,
+        )
+        if not candidates:
+            return None
+        return max(candidates, key=self._process_window_rank)
+
     def _convert_raw_windows(self, raw_windows: Iterable[Dict[str, Any]]) -> List[WindowCandidate]:
         candidates: List[WindowCandidate] = []
         for item in raw_windows:
@@ -85,4 +117,28 @@ class MacOSWindowDiscovery:
                 "memory_usage": raw.get("kCGWindowMemoryUsage"),
                 "sharing_state": raw.get("kCGWindowSharingState"),
             },
+        )
+
+    def _matches_process(
+        self,
+        candidate: WindowCandidate,
+        *,
+        process_name: Optional[str],
+        process_id: Optional[int],
+    ) -> bool:
+        if process_id is not None and candidate.process_id != process_id:
+            return False
+        if process_name is not None and candidate.process_name.casefold() != process_name.casefold():
+            return False
+        return True
+
+    def _process_window_rank(self, candidate: WindowCandidate) -> tuple:
+        return (
+            int(candidate.is_business_candidate),
+            int(candidate.observability.is_recommended),
+            int(candidate.observability.has_pixels),
+            int(candidate.is_onscreen),
+            int(bool(candidate.title.strip())),
+            -candidate.layer,
+            candidate.bounds.area,
         )

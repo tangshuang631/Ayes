@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from uuid import uuid4
 
 from ayes.api.server import app, state
 from ayes.config.models import WatchSpec
@@ -8,6 +9,7 @@ client = TestClient(app)
 
 
 def test_long_term_timeline_endpoint_returns_items_key() -> None:
+    task_id = f"task_long_term_test_{uuid4().hex}"
     spec = WatchSpec.from_dict(
         {
             "spec_version": "1.0",
@@ -16,15 +18,16 @@ def test_long_term_timeline_endpoint_returns_items_key() -> None:
             "watch_intent": {"enabled": False},
         }
     )
-    runner = state.set_runner(spec, task_id="task_long_term_test")
+    runner = state.set_runner(spec, task_id=task_id)
     runner.run_once()
     state.clear_runner()
-    response = client.get("/api/timeline/long-term", params={"task_id": "task_long_term_test"})
+    response = client.get("/api/timeline/long-term", params={"task_id": task_id})
     assert response.status_code == 200
     assert "items" in response.json()
 
 
 def test_long_term_timeline_endpoint_supports_hours_scope() -> None:
+    task_id = f"task_long_term_hours_{uuid4().hex}"
     spec = WatchSpec.from_dict(
         {
             "spec_version": "1.0",
@@ -33,10 +36,10 @@ def test_long_term_timeline_endpoint_supports_hours_scope() -> None:
             "watch_intent": {"enabled": False},
         }
     )
-    runner = state.set_runner(spec, task_id="task_long_term_hours")
+    runner = state.set_runner(spec, task_id=task_id)
     runner.run_once()
     state.clear_runner()
-    response = client.get("/api/timeline/long-term", params={"task_id": "task_long_term_hours", "hours": 24})
+    response = client.get("/api/timeline/long-term", params={"task_id": task_id, "hours": 24})
     assert response.status_code == 200
     payload = response.json()
     assert payload["hours"] == 24
@@ -44,6 +47,7 @@ def test_long_term_timeline_endpoint_supports_hours_scope() -> None:
 
 
 def test_clear_runner_flushes_only_pending_long_term_events() -> None:
+    task_id = f"task_long_term_flush_{uuid4().hex}"
     spec = WatchSpec.from_dict(
         {
             "spec_version": "1.0",
@@ -60,17 +64,18 @@ def test_clear_runner_flushes_only_pending_long_term_events() -> None:
             },
         }
     )
-    runner = state.set_runner(spec, task_id="task_long_term_flush")
+    runner = state.set_runner(spec, task_id=task_id)
     runner.run_once(now=100.0)
     state._flush_long_term_summary(force=False)
-    first_items = state.sqlite_store.list_long_term_summaries(task_id="task_long_term_flush", limit=20)
+    first_items = state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
     assert len(first_items) == 1
     state.clear_runner()
-    second_items = state.sqlite_store.list_long_term_summaries(task_id="task_long_term_flush", limit=20)
+    second_items = state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
     assert len(second_items) == 1
 
 
 def test_periodic_long_term_summary_uses_summary_interval_minutes() -> None:
+    task_id = f"task_long_term_periodic_{uuid4().hex}"
     spec = WatchSpec.from_dict(
         {
             "spec_version": "1.0",
@@ -87,11 +92,11 @@ def test_periodic_long_term_summary_uses_summary_interval_minutes() -> None:
             },
         }
     )
-    runner = state.set_runner(spec, task_id="task_long_term_periodic")
+    runner = state.set_runner(spec, task_id=task_id)
     runner.run_once(now=100.0)
     state._flush_long_term_summary(force=False)
     runner.run_once(now=170.0)
     state._flush_long_term_summary(force=False)
-    items = state.sqlite_store.list_long_term_summaries(task_id="task_long_term_periodic", limit=20)
+    items = state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
     assert len(items) >= 2
     state.clear_runner()
