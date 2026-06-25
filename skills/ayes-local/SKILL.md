@@ -28,10 +28,10 @@ Use this skill when the request is about:
 1. 先读 `references/installation.md`，确认本机已安装 `ayes-local` 和 `ayes-agent-local` 包装脚本。
 2. 先用 `ayes-agent-local ensure-service` 或 `ayes-agent-local status` 确认本地服务可达。
 2. 如果用户是在追问最近情况：
-   - 先读 `ayes-agent-local screenshot`
-   - 再读 `ayes-agent-local recent`
-   - 如果问题和提醒有关，补读 `ayes-agent-local alerts`
-   - 必要时补 `ayes-agent-local memory-items` 和 `ayes-agent-local logs`
+   - 先读 `ayes-agent-local observe-live --minutes 5 --limit 20`
+   - 优先使用返回的 `status / screenshot / recent_events / memory_items / alerts / logs / evidence_status / agent_hints`
+   - 如果问题和提醒有关，再按需补读 `ayes-agent-local alerts`
+   - 如果需要更细证据，再补 `ayes-agent-local memory-items`、`ayes-agent-local recent` 和 `ayes-agent-local logs`
    - 最后用 `ayes-agent-local ask --question "..."` 组织回答
 3. 如果用户要求开始或恢复监控：
    - 如果用户给的是自然语言任务，先用 `ayes-agent-local plan-spec ...`
@@ -63,6 +63,7 @@ ayes-agent-local contracts
 ayes-agent-local status
 ayes-agent-local plan-spec --task-id task_web --prompt "帮我监控 Safari 里的商品价格低于 299 时提醒我" --target-type process --process-name Safari
 ayes-agent-local confirm-plan --plan-file /tmp/task_web.plan.json --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"
+ayes-agent-local observe-live --task-id task_web --minutes 5 --limit 20
 ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
 ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
 ayes-agent-local screenshot --task-id task_web
@@ -84,6 +85,7 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 
 - `/api/agent/contracts`
 - `/api/watch/status`
+- `/api/agent/observe-live`
 - `/api/watch/task/{task_id}`
 - `/api/timeline/recent`
 - `/api/alerts/recent`
@@ -107,6 +109,7 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 
 如果用户问的是“有没有通知到我”或“为什么没通知”，不要只看普通事件，必须优先结合：
 
+- `observe-live` 中的 `alerts / logs / evidence_status`
 - 最近告警审计结果
 - 近期日志
 - 相关截图与时间范围
@@ -118,6 +121,14 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 - 短期 / 长期记忆
 - 按需视觉增强
 - 对话式任务草案与配置确认流
+
+实时观察时的优先证据顺序：
+
+1. `observe-live.evidence_status` 判断当前证据是否可用
+2. `observe-live.screenshot` 判断最近截图、目标和 ROI
+3. `observe-live.recent_events` 读取最近事件时间线
+4. `observe-live.memory_items` 读取短期记忆明细
+5. `observe-live.alerts / logs` 排查提醒和后台错误
 
 补问时的顺序要求：
 

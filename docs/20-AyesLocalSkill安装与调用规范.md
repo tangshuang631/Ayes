@@ -163,6 +163,7 @@
 - `plan-spec`
 - `confirm-plan`
 - `task`
+- `observe-live`
 - `recent`
 - `alerts`
 - `ask`
@@ -187,7 +188,8 @@
 - `plan-spec`：把自然语言和已知目标转成任务草案、缺失项与确认摘要
 - `confirm-plan`：在补齐 webhook / 目标 / ROI / 点击点后确认装载最终任务
 - `task`：读取任务配置或持久化任务信息
-- `recent` / `ask` / `screenshot`：构成“随问随答”的最小闭环
+- `observe-live`：聚合当前状态、截图、近期事件、短期记忆、告警、日志和证据质量，是 agent 追问屏幕现状时的优先入口
+- `recent` / `ask` / `screenshot`：构成细颗粒追问和回退闭环
 - `alerts`：读取最近告警审计结果，回答“是否通知过 / 为什么没通知”
 - `control`：读取或变更后台运行状态，例如暂停全部任务、恢复全部任务、打开数据目录提示
 - `region-bind-contract`：输出正式 `region-bind` 输入输出格式说明，便于 agent 或外部工具按同一合同产出绑定结果

@@ -200,6 +200,154 @@ def build_memory_items_payload(*, items: List[Dict[str, Any]], task_id: str, min
     }
 
 
+def build_observe_live_payload(
+    *,
+    task_id: str,
+    minutes: int,
+    limit: int,
+    status: Dict[str, Any],
+    screenshot: Dict[str, Any],
+    recent_events: List[Dict[str, Any]],
+    memory_items: List[Dict[str, Any]],
+    alerts: List[Dict[str, Any]],
+    logs: List[Dict[str, Any]],
+    observed_at: float,
+) -> Dict[str, Any]:
+    decorated_recent_events = [_decorate_live_event(item) for item in recent_events[:limit]]
+    decorated_memory_items = [_decorate_live_event(item) for item in memory_items[:limit]]
+    decorated_alerts = [_decorate_live_event(item) for item in alerts[:limit]]
+    trimmed_logs = logs[:limit]
+    latest_event_at = _latest_timestamp(decorated_recent_events)
+    latest_memory_at = _latest_timestamp(decorated_memory_items)
+    latest_alert_at = _latest_timestamp(decorated_alerts)
+    latest_log_at = _latest_timestamp(trimmed_logs)
+    screenshot_path = screenshot.get("path")
+    evidence_status = _build_live_evidence_status(
+        status=status,
+        screenshot=screenshot,
+        recent_events=decorated_recent_events,
+        memory_items=decorated_memory_items,
+        observed_at=observed_at,
+    )
+    return {
+        "schema_version": "1.0",
+        "task_id": task_id,
+        "observed_at": observed_at,
+        "time_scope": {
+            "minutes": minutes,
+            "from": observed_at - (minutes * 60),
+            "to": observed_at,
+        },
+        "status": status,
+        "screenshot": {
+            **screenshot,
+            "available": bool(screenshot_path),
+        },
+        "recent_events": {
+            "items": decorated_recent_events,
+            "count": len(decorated_recent_events),
+            "limit": limit,
+            "latest_timestamp": latest_event_at,
+        },
+        "memory_items": {
+            "items": decorated_memory_items,
+            "count": len(decorated_memory_items),
+            "limit": limit,
+            "latest_timestamp": latest_memory_at,
+        },
+        "alerts": {
+            "items": decorated_alerts,
+            "count": len(decorated_alerts),
+            "limit": limit,
+            "latest_timestamp": latest_alert_at,
+        },
+        "logs": {
+            "items": trimmed_logs,
+            "count": len(trimmed_logs),
+            "limit": limit,
+            "latest_timestamp": latest_log_at,
+            "error_count": sum(1 for item in trimmed_logs if str(item.get("level") or "").lower() == "error"),
+            "warn_count": sum(1 for item in trimmed_logs if str(item.get("level") or "").lower() in {"warn", "warning"}),
+        },
+        "evidence_status": evidence_status,
+        "agent_hints": {
+            "summary": evidence_status["summary"],
+            "suggested_next_steps": _build_live_next_steps(status=status, evidence_status=evidence_status),
+        },
+    }
+
+
+def _decorate_live_event(item: Dict[str, Any]) -> Dict[str, Any]:
+    event = dict(item)
+    event["location_summary"] = describe_location_summary(event)
+    event["preview_overlay"] = build_preview_overlay(event)
+    event["structured_observation"] = extract_structured_observation(event)
+    return event
+
+
+def _latest_timestamp(items: List[Dict[str, Any]]) -> Any:
+    timestamps = [item.get("timestamp") for item in items if item.get("timestamp") is not None]
+    if not timestamps:
+        return None
+    return max(timestamps)
+
+
+def _build_live_evidence_status(
+    *,
+    status: Dict[str, Any],
+    screenshot: Dict[str, Any],
+    recent_events: List[Dict[str, Any]],
+    memory_items: List[Dict[str, Any]],
+    observed_at: float,
+) -> Dict[str, Any]:
+    has_runner = bool(status.get("has_runner"))
+    screenshot_available = bool(screenshot.get("path"))
+    recent_count = len(recent_events)
+    memory_count = len(memory_items)
+    last_run_at = status.get("last_run_at")
+    seconds_since_run = None
+    if last_run_at is not None:
+        try:
+            seconds_since_run = round(observed_at - float(last_run_at), 2)
+        except (TypeError, ValueError):
+            seconds_since_run = None
+    if not has_runner:
+        quality = "no_task"
+        summary = "当前没有已装载监控任务。"
+    elif not screenshot_available and recent_count == 0:
+        quality = "no_evidence"
+        summary = "当前还没有可用截图或近期事件。"
+    elif recent_count == 0 and memory_count == 0:
+        quality = "sparse"
+        summary = "当前有监控任务，但最近时间窗内证据较少。"
+    else:
+        quality = "ready"
+        summary = "当前已有可供 agent 回读的截图、事件或记忆证据。"
+    return {
+        "quality": quality,
+        "summary": summary,
+        "has_runner": has_runner,
+        "is_running": bool(status.get("is_running")),
+        "screenshot_available": screenshot_available,
+        "recent_event_count": recent_count,
+        "memory_item_count": memory_count,
+        "seconds_since_run": seconds_since_run,
+        "activity_status": status.get("activity_status"),
+    }
+
+
+def _build_live_next_steps(*, status: Dict[str, Any], evidence_status: Dict[str, Any]) -> List[str]:
+    if not evidence_status["has_runner"]:
+        return ["先通过 plan-spec/confirm-plan 或工作台装载监控任务。"]
+    if not evidence_status["is_running"]:
+        return ["如需持续监控，调用 start 恢复后台采样。"]
+    if evidence_status["quality"] in {"no_evidence", "sparse"}:
+        return ["执行 run-once 或检查目标预览、ROI、OCR 可观测性。"]
+    if status.get("last_error"):
+        return ["读取 logs 排查最近一次后台错误。"]
+    return ["可以结合 ask/recent/memory-items 对最近时间窗继续追问。"]
+
+
 def _format_time_text(timestamp: Any) -> str:
     if timestamp in {None, ""}:
         return ""
@@ -259,6 +407,12 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "method": "GET",
             "path": "/api/watch/status",
             "response_keys": ["has_runner", "is_running", "task_id", "last_task_id", "target", "mode", "event_count"],
+        },
+        "agent.observe_live": {
+            "method": "GET",
+            "path": "/api/agent/observe-live",
+            "query": {"task_id": "可选", "minutes": "1-15", "limit": "1-100"},
+            "response_keys": ["schema_version", "task_id", "observed_at", "time_scope", "status", "screenshot", "recent_events", "memory_items", "alerts", "logs", "evidence_status", "agent_hints"],
         },
         "watch.start": {
             "method": "POST",

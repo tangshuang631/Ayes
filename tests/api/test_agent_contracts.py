@@ -11,6 +11,10 @@ def test_agent_contracts_endpoint_exposes_expected_routes() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert "watch.status" in payload
+    assert "agent.observe_live" in payload
+    assert payload["agent.observe_live"]["path"] == "/api/agent/observe-live"
+    assert "evidence_status" in payload["agent.observe_live"]["response_keys"]
+    assert "agent_hints" in payload["agent.observe_live"]["response_keys"]
     assert "watch.start" in payload
     assert "watch.plan" in payload
     assert "watch.confirm_plan" in payload

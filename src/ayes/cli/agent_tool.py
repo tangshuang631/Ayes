@@ -252,6 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
     recent_parser.add_argument("--minutes", type=int, default=5)
     recent_parser.add_argument("--limit", type=int, default=20)
 
+    observe_live_parser = subparsers.add_parser("observe-live", help="读取面向 agent 的实时屏幕观察上下文")
+    observe_live_parser.add_argument("--task-id", default=None)
+    observe_live_parser.add_argument("--minutes", type=int, default=5)
+    observe_live_parser.add_argument("--limit", type=int, default=20)
+
     alerts_parser = subparsers.add_parser("alerts", help="读取最近告警审计结果")
     alerts_parser.add_argument("--task-id", default=None)
     alerts_parser.add_argument("--minutes", type=int, default=15)
@@ -331,6 +336,9 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
         return _request_json(base_url, f"/api/watch/task/{args.task_id}")
     if args.command == "recent":
         path = _build_query_path("/api/timeline/recent", task_id=args.task_id, minutes=args.minutes, limit=args.limit)
+        return _request_json(base_url, path)
+    if args.command == "observe-live":
+        path = _build_query_path("/api/agent/observe-live", task_id=args.task_id, minutes=args.minutes, limit=args.limit)
         return _request_json(base_url, path)
     if args.command == "alerts":
         path = _build_query_path("/api/alerts/recent", task_id=args.task_id, minutes=args.minutes, limit=args.limit)

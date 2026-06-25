@@ -48,6 +48,7 @@
 - `/api/watch/status`
 - `/api/watch/task/{task_id}`
 - `/api/status`
+- `/api/agent/observe-live`
 - `/api/screenshot`
 - `/api/timeline/recent`
 - `/api/timeline/long-term`
@@ -75,7 +76,8 @@
 4. 智能体复述 `confirmation_summary`
 5. `confirm-plan` 确认并装载最终任务
 5. `start`
-6. `recent / screenshot / ask / alerts / logs` 回读运行证据
+6. `observe-live` 回读实时运行上下文
+7. `recent / screenshot / ask / alerts / logs` 按问题深挖细节
 
 ## 2.1 当前阶段补充要求
 

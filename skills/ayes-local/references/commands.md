@@ -14,6 +14,7 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local
 ayes-agent-local ensure-service
 ayes-agent-local contracts
 ayes-agent-local status
+ayes-agent-local observe-live --minutes 5 --limit 20
 ```
 
 用途：
@@ -21,6 +22,7 @@ ayes-agent-local status
 - `ensure-service`：确保本地服务可达，默认地址为 `http://127.0.0.1:8770`
 - `contracts`：查看当前 HTTP 接口契约
 - `status`：查看当前任务、运行状态、最近健康摘要
+- `observe-live`：读取面向 agent 的实时观察上下文，是追问屏幕现状时的优先入口
 
 ## 2. 目标与任务
 
@@ -42,6 +44,7 @@ ayes-agent-local task --task-id task_web
 ## 3. 近期证据链路
 
 ```bash
+ayes-agent-local observe-live --task-id task_web --minutes 5 --limit 20
 ayes-agent-local screenshot --task-id task_web
 ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
 ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
@@ -58,6 +61,19 @@ ayes-agent-local run-once
 - `memory-items`：读取短期记忆事件明细
 - `logs`：读取近期日志
 - `run-once`：执行一次即时采样，适合安装后 smoke 或人工核验
+
+`observe-live` 聚合返回：
+
+- `status`：当前任务、目标、运行状态、健康摘要
+- `screenshot`：最近截图、ROI、捕获状态
+- `recent_events`：最近时间线事件
+- `memory_items`：短期记忆明细
+- `alerts`：告警审计事件
+- `logs`：近期后台日志
+- `evidence_status`：证据是否足够 agent 回答
+- `agent_hints`：下一步建议，例如启动监控、执行一次采样或检查 ROI/OCR
+
+追问“现在屏幕怎样”“最近发生了什么”“有没有通知出去”时，应先用 `observe-live`，再按问题补细颗粒命令。
 
 ## 4. 提问
 

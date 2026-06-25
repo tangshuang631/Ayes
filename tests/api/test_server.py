@@ -90,6 +90,47 @@ def test_status_endpoint_returns_basic_state() -> None:
     assert "health_summary" in payload
 
 
+def test_observe_live_endpoint_returns_agent_ready_context() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_observe_live",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1000,
+                "ocr_interval_ms": 1000,
+                "change_detection_interval_ms": 1000,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": True,
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post("/api/watch/run-once")
+
+    response = client.get("/api/agent/observe-live", params={"task_id": "task_observe_live", "minutes": 5, "limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schema_version"] == "1.0"
+    assert payload["task_id"] == "task_observe_live"
+    assert payload["time_scope"]["minutes"] == 5
+    assert "observed_at" in payload
+    assert "status" in payload
+    assert "screenshot" in payload
+    assert "recent_events" in payload
+    assert "memory_items" in payload
+    assert "alerts" in payload
+    assert "logs" in payload
+    assert "evidence_status" in payload
+    assert "agent_hints" in payload
+    assert isinstance(payload["agent_hints"]["suggested_next_steps"], list)
+    assert payload["recent_events"]["limit"] == 10
+    assert payload["memory_items"]["limit"] == 10
+    assert payload["status"]["task_id"] == "task_observe_live"
+
+
 def test_status_endpoint_includes_health_summary_diagnostics() -> None:
     client.post("/api/watch/load-screen")
     client.post("/api/watch/run-once")

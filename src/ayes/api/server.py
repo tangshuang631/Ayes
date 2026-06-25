@@ -15,6 +15,7 @@ from ayes.app.state import AppState
 from ayes.api.contracts import (
     build_agent_contract_payload,
     build_memory_items_payload,
+    build_observe_live_payload,
     build_preview_overlay,
     build_query_result_payload,
     describe_location_summary,
@@ -71,6 +72,38 @@ def _decorate_event_payload(item: dict) -> dict:
     payload["preview_overlay"] = build_preview_overlay(payload)
     payload["structured_observation"] = extract_structured_observation(payload)
     return payload
+
+
+def _build_screenshot_payload() -> dict:
+    if not state.last_screenshot_path:
+        return {"path": None, "regions": [], "target": None, "capture_target": None, "capture_status": None, "capture_timestamp": None}
+    path = state.last_screenshot_path
+    if not path.startswith("/"):
+        path = "/" + path
+    regions = []
+    if state.current_spec is not None:
+        regions = [
+            {
+                "region_id": region.region_id,
+                "name": region.name,
+                "x": region.x,
+                "y": region.y,
+                "w": region.w,
+                "h": region.h,
+                "coordinate_space": region.coordinate_space,
+            }
+            for region in state.current_spec.target.regions
+            if region.enabled
+        ]
+    current_status = state.status()
+    return {
+        "path": path,
+        "regions": regions,
+        "target": asdict(state.current_spec.target) if state.current_spec else None,
+        "capture_target": current_status.get("last_capture_target"),
+        "capture_status": current_status.get("last_capture_status"),
+        "capture_timestamp": current_status.get("last_run_at"),
+    }
 
 
 def _build_query_result_from_store(*, task_id: str, minutes: int, keyword: Optional[str], question: str) -> QueryResult:
@@ -593,42 +626,58 @@ def get_ocr_snippets(
 
 @app.get("/api/screenshot")
 def get_screenshot() -> JSONResponse:
-    if not state.last_screenshot_path:
-        return JSONResponse({"path": None, "regions": [], "target": None, "capture_target": None, "capture_status": None, "capture_timestamp": None})
-    path = state.last_screenshot_path
-    if not path.startswith("/"):
-        path = "/" + path
-    regions = []
-    if state.current_spec is not None:
-        regions = [
-            {
-                "region_id": region.region_id,
-                "name": region.name,
-                "x": region.x,
-                "y": region.y,
-                "w": region.w,
-                "h": region.h,
-                "coordinate_space": region.coordinate_space,
-            }
-            for region in state.current_spec.target.regions
-            if region.enabled
-        ]
-    current_status = state.status()
-    return JSONResponse(
-        {
-            "path": path,
-            "regions": regions,
-            "target": asdict(state.current_spec.target) if state.current_spec else None,
-            "capture_target": current_status.get("last_capture_target"),
-            "capture_status": current_status.get("last_capture_status"),
-            "capture_timestamp": current_status.get("last_run_at"),
-        }
-    )
+    return JSONResponse(_build_screenshot_payload())
 
 
 @app.get("/api/watch/status")
 def watch_status() -> JSONResponse:
     return JSONResponse(state.status())
+
+
+@app.get("/api/agent/observe-live")
+def observe_live_context(
+    task_id: Optional[str] = None,
+    minutes: int = Query(5, ge=1, le=15),
+    limit: int = Query(20, ge=1, le=100),
+) -> JSONResponse:
+    resolved_task_id = _resolve_task_id(task_id)
+    observed_at = time.time()
+    status_payload = state.status()
+    screenshot_payload = _build_screenshot_payload()
+    if not resolved_task_id:
+        return JSONResponse(
+            build_observe_live_payload(
+                task_id="",
+                minutes=minutes,
+                limit=limit,
+                status=status_payload,
+                screenshot=screenshot_payload,
+                recent_events=[],
+                memory_items=[],
+                alerts=[],
+                logs=[],
+                observed_at=observed_at,
+            )
+        )
+    since_timestamp = observed_at - (minutes * 60)
+    recent_events = state.sqlite_store.list_events(task_id=resolved_task_id, since_timestamp=since_timestamp, limit=limit)
+    memory_items = state.sqlite_store.query_events(task_id=resolved_task_id, minutes=minutes, limit=limit)
+    alerts = state.sqlite_store.list_events(task_id=resolved_task_id, source="alert", since_timestamp=since_timestamp, limit=limit)
+    logs = state.sqlite_store.list_logs(task_id=resolved_task_id, since_timestamp=since_timestamp, limit=limit)
+    return JSONResponse(
+        build_observe_live_payload(
+            task_id=resolved_task_id,
+            minutes=minutes,
+            limit=limit,
+            status=status_payload,
+            screenshot=screenshot_payload,
+            recent_events=recent_events,
+            memory_items=memory_items,
+            alerts=alerts,
+            logs=logs,
+            observed_at=observed_at,
+        )
+    )
 
 
 @app.get("/api/watch/task/{task_id}")

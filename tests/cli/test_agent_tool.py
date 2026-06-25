@@ -68,6 +68,27 @@ def test_agent_tool_recent_builds_expected_path(monkeypatch, capsys) -> None:
     assert '"ok": true' in capsys.readouterr().out
 
 
+def test_agent_tool_observe_live_builds_expected_path(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["base_url"] = base_url
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"schema_version": "1.0", "task_id": "task_demo", "agent_hints": {"suggested_next_steps": []}}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["observe-live", "--task-id", "task_demo", "--minutes", "7", "--limit", "9"])
+
+    assert exit_code == 0
+    assert recorded["base_url"] == "http://127.0.0.1:8770"
+    assert recorded["path"] == "/api/agent/observe-live?task_id=task_demo&minutes=7&limit=9"
+    assert recorded["method"] == "GET"
+    assert recorded["payload"] is None
+    assert '"schema_version": "1.0"' in capsys.readouterr().out
+
+
 def test_agent_tool_alerts_builds_expected_path(monkeypatch, capsys) -> None:
     recorded = {}
 
