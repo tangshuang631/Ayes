@@ -226,9 +226,9 @@ python3 scripts/smoke_ayes_local_skill.py --webhook-url "你的企业微信 webh
 详细安装和命令说明见：
 
 - `docs/20-AyesLocalSkill安装与调用规范.md`
-- `skills/ayes-local/references/installation.md`
-- `skills/ayes-local/references/commands.md`
-- `skills/ayes-local/references/troubleshooting.md`
+- `skills/final/ayes-local/references/installation.md`
+- `skills/final/ayes-local/references/commands.md`
+- `skills/final/ayes-local/references/troubleshooting.md`
 
 当前补充能力：
 

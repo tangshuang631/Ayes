@@ -122,7 +122,7 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 
 以下情况建议重新执行安装脚本：
 
-- `skills/ayes-local/` 文档结构改动
+- `skills/final/ayes-local/` 文档结构改动
 - `src/ayes/cli/agent_tool.py` 命令面改动
 - 仓库路径变化
 - 想切换到新的 skill 根目录

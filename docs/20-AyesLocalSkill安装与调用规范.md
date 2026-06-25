@@ -247,7 +247,7 @@
 
 ## 10. 引用文档要求
 
-`skills/ayes-local/references/` 当前阶段至少应有以下内容：
+`skills/final/ayes-local/references/` 当前阶段至少应有以下内容：
 
 - 安装说明
 - 命令清单

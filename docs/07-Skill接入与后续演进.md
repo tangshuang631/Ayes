@@ -133,7 +133,7 @@
 
 进一步收口后，正式交付形态应明确为：
 
-- 仓库内维护 `skills/ayes-local/` 作为唯一正式模板
+- 仓库内维护 `skills/final/ayes-local/` 作为唯一正式模板
 - 由 `scripts/install_ayes_local_skill.py` 安装到目标 Agent 的 skill 根目录
 - 安装时生成绑定当前仓库路径的 `ayes-agent-local` 包装脚本
 - `SKILL.md` 保持简洁，详细安装、命令、排障说明拆到 `references/`

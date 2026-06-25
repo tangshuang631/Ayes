@@ -1,3 +1,0 @@
-display_name: Ayes Local
-short_description: 读取本地 Ayes 监控状态、截图证据、近期事件、记忆、日志与问答结果
-default_prompt: 帮我通过本地 Ayes 服务读取当前监控状态、最近截图证据、最近几分钟的事件、记忆和日志，必要时继续问答；如果还没选好目标或 ROI，就提醒我先回到 Ayes Web 工作台配置。
