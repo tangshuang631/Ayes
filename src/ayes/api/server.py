@@ -220,6 +220,8 @@ def _build_query_result_from_store(*, task_id: str, minutes: int, keyword: Optio
 
 def _build_long_term_query_result_from_store(*, task_id: str, hours: int, keyword: Optional[str]) -> QueryResult:
     items = state.sqlite_store.query_long_term_summaries(task_id=task_id, hours=hours, keyword=keyword, limit=100)
+    if not items and keyword:
+        items = state.sqlite_store.query_long_term_summaries(task_id=task_id, hours=hours, keyword=None, limit=100)
     if not items:
         return QueryResult(
             answer=f"最近 {hours} 小时内未发现相关长期摘要。",
@@ -505,6 +507,7 @@ def load_configured_watch(payload: dict = Body(...)) -> JSONResponse:
             "mode": spec.mode,
             "target": asdict(spec.target),
             "spec": asdict(spec),
+            "memory_policy": state.get_task_memory_policy(task_id),
         }
     )
 
@@ -597,6 +600,7 @@ def confirm_watch_plan(payload: dict = Body(...)) -> JSONResponse:
             "target": asdict(spec.target),
             "spec": asdict(spec),
             "plan": normalized_plan,
+            "memory_policy": state.get_task_memory_policy(task_id),
         }
     )
 
@@ -649,7 +653,7 @@ def delete_current_region(region_id: str) -> JSONResponse:
 def get_events(
     task_id: Optional[str] = None,
     source: Optional[str] = None,
-    minutes: int = Query(5, ge=1, le=15),
+    minutes: int = Query(5, ge=1, le=14 * 24 * 60),
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
@@ -675,7 +679,7 @@ def get_events(
 
 @app.get("/api/memory/recent")
 def get_recent_memory(
-    minutes: int = Query(5, ge=1, le=15),
+    minutes: int = Query(5, ge=1, le=14 * 24 * 60),
     keyword: Optional[str] = None,
     task_id: Optional[str] = None,
 ) -> JSONResponse:
@@ -693,7 +697,7 @@ def get_recent_memory(
 
 @app.get("/api/memory/items")
 def get_memory_items(
-    minutes: int = Query(5, ge=1, le=15),
+    minutes: int = Query(5, ge=1, le=14 * 24 * 60),
     limit: int = Query(20, ge=1, le=100),
     keyword: Optional[str] = None,
     task_id: Optional[str] = None,
@@ -713,8 +717,8 @@ def get_memory_items(
 @app.get("/api/ask")
 def ask_question(
     question: str = Query(...),
-    minutes: int = Query(5, ge=1, le=15),
-    hours: Optional[int] = Query(None, ge=1, le=72),
+    minutes: int = Query(5, ge=1, le=14 * 24 * 60),
+    hours: Optional[int] = Query(None, ge=1, le=30 * 24),
     task_id: Optional[str] = None,
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
@@ -859,7 +863,7 @@ def watch_status() -> JSONResponse:
 @app.get("/api/agent/observe-live")
 def observe_live_context(
     task_id: Optional[str] = None,
-    minutes: int = Query(5, ge=1, le=15),
+    minutes: int = Query(5, ge=1, le=14 * 24 * 60),
     limit: int = Query(20, ge=1, le=100),
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
@@ -913,6 +917,8 @@ def get_watch_task(task_id: str) -> JSONResponse:
     task = state.sqlite_store.get_task(task_id)
     if task is None:
         return JSONResponse({"error": "任务不存在"}, status_code=404)
+    task = dict(task)
+    task["memory_policy"] = state.get_task_memory_policy(task_id)
     return JSONResponse(task)
 
 
@@ -920,6 +926,39 @@ def get_watch_task(task_id: str) -> JSONResponse:
 def list_watch_tasks(limit: int = Query(100, ge=1, le=500)) -> JSONResponse:
     items = state.list_tasks(limit=limit)
     return JSONResponse({"items": items, "count": len(items)})
+
+
+@app.get("/api/tasks/{task_id}/memory-policy")
+def get_task_memory_policy(task_id: str) -> JSONResponse:
+    task = state.sqlite_store.get_task(task_id)
+    if task is None:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+    return JSONResponse({"memory_policy": state.get_task_memory_policy(task_id)})
+
+
+@app.post("/api/tasks/{task_id}/memory-policy")
+def update_task_memory_policy(task_id: str, payload: dict = Body(...)) -> JSONResponse:
+    task = state.sqlite_store.get_task(task_id)
+    if task is None:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+    try:
+        policy = state.update_task_memory_policy(
+            task_id=task_id,
+            short_term_retain_days=payload.get("short_term_retain_days"),
+            long_term_retain_days=payload.get("long_term_retain_days"),
+            disable_auto_cleanup=payload.get("disable_auto_cleanup"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"status": "ok", "memory_policy": policy})
+
+
+@app.post("/api/tasks/{task_id}/memory-cleanup")
+def run_task_memory_cleanup(task_id: str, payload: dict = Body(default={})) -> JSONResponse:
+    task = state.sqlite_store.get_task(task_id)
+    if task is None:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+    return JSONResponse({"status": "ok", "cleanup": state.apply_memory_cleanup(task_id=task_id, now=payload.get("now"))})
 
 
 @app.post("/api/watch/switch-task")
@@ -945,7 +984,7 @@ def delete_watch_task(task_id: str) -> JSONResponse:
 @app.get("/api/timeline/recent")
 def timeline_recent(
     task_id: Optional[str] = None,
-    minutes: int = Query(5, ge=1, le=15),
+    minutes: int = Query(5, ge=1, le=14 * 24 * 60),
     limit: int = Query(20, ge=1, le=200),
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
@@ -966,7 +1005,7 @@ def timeline_recent(
 
 
 @app.get("/api/timeline/long-term")
-def timeline_long_term(task_id: Optional[str] = None, hours: Optional[int] = Query(None, ge=1, le=72), limit: int = Query(20, ge=1, le=100)) -> JSONResponse:
+def timeline_long_term(task_id: Optional[str] = None, hours: Optional[int] = Query(None, ge=1, le=30 * 24), limit: int = Query(20, ge=1, le=100)) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
         return JSONResponse({"items": [], "task_id": None, "hours": hours, "limit": limit, "count": 0})

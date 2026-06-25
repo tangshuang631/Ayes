@@ -42,6 +42,9 @@ ayes-menubar
 ```bash
 ayes-agent-local targets
 ayes-agent-local tasks
+ayes-agent-local memory-policy --task-id 2026-06-25__price_watch
+ayes-agent-local memory-policy --task-id 2026-06-25__price_watch --short-term-days 10 --long-term-days 25 --disable-auto-cleanup true
+ayes-agent-local memory-cleanup --task-id 2026-06-25__price_watch
 ayes-agent-local switch-task --task-id 2026-06-25__price_watch
 ayes-agent-local delete-task --task-id 2026-06-25__old_watch
 ayes-agent-local control status
@@ -58,6 +61,9 @@ ayes-agent-local task --task-id task_web
 
 - `targets`：读取当前可选屏幕/进程目标摘要
 - `tasks`：列出已持久化任务，便于恢复、切换和继续追问
+- `memory-policy`：读取或更新单个任务的记忆策略；短期详细记忆默认 7 天、最高 14 天，长期简略记忆默认 14 天、最高 30 天
+- `memory-policy --disable-auto-cleanup true`：让该任务永久保留记忆，不再自动清理；传 `false` 可恢复自动清理
+- `memory-cleanup`：按当前任务策略立即执行一次过期记忆清理
 - `switch-task`：把历史任务恢复为当前任务
 - `delete-task`：删除指定任务及其长短期记忆、日志与长期摘要
 - `control status/pause-all/resume-all`：给 agent 和菜单栏共享同一套后台暂停/恢复状态入口
@@ -128,6 +134,8 @@ ayes-agent-local screenshot --task-id task_web
 ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
 ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
 ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 20
+ayes-agent-local memory-items --task-id task_web --minutes 10080 --limit 50
+ayes-agent-local long-term --task-id task_web --hours 336 --limit 50
 ayes-agent-local logs --task-id task_web --minutes 15
 ayes-agent-local run-once
 ```
@@ -137,7 +145,8 @@ ayes-agent-local run-once
 - `screenshot`：读取最近截图路径与 ROI 覆盖信息
 - `recent`：读取最近时间线事件
 - `alerts`：读取最近告警审计结果
-- `memory-items`：读取短期记忆事件明细
+- `memory-items`：读取短期详细记忆事件明细；默认短期保留 7 天，最高 14 天
+- `long-term`：读取长期简略摘要；默认保留 14 天，最高 30 天
 - `logs`：读取近期日志
 - `run-once`：执行一次即时采样，适合安装后 smoke 或人工核验
 
@@ -162,6 +171,13 @@ ayes-agent-local run-once
 - 用户说“继续之前那个任务”时是否应先 `tasks` 再 `switch-task`
 
 追问“现在屏幕怎样”“最近发生了什么”“有没有通知出去”时，应先用 `observe-live`，再按问题补细颗粒命令。
+
+如果用户问“昨天某个进程在做什么”“最近几天最低价是什么时候”：
+
+- 优先根据问题跨度设置 `memory-items --minutes`，短期详细记忆可查到任务策略允许的天数
+- 如果跨度超出短期详细记忆或需要概览，改用 `long-term --hours` 或 `ask --hours`
+- 如果问题超出短期和长期保留策略，应明确说明记忆已超过保留范围
+- 记忆文件按任务和日期切割存放在安装目录 `runtime/memory/<task_id>/short/` 与 `runtime/memory/<task_id>/long/`
 
 ## 3.1 本地视觉增强准备与启用
 
@@ -198,7 +214,7 @@ ayes-agent-local ask --task-id task_web --hours 24 --question "今天这个进�
 
 - `minutes` 主要走短期详细链路
 - `hours` 主要走长期摘要链路
-- 若用户问“最近 xx 小时”，应显式带 `--hours`
+- 若用户问“最近 xx 小时/昨天/最近几天”，应显式带 `--hours`
 
 如果用户问“刚才有没有真的通知出去”或“为什么没通知”，优先读取：
 
@@ -220,6 +236,7 @@ ayes-agent-local observe-live --task-id 2026-06-25__price_watch --minutes 5 --li
 说明：
 
 - 长短期记忆、时间线、告警和日志都按 `task_id` 独立存储
+- `tasks` 返回的 `memory_policy.memory_dir` 是该任务独立记忆目录
 - 切回历史任务后，后续 `ask/recent/memory-items/alerts/logs` 应优先显式带该 `task_id`
 - 如果用户要求删除某个旧任务，应先确认具体任务，再执行：
 

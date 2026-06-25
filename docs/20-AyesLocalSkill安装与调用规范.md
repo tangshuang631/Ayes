@@ -100,7 +100,18 @@
 ```
 
 其中 `scripts/` 下允许包含由安装脚本生成的本地包装脚本。
-其中 `runtime/` 是该安装实例的本地运行态目录，存放数据库、截图、日志和证据；正式 skill 模板不得携带该目录。
+其中 `runtime/` 是该安装实例的本地运行态目录，存放数据库、截图、日志、证据和按任务切割的记忆文件；正式 skill 模板不得携带该目录。
+
+记忆运行态约定：
+
+- 任务记忆策略、短期详细记忆、长期简略记忆都必须写入安装后的 `runtime/`
+- 不得默认写入开发仓库 `/Users/apple/Desktop/2026/Ayes/runtime`
+- 每个任务必须拥有独立目录：`runtime/memory/<task_id>/`
+- 短期详细记忆按日期写入 `runtime/memory/<task_id>/short/YYYY-MM-DD-<task_id>-details.jsonl`
+- 长期简略记忆按日期写入 `runtime/memory/<task_id>/long/YYYY-MM-DD-<task_id>-summary.jsonl`
+- 短期详细记忆默认保留 7 天、最高 14 天
+- 长期简略记忆默认保留 14 天、最高 30 天
+- 每个任务必须支持独立关闭自动清理；关闭后该任务记忆不再自动删除
 
 ## 5. 安装流要求
 
@@ -210,6 +221,8 @@
 - `confirm-plan`：在补齐 webhook / 目标 / ROI / 点击点后确认装载最终任务
 - `task`：读取任务配置或持久化任务信息
 - `tasks` / `switch-task` / `delete-task`：列出、恢复、切换或删除历史任务及其独立记忆
+- `memory-policy`：查看或调整单个任务的短期详细记忆、长期简略记忆和自动清理策略
+- `memory-cleanup`：按单个任务策略立即执行一次过期记忆清理
 - `observe-live`：聚合当前状态、截图、近期事件、短期记忆、告警、日志和证据质量，是 agent 追问屏幕现状时的优先入口
 - `observe-live.agent_hints.task_context`：告诉 agent 当前正在看哪个任务、是否只是回读持久化证据、有哪些历史任务可恢复
 - `recent` / `ask` / `screenshot`：构成细颗粒追问和回退闭环

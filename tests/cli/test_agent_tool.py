@@ -64,6 +64,79 @@ def test_agent_tool_tasks_reads_task_list_endpoint(monkeypatch, capsys) -> None:
     assert '"2026-06-25__price_watch"' in capsys.readouterr().out
 
 
+def test_agent_tool_memory_policy_reads_task_policy(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"memory_policy": {"task_id": "task_demo", "short_term_retain_days": 7}}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["memory-policy", "--task-id", "task_demo"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/tasks/task_demo/memory-policy"
+    assert recorded["method"] == "GET"
+    assert recorded["payload"] is None
+    assert '"short_term_retain_days": 7' in capsys.readouterr().out
+
+
+def test_agent_tool_memory_policy_updates_task_policy(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "ok", "memory_policy": {"task_id": "task_demo", "disable_auto_cleanup": True}}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "memory-policy",
+            "--task-id",
+            "task_demo",
+            "--short-term-days",
+            "10",
+            "--long-term-days",
+            "25",
+            "--disable-auto-cleanup",
+            "true",
+        ]
+    )
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/tasks/task_demo/memory-policy"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"] == {
+        "short_term_retain_days": 10,
+        "long_term_retain_days": 25,
+        "disable_auto_cleanup": True,
+    }
+    assert '"disable_auto_cleanup": true' in capsys.readouterr().out
+
+
+def test_agent_tool_memory_cleanup_posts_task_cleanup(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "ok", "cleanup": {"deleted_events": 2}}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["memory-cleanup", "--task-id", "task_demo"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/tasks/task_demo/memory-cleanup"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"] == {}
+    assert '"deleted_events": 2' in capsys.readouterr().out
+
+
 def test_agent_tool_switch_task_posts_expected_payload(monkeypatch, capsys) -> None:
     recorded = {}
 

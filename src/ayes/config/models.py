@@ -24,6 +24,10 @@ def _require_int(value: Any, field_name: str, minimum: Optional[int] = None) -> 
     return value
 
 
+def _ceil_div(value: int, divisor: int) -> int:
+    return max((value + divisor - 1) // divisor, 1)
+
+
 def _require_float(value: Any, field_name: str) -> float:
     if isinstance(value, (int, float)):
         return float(value)
@@ -193,16 +197,26 @@ class VisionConfig:
 @dataclass(frozen=True)
 class ShortTermMemoryConfig:
     enabled: bool = True
-    retain_minutes: int = 15
+    retain_days: int = 7
+    retain_minutes: int = 7 * 24 * 60
     detail_level: str = "high"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ShortTermMemoryConfig":
-        retain_minutes = _require_int(data.get("retain_minutes", 15), "memory.short_term.retain_minutes", 1)
-        if retain_minutes > 15:
-            raise ConfigError("memory.short_term.retain_minutes 不能超过 15")
+        if "retain_days" in data:
+            retain_days = _require_int(data.get("retain_days"), "memory.short_term.retain_days", 1)
+            retain_minutes = retain_days * 24 * 60
+        elif "retain_minutes" in data:
+            retain_minutes = _require_int(data.get("retain_minutes"), "memory.short_term.retain_minutes", 1)
+            retain_days = _ceil_div(retain_minutes, 24 * 60)
+        else:
+            retain_days = 7
+            retain_minutes = 7 * 24 * 60
+        if retain_days > 14:
+            raise ConfigError("memory.short_term.retain_days 不能超过 14")
         return cls(
             enabled=_require_bool(data.get("enabled", True), "memory.short_term.enabled"),
+            retain_days=retain_days,
             retain_minutes=retain_minutes,
             detail_level=_require_str(data.get("detail_level", "high"), "memory.short_term.detail_level"),
         )
@@ -211,21 +225,33 @@ class ShortTermMemoryConfig:
 @dataclass(frozen=True)
 class LongTermMemoryConfig:
     enabled: bool = True
-    retain_hours: int = 24
-    max_retain_hours: int = 72
+    retain_days: int = 14
+    retain_hours: int = 14 * 24
+    max_retain_hours: int = 30 * 24
     summary_interval_minutes: int = 5
     detail_level: str = "summary"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LongTermMemoryConfig":
-        retain_hours = _require_int(data.get("retain_hours", 24), "memory.long_term.retain_hours", 1)
-        max_retain_hours = _require_int(data.get("max_retain_hours", 72), "memory.long_term.max_retain_hours", 1)
-        if max_retain_hours > 72:
-            raise ConfigError("memory.long_term.max_retain_hours 不能超过 72")
+        if "retain_days" in data:
+            retain_days = _require_int(data.get("retain_days"), "memory.long_term.retain_days", 1)
+            retain_hours = retain_days * 24
+        elif "retain_hours" in data:
+            retain_hours = _require_int(data.get("retain_hours"), "memory.long_term.retain_hours", 1)
+            retain_days = _ceil_div(retain_hours, 24)
+        else:
+            retain_days = 14
+            retain_hours = 14 * 24
+        max_retain_hours = _require_int(data.get("max_retain_hours", 30 * 24), "memory.long_term.max_retain_hours", 1)
+        if retain_days > 30:
+            raise ConfigError("memory.long_term.retain_days 不能超过 30")
+        if max_retain_hours > 30 * 24:
+            raise ConfigError("memory.long_term.max_retain_hours 不能超过 720")
         if retain_hours > max_retain_hours:
             raise ConfigError("memory.long_term.retain_hours 不能超过 max_retain_hours")
         return cls(
             enabled=_require_bool(data.get("enabled", True), "memory.long_term.enabled"),
+            retain_days=retain_days,
             retain_hours=retain_hours,
             max_retain_hours=max_retain_hours,
             summary_interval_minutes=_require_int(
@@ -241,12 +267,14 @@ class LongTermMemoryConfig:
 class MemoryConfig:
     short_term: ShortTermMemoryConfig = field(default_factory=ShortTermMemoryConfig)
     long_term: LongTermMemoryConfig = field(default_factory=LongTermMemoryConfig)
+    disable_auto_cleanup: bool = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryConfig":
         return cls(
             short_term=ShortTermMemoryConfig.from_dict(data.get("short_term", {})),
             long_term=LongTermMemoryConfig.from_dict(data.get("long_term", {})),
+            disable_auto_cleanup=_require_bool(data.get("disable_auto_cleanup", False), "memory.disable_auto_cleanup"),
         )
 
 

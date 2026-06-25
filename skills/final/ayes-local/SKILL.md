@@ -30,6 +30,7 @@ Use this skill when the request is about:
 - 最近几分钟某个受监控进程发生了什么
 - 当前有没有弹窗、报错、价格变化、状态变化
 - 读取最近截图证据和相关事件
+- 查询昨天、最近几天或更久之前的任务记忆
 - 开始、停止、确认当前监控任务状态
 - 基于已有监控任务继续追问
 - 通过与 agent 对话完成 webhook、本地视觉增强、ROI、刷新点击等配置补齐
@@ -53,6 +54,7 @@ Use this skill when the request is about:
    - 如果问题和提醒有关，再按需补读 `ayes-agent-local alerts`
    - 如果需要更细证据，再补 `ayes-agent-local memory-items`、`ayes-agent-local recent` 和 `ayes-agent-local logs`
    - 最后用 `ayes-agent-local ask --question "..."` 组织回答
+   - 如果用户问“昨天”“最近几天”或超出短期详细记忆窗口的问题，显式用 `ayes-agent-local ask --hours ...` 或 `ayes-agent-local long-term --hours ...`
 3. 如果用户要求开始或恢复监控：
    - 如果用户给的是自然语言任务，先用 `ayes-agent-local plan-spec ...`
    - 优先读取返回的 `questions[]`
@@ -77,6 +79,11 @@ Use this skill when the request is about:
 6. 如果用户要求删除某个任务及其长短期记忆：
    - 先确认要删除的具体 `task_id`
    - 再用 `ayes-agent-local delete-task --task-id ...`
+7. 如果用户要求调整记忆保存时间：
+   - 先用 `ayes-agent-local memory-policy --task-id ...` 查看当前策略
+   - 短期详细记忆默认 7 天、最高 14 天；长期简略记忆默认 14 天、最高 30 天
+   - 若用户说“不自动清理/永久保留”，用 `--disable-auto-cleanup true`
+   - 若用户说“恢复自动清理”，用 `--disable-auto-cleanup false`
 7. 如果用户希望通过小图标手动暂停、恢复或打开数据目录：
    - 在 macOS 上优先运行 `~/.codex/skills/ayes-local/scripts/ayes-menubar-local`
    - 若已安装全局入口，也可直接运行 `ayes-menubar`
@@ -106,6 +113,9 @@ ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
 ayes-agent-local screenshot --task-id task_web
 ayes-agent-local ask --task-id task_web --minutes 5 --question "最近几分钟发生了什么"
 ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 20
+ayes-agent-local memory-policy --task-id task_web
+ayes-agent-local memory-policy --task-id task_web --short-term-days 10 --long-term-days 25 --disable-auto-cleanup true
+ayes-agent-local memory-cleanup --task-id task_web
 ayes-agent-local logs --task-id task_web --minutes 15
 ayes-agent-local run-once
 ayes-agent-local start
@@ -140,6 +150,8 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 - `/api/alerts/recent`
 - `/api/timeline/long-term`
 - `/api/memory/items`
+- `/api/tasks/{task_id}/memory-policy`
+- `/api/tasks/{task_id}/memory-cleanup`
 - `/api/logs`
 - `/api/screenshot`
 - `/api/ask`
@@ -170,6 +182,14 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 - 短期 / 长期记忆
 - 按需视觉增强
 - 对话式任务草案与配置确认流
+
+记忆策略：
+
+- 每个任务都有独立记忆策略和目录，默认在 `$HOME/.codex/skills/ayes-local/runtime/memory/<task_id>/`
+- 短期详细记忆默认保留 7 天，最高 14 天，适合回答最近几分钟、昨天、最近几天的细节问题
+- 长期简略记忆默认保留 14 天，最高 30 天，适合短期详细记忆之外的问题
+- `disable_auto_cleanup=true` 表示永久保留该任务记忆，不再自动清理
+- 如果用户询问超出短期和长期保留范围的内容，应明确说明记忆已超出保留范围，而不是编造
 
 并且这条 skill 的目标不是“告诉用户去哪里自己配置”，而是：
 

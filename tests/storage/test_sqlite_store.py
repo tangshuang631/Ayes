@@ -166,3 +166,87 @@ def test_sqlite_store_lists_and_deletes_task_data_by_task_id(tmp_path) -> None:
     assert deleted["logs"] == 1
     assert deleted["long_term_summaries"] == 1
     assert store.get_task("2026-06-25__price_watch") is None
+
+
+def test_sqlite_store_persists_task_memory_policy(tmp_path) -> None:
+    store = SQLiteStore(db_path=str(tmp_path / "ayes.db"))
+
+    payload = store.upsert_task_memory_policy(
+        task_id="task_policy",
+        short_term_retain_days=9,
+        long_term_retain_days=21,
+        disable_auto_cleanup=True,
+    )
+
+    assert payload["task_id"] == "task_policy"
+    assert payload["short_term_retain_days"] == 9
+    assert payload["long_term_retain_days"] == 21
+    assert payload["disable_auto_cleanup"] is True
+    assert payload["memory_dir"].endswith("/memory/task_policy")
+    assert store.get_task_memory_policy("task_policy") == payload
+
+
+def test_sqlite_store_rejects_task_memory_policy_over_caps(tmp_path) -> None:
+    store = SQLiteStore(db_path=str(tmp_path / "ayes.db"))
+
+    try:
+        store.upsert_task_memory_policy(
+            task_id="task_policy",
+            short_term_retain_days=15,
+            long_term_retain_days=14,
+            disable_auto_cleanup=False,
+        )
+    except ValueError as exc:
+        assert "short_term_retain_days" in str(exc)
+    else:
+        raise AssertionError("expected short_term_retain_days cap failure")
+
+    try:
+        store.upsert_task_memory_policy(
+            task_id="task_policy",
+            short_term_retain_days=7,
+            long_term_retain_days=31,
+            disable_auto_cleanup=False,
+        )
+    except ValueError as exc:
+        assert "long_term_retain_days" in str(exc)
+    else:
+        raise AssertionError("expected long_term_retain_days cap failure")
+
+
+def test_sqlite_store_deletes_expired_events_by_task(tmp_path) -> None:
+    store = SQLiteStore(db_path=str(tmp_path / "ayes.db"))
+    old_event = build_event(
+        task_id="task_cleanup_events",
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=10.0,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="旧事件",
+    )
+    new_event = build_event(
+        task_id="task_cleanup_events",
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=200.0,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="新事件",
+    )
+    store.insert_event(old_event)
+    store.insert_event(new_event)
+
+    removed = store.delete_events_before(task_id="task_cleanup_events", cutoff_timestamp=100.0)
+
+    assert removed == 1
+    items = store.list_events(task_id="task_cleanup_events", limit=10)
+    assert [item["summary"] for item in items] == ["新事件"]

@@ -275,6 +275,9 @@ def test_plan_watch_spec_endpoint_returns_draft_and_missing_confirmation() -> No
     assert payload["resolved_target"]["process_name"] == "Safari"
     assert payload["draft_spec"]["watch_intent"]["enabled"] is True
     assert payload["draft_spec"]["watch_intent"]["rules"][0]["field"] == "price"
+    assert payload["draft_spec"]["memory"]["short_term"]["retain_days"] == 7
+    assert payload["draft_spec"]["memory"]["long_term"]["retain_days"] == 14
+    assert payload["draft_spec"]["memory"]["disable_auto_cleanup"] is False
     assert any(item["field"] == "alert.webhook_url" for item in payload["missing_fields"])
     assert any(question["kind"] == "webhook_missing" for question in payload["questions"])
     webhook_guidance = next(item for item in payload["setup_guidance"] if item["topic"] == "wecom_webhook")

@@ -151,7 +151,11 @@
             <button id="enableVisionFromSettingsBtn" class="text-button">启用当前视觉配置</button>
           </div>
           <div id="settingsStatus" class="result-meta"></div>
-          <div id="settingsTaskList" class="timeline-list"></div>
+          <div class="settings-subhead">
+            <div>任务记忆策略</div>
+            <div class="result-meta">短期详细记忆默认 7 天、最高 14 天；长期简略记忆默认 14 天、最高 30 天。打开“永久保留”后，该任务不再自动清理记忆。</div>
+          </div>
+          <div id="settingsTaskList" class="timeline-list" data-memory-policy-list></div>
         </section>
         <section class="panel-section collapsed-panel-section">
           <details id="taskScopeSection" class="collapsed-section">

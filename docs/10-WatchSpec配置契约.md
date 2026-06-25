@@ -116,16 +116,17 @@
   "memory": {
     "short_term": {
       "enabled": true,
-      "retain_minutes": 15,
+      "retain_days": 7,
       "detail_level": "high"
     },
     "long_term": {
       "enabled": true,
-      "retain_hours": 24,
-      "max_retain_hours": 72,
+      "retain_days": 14,
+      "max_retain_hours": 720,
       "summary_interval_minutes": 5,
       "detail_level": "summary"
-    }
+    },
+    "disable_auto_cleanup": false
   },
   "watch_intent": {
     "enabled": true,
@@ -441,8 +442,9 @@ OCR 频率由 `ocr_interval_ms` 控制。
 
 - `mode` 必须是 `triggered` 或 `observe`
 - `target.type` 必须是 `process`、`window` 或 `screen`
-- `short_term.retain_minutes` 不能超过 15
-- `long_term.retain_hours` 不能超过 72
+- `short_term.retain_days` 默认 7，不能超过 14；旧字段 `retain_minutes` 仅作为兼容输入
+- `long_term.retain_days` 默认 14，不能超过 30；旧字段 `retain_hours` 仅作为兼容输入
+- `memory.disable_auto_cleanup` 为 true 时，该任务不自动清理记忆
 - `screenshot_interval_ms` 必须大于 0
 - `ocr_interval_ms` 必须大于 0
 - `triggered` 模式下 `watch_intent.enabled` 必须为 true

@@ -328,6 +328,13 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("targets", help="读取目标候选摘要")
     tasks_parser = subparsers.add_parser("tasks", help="读取已持久化任务列表")
     tasks_parser.add_argument("--limit", type=int, default=100)
+    memory_policy_parser = subparsers.add_parser("memory-policy", help="读取或更新指定任务的记忆保留策略")
+    memory_policy_parser.add_argument("--task-id", required=True)
+    memory_policy_parser.add_argument("--short-term-days", type=int, default=None)
+    memory_policy_parser.add_argument("--long-term-days", type=int, default=None)
+    memory_policy_parser.add_argument("--disable-auto-cleanup", default=None)
+    memory_cleanup_parser = subparsers.add_parser("memory-cleanup", help="按指定任务策略执行一次记忆清理")
+    memory_cleanup_parser.add_argument("--task-id", required=True)
     subparsers.add_parser("start", help="启动当前已装载的持续监控")
     subparsers.add_parser("run-once", help="执行一次即时采样")
     subparsers.add_parser("stop", help="停止当前持续监控")
@@ -480,6 +487,19 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
     if args.command == "tasks":
         path = _build_query_path("/api/tasks", limit=args.limit)
         return _request_json(base_url, path)
+    if args.command == "memory-policy":
+        path = f"/api/tasks/{args.task_id}/memory-policy"
+        payload = {
+            "short_term_retain_days": args.short_term_days,
+            "long_term_retain_days": args.long_term_days,
+            "disable_auto_cleanup": _parse_optional_bool(args.disable_auto_cleanup),
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        if payload:
+            return _request_json(base_url, path, method="POST", payload=payload)
+        return _request_json(base_url, path)
+    if args.command == "memory-cleanup":
+        return _request_json(base_url, f"/api/tasks/{args.task_id}/memory-cleanup", method="POST", payload={})
     if args.command == "plan-spec":
         return _request_json(base_url, "/api/agent/plan-watch-spec", method="POST", payload=_build_plan_spec_payload(args))
     if args.command == "confirm-plan":

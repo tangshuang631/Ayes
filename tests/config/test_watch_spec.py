@@ -67,19 +67,49 @@ def test_observe_mode_can_disable_watch_intent() -> None:
         }
     )
     assert spec.watch_intent.enabled is False
-    assert spec.memory.short_term.retain_minutes == 15
+    assert spec.memory.short_term.retain_days == 7
+    assert spec.memory.long_term.retain_days == 14
+    assert spec.memory.disable_auto_cleanup is False
 
 
-def test_short_term_memory_rejects_more_than_fifteen_minutes() -> None:
+def test_memory_retention_caps_short_and_long_term_days() -> None:
     with pytest.raises(ConfigError):
         WatchSpec.from_dict(
             {
                 "spec_version": "1.0",
                 "mode": "observe",
                 "target": {"type": "screen", "screen_id": 1},
-                "memory": {"short_term": {"retain_minutes": 16}},
+                "memory": {"short_term": {"retain_days": 15}},
             }
         )
+    with pytest.raises(ConfigError):
+        WatchSpec.from_dict(
+            {
+                "spec_version": "1.0",
+                "mode": "observe",
+                "target": {"type": "screen", "screen_id": 1},
+                "memory": {"long_term": {"retain_days": 31}},
+            }
+        )
+
+
+def test_memory_retention_accepts_legacy_minute_and_hour_fields() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "memory": {
+                "short_term": {"retain_minutes": 60},
+                "long_term": {"retain_hours": 48, "max_retain_hours": 72},
+            },
+        }
+    )
+
+    assert spec.memory.short_term.retain_days == 1
+    assert spec.memory.short_term.retain_minutes == 60
+    assert spec.memory.long_term.retain_days == 2
+    assert spec.memory.long_term.retain_hours == 48
 
 
 def test_triggered_mode_requires_watch_intent_enabled() -> None:

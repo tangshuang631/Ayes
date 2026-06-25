@@ -97,7 +97,103 @@ class SQLiteStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS task_memory_policies (
+                    task_id TEXT PRIMARY KEY,
+                    short_term_retain_days INTEGER NOT NULL,
+                    long_term_retain_days INTEGER NOT NULL,
+                    disable_auto_cleanup INTEGER NOT NULL,
+                    memory_dir TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
             connection.commit()
+
+    def _memory_dir_for_task(self, task_id: str) -> str:
+        return str(runtime_root() / "memory" / task_id)
+
+    def _default_task_memory_policy(self, task_id: str) -> Dict[str, Any]:
+        return {
+            "task_id": task_id,
+            "short_term_retain_days": 7,
+            "long_term_retain_days": 14,
+            "disable_auto_cleanup": False,
+            "memory_dir": self._memory_dir_for_task(task_id),
+            "updated_at": None,
+        }
+
+    def upsert_task_memory_policy(
+        self,
+        *,
+        task_id: str,
+        short_term_retain_days: int,
+        long_term_retain_days: int,
+        disable_auto_cleanup: bool,
+        updated_at: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        import time
+
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            raise ValueError("task_id 不能为空")
+        short_days = int(short_term_retain_days)
+        long_days = int(long_term_retain_days)
+        if short_days < 1 or short_days > 14:
+            raise ValueError("short_term_retain_days 必须在 1 到 14 之间")
+        if long_days < 1 or long_days > 30:
+            raise ValueError("long_term_retain_days 必须在 1 到 30 之间")
+        payload = {
+            "task_id": normalized_task_id,
+            "short_term_retain_days": short_days,
+            "long_term_retain_days": long_days,
+            "disable_auto_cleanup": bool(disable_auto_cleanup),
+            "memory_dir": self._memory_dir_for_task(normalized_task_id),
+            "updated_at": float(updated_at if updated_at is not None else time.time()),
+        }
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO task_memory_policies
+                (task_id, short_term_retain_days, long_term_retain_days, disable_auto_cleanup, memory_dir, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["task_id"],
+                    payload["short_term_retain_days"],
+                    payload["long_term_retain_days"],
+                    1 if payload["disable_auto_cleanup"] else 0,
+                    payload["memory_dir"],
+                    payload["updated_at"],
+                ),
+            )
+            connection.commit()
+        return payload
+
+    def get_task_memory_policy(self, task_id: str) -> Dict[str, Any]:
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            raise ValueError("task_id 不能为空")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT task_id, short_term_retain_days, long_term_retain_days, disable_auto_cleanup, memory_dir, updated_at
+                FROM task_memory_policies
+                WHERE task_id = ?
+                """,
+                (normalized_task_id,),
+            ).fetchone()
+        if row is None:
+            return self._default_task_memory_policy(normalized_task_id)
+        return {
+            "task_id": row[0],
+            "short_term_retain_days": int(row[1]),
+            "long_term_retain_days": int(row[2]),
+            "disable_auto_cleanup": bool(row[3]),
+            "memory_dir": row[4],
+            "updated_at": row[5],
+        }
 
     def upsert_app_settings(self, payload: Dict[str, Any]) -> None:
         with self._connect() as connection:
@@ -300,7 +396,7 @@ class SQLiteStore:
         ]
 
     def delete_task_data(self, task_id: str) -> Dict[str, int]:
-        deleted = {"tasks": 0, "events": 0, "logs": 0, "long_term_summaries": 0}
+        deleted = {"tasks": 0, "events": 0, "logs": 0, "long_term_summaries": 0, "task_memory_policies": 0}
         with self._connect() as connection:
             deleted["events"] = int(
                 (connection.execute("DELETE FROM events WHERE task_id = ?", (task_id,)).rowcount or 0)
@@ -313,6 +409,9 @@ class SQLiteStore:
             )
             deleted["tasks"] = int(
                 (connection.execute("DELETE FROM watch_tasks WHERE task_id = ?", (task_id,)).rowcount or 0)
+            )
+            deleted["task_memory_policies"] = int(
+                (connection.execute("DELETE FROM task_memory_policies WHERE task_id = ?", (task_id,)).rowcount or 0)
             )
             connection.commit()
         return deleted
@@ -394,6 +493,18 @@ class SQLiteStore:
                 """
                 DELETE FROM long_term_summaries
                 WHERE task_id = ? AND window_end < ?
+                """,
+                (task_id, cutoff_timestamp),
+            )
+            connection.commit()
+            return int(cursor.rowcount or 0)
+
+    def delete_events_before(self, *, task_id: str, cutoff_timestamp: float) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM events
+                WHERE task_id = ? AND timestamp < ?
                 """,
                 (task_id, cutoff_timestamp),
             )

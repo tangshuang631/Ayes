@@ -13,6 +13,7 @@ from ayes.app.paths import runtime_root
 from ayes.api.contracts import _describe_direction, build_task_payload, describe_location_summary
 from ayes.config.models import TargetRegion, WatchSpec
 from ayes.logs.store import LogStore
+from ayes.memory.file_store import TaskMemoryFileStore
 from ayes.memory.long_term import build_long_term_summary
 from ayes.storage.sqlite_store import SQLiteStore
 from ayes.targets.discovery.macos import MacOSWindowDiscovery
@@ -23,6 +24,7 @@ class AppState:
         self.runtime_dir = runtime_root()
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.sqlite_store = SQLiteStore()
+        self.memory_file_store = TaskMemoryFileStore(runtime_dir=self.runtime_dir)
         self.log_store = LogStore(sink=self.sqlite_store.insert_log)
         self.window_discovery = MacOSWindowDiscovery()
         self.current_runner: Optional[WatchRunner] = None
@@ -70,14 +72,20 @@ class AppState:
             "alert_enabled": self.current_spec.alert.enabled,
             "refresh_click_enabled": self.current_spec.actions.refresh_click.enabled,
             "short_term_minutes": self.current_spec.memory.short_term.retain_minutes,
+            "short_term_days": self.current_spec.memory.short_term.retain_days,
             "long_term_hours": self.current_spec.memory.long_term.retain_hours,
+            "long_term_days": self.current_spec.memory.long_term.retain_days,
+            "disable_auto_cleanup": self.current_spec.memory.disable_auto_cleanup,
         }
 
     def _prune_expired_long_term_summaries(self, *, task_id: str, now: Optional[float] = None) -> int:
         if self.current_spec is None or not self.current_spec.memory.long_term.enabled:
             return 0
+        policy = self.get_task_memory_policy(task_id)
+        if policy.get("disable_auto_cleanup"):
+            return 0
         current_now = now if now is not None else time.time()
-        cutoff_timestamp = current_now - (self.current_spec.memory.long_term.retain_hours * 60 * 60)
+        cutoff_timestamp = current_now - (int(policy.get("long_term_retain_days") or 14) * 24 * 60 * 60)
         removed = self.sqlite_store.delete_long_term_summaries_before(task_id=task_id, cutoff_timestamp=cutoff_timestamp)
         if removed:
             self.log_store.write(
@@ -91,6 +99,85 @@ class AppState:
                 },
             )
         return removed
+
+    def _event_sink(self, event) -> None:
+        self.sqlite_store.insert_event(event)
+        self.memory_file_store.append_short_event(event)
+
+    def get_task_memory_policy(self, task_id: str) -> dict:
+        return self.sqlite_store.get_task_memory_policy(task_id)
+
+    def update_task_memory_policy(
+        self,
+        *,
+        task_id: str,
+        short_term_retain_days: Optional[int] = None,
+        long_term_retain_days: Optional[int] = None,
+        disable_auto_cleanup: Optional[bool] = None,
+    ) -> dict:
+        current = self.get_task_memory_policy(task_id)
+        policy = self.sqlite_store.upsert_task_memory_policy(
+            task_id=task_id,
+            short_term_retain_days=int(short_term_retain_days if short_term_retain_days is not None else current.get("short_term_retain_days", 7)),
+            long_term_retain_days=int(long_term_retain_days if long_term_retain_days is not None else current.get("long_term_retain_days", 14)),
+            disable_auto_cleanup=bool(disable_auto_cleanup) if disable_auto_cleanup is not None else bool(current.get("disable_auto_cleanup", False)),
+        )
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="任务记忆策略已更新",
+            task_id=task_id,
+            metadata={"memory_policy": policy},
+        )
+        return policy
+
+    def _ensure_task_memory_policy(self, *, task_id: str, spec: WatchSpec) -> dict:
+        return self.sqlite_store.upsert_task_memory_policy(
+            task_id=task_id,
+            short_term_retain_days=spec.memory.short_term.retain_days,
+            long_term_retain_days=spec.memory.long_term.retain_days,
+            disable_auto_cleanup=spec.memory.disable_auto_cleanup,
+        )
+
+    def apply_memory_cleanup(self, *, task_id: str, now: Optional[float] = None) -> dict:
+        policy = self.get_task_memory_policy(task_id)
+        if policy.get("disable_auto_cleanup"):
+            return {
+                "task_id": task_id,
+                "skipped": True,
+                "reason": "disable_auto_cleanup",
+                "memory_policy": policy,
+                "deleted_events": 0,
+                "deleted_long_term_summaries": 0,
+            }
+        current_now = now if now is not None else time.time()
+        short_cutoff = current_now - (int(policy.get("short_term_retain_days") or 7) * 24 * 60 * 60)
+        long_cutoff = current_now - (int(policy.get("long_term_retain_days") or 14) * 24 * 60 * 60)
+        deleted_events = self.sqlite_store.delete_events_before(task_id=task_id, cutoff_timestamp=short_cutoff)
+        deleted_long = self.sqlite_store.delete_long_term_summaries_before(task_id=task_id, cutoff_timestamp=long_cutoff)
+        if deleted_events or deleted_long:
+            self.log_store.write(
+                category="control",
+                level="info",
+                message="任务过期记忆已清理",
+                task_id=task_id,
+                metadata={
+                    "deleted_events": deleted_events,
+                    "deleted_long_term_summaries": deleted_long,
+                    "short_cutoff": short_cutoff,
+                    "long_cutoff": long_cutoff,
+                    "memory_policy": policy,
+                },
+            )
+        return {
+            "task_id": task_id,
+            "skipped": False,
+            "memory_policy": policy,
+            "deleted_events": deleted_events,
+            "deleted_long_term_summaries": deleted_long,
+            "short_cutoff": short_cutoff,
+            "long_cutoff": long_cutoff,
+        }
 
     def _runner_log_sink(self, payload: dict) -> None:
         self.log_store.write(
@@ -109,10 +196,11 @@ class AppState:
         self.current_runner = WatchRunner(
             spec,
             task_id=task_id,
-            event_sink=self.sqlite_store.insert_event,
+            event_sink=self._event_sink,
             log_sink=self._runner_log_sink,
             runtime_dir=self.runtime_dir,
         )
+        memory_policy = self._ensure_task_memory_policy(task_id=task_id, spec=spec)
         task_payload = build_task_payload(task_id=task_id, spec=spec)
         self.sqlite_store.upsert_task(
             task_id=task_payload["task_id"],
@@ -123,7 +211,7 @@ class AppState:
         )
         self._last_long_term_summary_at = None
         self._last_long_term_event_index = 0
-        self.log_store.write(category="watch", level="info", message="监控任务已装载", task_id=task_id)
+        self.log_store.write(category="watch", level="info", message="监控任务已装载", task_id=task_id, metadata={"memory_policy": memory_policy})
         return self.current_runner
 
     def set_region_binding_context(self, context: Optional[dict]) -> None:
@@ -156,6 +244,7 @@ class AppState:
             summary=summary["summary"],
             payload=summary,
         )
+        self.memory_file_store.append_long_summary(summary)
         self._prune_expired_long_term_summaries(task_id=self.current_task_id, now=summary["window_end"])
         self._last_long_term_summary_at = summary["window_end"]
         self._last_long_term_event_index = len(events)
@@ -205,6 +294,7 @@ class AppState:
             payload = dict(item)
             payload["is_current"] = payload["task_id"] == current_task_id
             payload["is_last_active"] = payload["task_id"] == last_task_id
+            payload["memory_policy"] = self.get_task_memory_policy(payload["task_id"])
             normalized.append(payload)
         return normalized
 
@@ -245,6 +335,8 @@ class AppState:
                                 metadata={"event_type": event.event_type},
                             )
                     self._flush_long_term_summary(force=False)
+                    if self.current_task_id:
+                        self.apply_memory_cleanup(task_id=self.current_task_id, now=time.time())
                 except Exception as exc:  # pragma: no cover - defensive logging path
                     self.log_store.write(
                         category="watch",

@@ -1536,13 +1536,52 @@ async function refreshTasksForSettings() {
     return;
   }
   items.forEach((item) => {
+    const policy = item.memory_policy || {};
+    const taskId = item.task_id || "";
     const node = document.createElement("div");
     node.className = "timeline-item";
     node.innerHTML = `
-      <div class="timeline-title">${item.task_id || "未知任务"}${item.is_current ? " | 当前" : ""}</div>
+      <div class="timeline-title">${taskId || "未知任务"}${item.is_current ? " | 当前" : ""}</div>
       <div class="timeline-meta">${item.mode || "-"} | ${formatEventTarget(item.target)} | ${formatTimestamp(item.created_at)}</div>
+      <div class="memory-policy-row" data-task-id="${taskId}">
+        <label>短期详细记忆
+          <input class="memory-short-days" type="number" min="1" max="14" value="${policy.short_term_retain_days || 7}" />
+          天
+        </label>
+        <label>长期简略记忆
+          <input class="memory-long-days" type="number" min="1" max="30" value="${policy.long_term_retain_days || 14}" />
+          天
+        </label>
+        <label class="check-row"><input class="memory-disable-cleanup" type="checkbox" ${policy.disable_auto_cleanup ? "checked" : ""} /> 永久保留</label>
+        <button class="text-button memory-policy-save" type="button">保存记忆策略</button>
+      </div>
+      <div class="timeline-meta">${policy.memory_dir ? `目录: ${policy.memory_dir}` : "目录: 保存后自动创建"}</div>
     `;
     container.appendChild(node);
+  });
+  container.querySelectorAll(".memory-policy-save").forEach((button) => {
+    button.onclick = async () => {
+      const row = button.closest(".memory-policy-row");
+      if (!row) {
+        return;
+      }
+      const taskId = row.getAttribute("data-task-id");
+      const result = await requestJson(`/api/tasks/${encodeURIComponent(taskId)}/memory-policy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          short_term_retain_days: Number(row.querySelector(".memory-short-days").value || 7),
+          long_term_retain_days: Number(row.querySelector(".memory-long-days").value || 14),
+          disable_auto_cleanup: row.querySelector(".memory-disable-cleanup").checked,
+        }),
+      });
+      const settingsStatus = document.getElementById("settingsStatus");
+      if (settingsStatus) {
+        const policy = result.memory_policy || {};
+        settingsStatus.textContent = `任务 ${policy.task_id || taskId} 记忆策略已保存 | 短期 ${policy.short_term_retain_days || "-"} 天 | 长期 ${policy.long_term_retain_days || "-"} 天 | ${policy.disable_auto_cleanup ? "永久保留" : "自动清理"}`;
+      }
+      await refreshTasksForSettings();
+    };
   });
 }
 

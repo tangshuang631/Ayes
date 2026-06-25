@@ -97,3 +97,11 @@ def test_roi_editor_anchors_remain_available_for_target_switch_reset_flow() -> N
     assert 'id="queryInput"' in html
     assert 'id="screenshotIntervalInput"' in html
     assert 'id="ocrIntervalInput"' in html
+
+
+def test_settings_panel_exposes_task_memory_policy_controls() -> None:
+    html = Path("web/index.html").read_text(encoding="utf-8")
+    assert 'id="settingsTaskList"' in html
+    assert 'data-memory-policy-list' in html
+    assert "短期详细记忆" in html
+    assert "长期简略记忆" in html

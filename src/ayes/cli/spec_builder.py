@@ -24,16 +24,17 @@ def build_window_observe_spec(*, window_id: int, output_path: str) -> str:
         "memory": {
             "short_term": {
                 "enabled": True,
-                "retain_minutes": 15,
+                "retain_days": 7,
                 "detail_level": "high",
             },
             "long_term": {
                 "enabled": True,
-                "retain_hours": 24,
-                "max_retain_hours": 72,
+                "retain_days": 14,
+                "max_retain_hours": 720,
                 "summary_interval_minutes": 5,
                 "detail_level": "summary",
             },
+            "disable_auto_cleanup": False,
         },
         "watch_intent": {
             "enabled": False,

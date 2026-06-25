@@ -636,10 +636,22 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "path": "/api/watch/task/{task_id}",
             "response_keys": ["status", "task_id", "deleted"],
         },
+        "tasks.memory_policy": {
+            "method": "GET/POST",
+            "path": "/api/tasks/{task_id}/memory-policy",
+            "request": {"short_term_retain_days": "1-14", "long_term_retain_days": "1-30", "disable_auto_cleanup": "可选，true 表示永久保留不自动清理"},
+            "response_keys": ["status", "memory_policy"],
+        },
+        "tasks.memory_cleanup": {
+            "method": "POST",
+            "path": "/api/tasks/{task_id}/memory-cleanup",
+            "request": {"now": "可选"},
+            "response_keys": ["status", "cleanup"],
+        },
         "agent.observe_live": {
             "method": "GET",
             "path": "/api/agent/observe-live",
-            "query": {"task_id": "可选", "minutes": "1-15", "limit": "1-100"},
+            "query": {"task_id": "可选", "minutes": "1-20160", "limit": "1-100"},
             "response_keys": ["schema_version", "task_id", "observed_at", "time_scope", "status", "screenshot", "recent_events", "memory_items", "alerts", "logs", "cleanup_reminder", "region_binding_context", "vision_status", "evidence_status", "agent_hints"],
         },
         "control.status": {
@@ -692,19 +704,19 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
         "timeline.recent": {
             "method": "GET",
             "path": "/api/timeline/recent",
-            "query": {"task_id": "可选", "minutes": "1-15", "limit": "1-200"},
+            "query": {"task_id": "可选", "minutes": "1-20160", "limit": "1-200"},
             "response_keys": ["items"],
         },
         "timeline.long_term": {
             "method": "GET",
             "path": "/api/timeline/long-term",
-            "query": {"task_id": "可选", "limit": "1-100"},
+            "query": {"task_id": "可选", "hours": "1-720", "limit": "1-100"},
             "response_keys": ["items"],
         },
         "timeline.query": {
             "method": "GET",
             "path": "/api/ask",
-            "query": {"task_id": "可选", "question": "必填", "minutes": "1-15"},
+            "query": {"task_id": "可选", "question": "必填", "minutes": "1-20160", "hours": "1-720"},
             "response_keys": ["task_id", "question", "minutes", "answer", "matched_events", "structured_matches", "structured_observations", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
         },
         "snapshot.inspect": {
@@ -716,13 +728,13 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
         "memory.recent": {
             "method": "GET",
             "path": "/api/memory/recent",
-            "query": {"task_id": "可选", "minutes": "1-15", "keyword": "可选"},
+            "query": {"task_id": "可选", "minutes": "1-20160", "keyword": "可选"},
             "response_keys": ["task_id", "minutes", "answer", "matched_events", "structured_matches", "memory_layers_used", "time_range", "evidence_refs", "evidence_previews", "time_scope_respected"],
         },
         "memory.items": {
             "method": "GET",
             "path": "/api/memory/items",
-            "query": {"task_id": "可选", "minutes": "1-15", "limit": "1-100", "keyword": "可选"},
+            "query": {"task_id": "可选", "minutes": "1-20160", "limit": "1-100", "keyword": "可选"},
             "response_keys": ["task_id", "minutes", "limit", "count", "items"],
         },
         "logs.recent": {

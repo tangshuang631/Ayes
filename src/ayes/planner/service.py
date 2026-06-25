@@ -132,10 +132,11 @@ class WatchSpecPlanner:
                 ),
             )
 
-        confirmation_summary.append(
-            f"短期记忆保留 {draft_spec['memory']['short_term']['retain_minutes']} 分钟，"
-            f"长期记忆保留 {draft_spec['memory']['long_term']['retain_hours']} 小时"
-        )
+        short_memory = draft_spec["memory"]["short_term"]
+        long_memory = draft_spec["memory"]["long_term"]
+        short_label = f"{short_memory['retain_days']} 天" if "retain_days" in short_memory else f"{short_memory['retain_minutes']} 分钟"
+        long_label = f"{long_memory['retain_days']} 天" if "retain_days" in long_memory else f"{long_memory['retain_hours']} 小时"
+        confirmation_summary.append(f"短期详细记忆保留 {short_label}，长期简略记忆保留 {long_label}")
         if draft_spec["vision"]["enabled"]:
             confirmation_summary.append(f"已建议开启视觉增强模型 {draft_spec['vision']['model']}，这是当前默认本地视觉模型")
             confirmation_summary.append("若本机未安装 Ollama、未启动服务或未拉取默认模型，agent 应先提示用户执行安装/启动/拉取步骤；在获得权限后，agent 也可代为完成并再开启本地视觉增强")
@@ -378,16 +379,17 @@ class WatchSpecPlanner:
             "memory": {
                 "short_term": {
                     "enabled": True,
-                    "retain_minutes": 15,
+                    "retain_days": 7,
                     "detail_level": "high",
                 },
                 "long_term": {
                     "enabled": True,
-                    "retain_hours": 24,
-                    "max_retain_hours": 72,
+                    "retain_days": 14,
+                    "max_retain_hours": 720,
                     "summary_interval_minutes": 5,
                     "detail_level": "summary",
                 },
+                "disable_auto_cleanup": False,
             },
             "watch_intent": {
                 "enabled": mode == "triggered",
@@ -542,29 +544,44 @@ class WatchSpecPlanner:
 
     def _build_memory(self, prompt: str) -> Tuple[Dict[str, Any], List[str]]:
         memory = {
-            "short_term": {"enabled": True, "retain_minutes": 15, "detail_level": "high"},
+            "short_term": {"enabled": True, "retain_days": 7, "detail_level": "high"},
             "long_term": {
                 "enabled": True,
-                "retain_hours": 24,
-                "max_retain_hours": 72,
+                "retain_days": 14,
+                "max_retain_hours": 720,
                 "summary_interval_minutes": 5,
                 "detail_level": "summary",
             },
+            "disable_auto_cleanup": False,
         }
         assumptions = [
-            "未显式指定短期记忆时默认保留 15 分钟",
-            "未显式指定长期记忆时默认保留 24 小时",
+            "未显式指定短期详细记忆时默认保留 7 天",
+            "未显式指定长期简略记忆时默认保留 14 天",
         ]
+        short_days_match = re.search(r"(?:短期记忆|短期保留|详细记忆).*?([0-9]{1,2})\s*天", prompt)
+        if short_days_match:
+            value = max(1, min(int(short_days_match.group(1)), 14))
+            memory["short_term"]["retain_days"] = value
+            assumptions = [item for item in assumptions if "短期" not in item]
         short_match = re.search(r"(?:短期记忆|短期保留|详细记忆).*?([0-9]{1,2})\s*分钟", prompt)
         if short_match:
             value = max(1, min(int(short_match.group(1)), 15))
             memory["short_term"]["retain_minutes"] = value
+            memory["short_term"].pop("retain_days", None)
             assumptions = [item for item in assumptions if "短期记忆" not in item]
+        long_days_match = re.search(r"(?:长期记忆|长期保留|长期监控).*?([0-9]{1,2})\s*天", prompt)
+        if long_days_match:
+            value = max(1, min(int(long_days_match.group(1)), 30))
+            memory["long_term"]["retain_days"] = value
+            assumptions = [item for item in assumptions if "长期" not in item]
         long_match = re.search(r"(?:长期记忆|长期保留|长期监控).*?([0-9]{1,2})\s*小时", prompt)
         if long_match:
-            value = max(1, min(int(long_match.group(1)), 72))
+            value = max(1, min(int(long_match.group(1)), 720))
             memory["long_term"]["retain_hours"] = value
+            memory["long_term"].pop("retain_days", None)
             assumptions = [item for item in assumptions if "长期记忆" not in item]
+        if "永久保留" in prompt or "不自动清理" in prompt:
+            memory["disable_auto_cleanup"] = True
         return memory, assumptions
 
     def _build_vision(self, prompt: str) -> Tuple[Dict[str, Any], List[str]]:
