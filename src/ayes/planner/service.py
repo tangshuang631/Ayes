@@ -8,7 +8,7 @@ from uuid import uuid4
 from typing import Any, Dict, List, Optional, Tuple
 
 from ayes.config.models import WatchSpec
-from ayes.planner.models import ActionIntent, PlanIssue, PlanQuestion, RegionIntent, WatchPlanDraft
+from ayes.planner.models import ActionIntent, PlanIssue, PlanQuestion, RegionIntent, SetupGuidance, WatchPlanDraft
 
 
 class WatchSpecPlanner:
@@ -30,6 +30,7 @@ class WatchSpecPlanner:
         questions: List[PlanQuestion] = []
         region_intents: List[RegionIntent] = []
         action_intents: List[ActionIntent] = []
+        setup_guidance: List[SetupGuidance] = []
         ambiguities: List[PlanIssue] = []
         assumptions: List[str] = []
         confirmation_summary: List[str] = []
@@ -79,6 +80,30 @@ class WatchSpecPlanner:
                     suggested_answer="使用企业微信 webhook 通知我",
                 )
             )
+            setup_guidance.append(
+                SetupGuidance(
+                    guidance_id="setup_wecom_webhook",
+                    topic="wecom_webhook",
+                    status="needs_user_setup",
+                    summary="当前任务需要企业微信 webhook 才能真正发出提醒。",
+                    blocking_fields=["alert.webhook_url"],
+                    user_steps=[
+                        "在企业微信群机器人配置页创建或查看现有 webhook。",
+                        "把完整 webhook URL 发给 agent，或让 agent 在确认后替你写入任务配置。",
+                        "确认提醒对象、冷却时间和去重策略是否符合预期。",
+                    ],
+                    agent_steps=[
+                        "优先继续追问 questions[] 里的 webhook_missing，而不是直接中断任务。",
+                        "当用户给出 webhook URL 后，写入 confirm-plan 的 webhook_url 并继续装载任务。",
+                        "若用户不知道怎么获取 webhook，重复用结构化步骤指导，直到用户补齐或改成 observe 模式。",
+                    ],
+                    commands=[
+                        "ayes-agent-local plan-spec --task-id <task_id> --prompt \"...\" --target-type process --process-name \"...\"",
+                        "ayes-agent-local confirm-plan --plan-file /tmp/<task_id>.plan.json --webhook-url \"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx\"",
+                    ],
+                    can_agent_attempt_after_permission=False,
+                )
+            )
         if mode == "triggered":
             confirmation_summary.append(self._build_trigger_summary(watch_intent))
         else:
@@ -112,7 +137,39 @@ class WatchSpecPlanner:
             f"长期记忆保留 {draft_spec['memory']['long_term']['retain_hours']} 小时"
         )
         if draft_spec["vision"]["enabled"]:
-            confirmation_summary.append(f"已建议开启视觉增强模型 {draft_spec['vision']['model']}")
+            confirmation_summary.append(f"已建议开启视觉增强模型 {draft_spec['vision']['model']}，这是当前默认本地视觉模型")
+            confirmation_summary.append("若本机未安装 Ollama、未启动服务或未拉取默认模型，agent 应先提示用户执行安装/启动/拉取步骤；在获得权限后，agent 也可代为完成并再开启本地视觉增强")
+            if int(draft_spec["vision"].get("sampling_every_n_runs") or 1) > 1:
+                confirmation_summary.append(f"本地视觉模型将按每隔 {draft_spec['vision']['sampling_every_n_runs']} 次截图触发一次")
+            if int(draft_spec["vision"].get("sampling_min_interval_sec") or 0) > 0:
+                confirmation_summary.append(f"本地视觉模型最少间隔 {draft_spec['vision']['sampling_min_interval_sec']} 秒")
+            setup_guidance.append(
+                SetupGuidance(
+                    guidance_id="setup_local_vision",
+                    topic="local_vision",
+                    status="optional_enablement",
+                    summary="当前任务适合按需启用本地视觉增强，但仍应保持 OCR-first。",
+                    blocking_fields=[],
+                    user_steps=[
+                        "只有当用户明确希望开启本地大模型增强时，才执行 vision prepare。",
+                        "若本机缺 Ollama、缺服务或缺默认模型，按返回步骤安装、启动、拉取 qwen2.5vl:7b。",
+                        "启用后继续按高视觉负载规则使用，不要把简单纯文本任务也交给本地视觉模型。",
+                    ],
+                    agent_steps=[
+                        "先通过对话确认用户是否真的要开启本地视觉增强。",
+                        "只有在用户明确要求开启时，才调用 vision prepare；不要在 observe-live 阶段主动探测。",
+                        "若 prepare 返回 ready，再写入 vision enable；否则重复输出修复建议，直到用户补齐或放弃。",
+                    ],
+                    commands=[
+                        "ayes-agent-local vision prepare --requested-by agent_enable_local_vision",
+                        "ayes-agent-local vision enable --provider ollama --model qwen2.5vl:7b --auto-use-when-available true",
+                        "ayes-agent-local vision status",
+                    ],
+                    can_agent_attempt_after_permission=True,
+                )
+            )
+        else:
+            confirmation_summary.append("当前任务以文字和数字读取为主，默认不启用本地视觉增强")
         if not watch_intent.get("queries") and not watch_intent.get("rules") and mode == "triggered":
             ambiguities.append(PlanIssue(field="watch_intent", reason="未从自然语言中稳定提取出触发条件"))
 
@@ -130,6 +187,7 @@ class WatchSpecPlanner:
             questions=questions,
             region_intents=region_intents,
             action_intents=action_intents,
+            setup_guidance=setup_guidance,
             ambiguities=ambiguities,
             assumptions=assumptions,
             confirmation_summary=confirmation_summary,
@@ -155,6 +213,12 @@ class WatchSpecPlanner:
             alert["enabled"] = True
             alert["channel"] = "wecom_webhook"
             alert["webhook_url"] = webhook_url
+        alert_message_title = str(confirmations.get("alert_message_title") or "").strip()
+        if alert_message_title:
+            spec_payload.setdefault("alert", {})["message_title"] = alert_message_title
+        alert_message_template = str(confirmations.get("alert_message_template") or "").strip()
+        if alert_message_template:
+            spec_payload.setdefault("alert", {})["message_template"] = alert_message_template
 
         target_override = confirmations.get("target")
         if isinstance(target_override, dict) and target_override:
@@ -180,6 +244,22 @@ class WatchSpecPlanner:
                 for item in region_bindings
             ]
             payload["region_bindings"] = region_bindings
+            existing_intents = payload.get("region_intents") or plan_payload.get("region_intents") or []
+            bound_ids = {str(item.get("region_intent_id") or "").strip() for item in region_bindings}
+            normalized_intents = []
+            unbound_region_intents = []
+            for item in existing_intents:
+                normalized = dict(item)
+                region_intent_id = str(normalized.get("region_intent_id") or "").strip()
+                if region_intent_id and region_intent_id in bound_ids:
+                    normalized["status"] = "bound"
+                else:
+                    normalized["status"] = normalized.get("status") or "needs_binding"
+                    if normalized.get("required", True):
+                        unbound_region_intents.append(normalized)
+                normalized_intents.append(normalized)
+            payload["region_intents"] = normalized_intents
+            payload["unbound_region_intents"] = unbound_region_intents
 
         region_intents = confirmations.get("region_intents")
         if isinstance(region_intents, list) and region_intents:
@@ -287,7 +367,7 @@ class WatchSpecPlanner:
             "vision": {
                 "enabled": False,
                 "provider": "ollama",
-                "model": "Molmo-7B-D-0924",
+                "model": "qwen2.5vl:7b",
                 "trigger_when_ocr_sparse": True,
                 "ocr_sparse_min_chars": 12,
                 "trigger_on_visual_regions": True,
@@ -321,6 +401,8 @@ class WatchSpecPlanner:
                 "channel": "wecom_webhook",
                 "webhook_url_env": "AYES_WECOM_WEBHOOK_URL",
                 "webhook_url": "",
+                "message_title": "",
+                "message_template": "",
                 "priority_threshold": "medium",
                 "cooldown_sec": 120,
                 "dedupe_window_sec": 300,
@@ -359,6 +441,13 @@ class WatchSpecPlanner:
         queries: List[str] = []
         rules: List[Dict[str, Any]] = []
         summary = prompt
+
+        explicit_trigger_match = re.search(
+            r"(?:出现|看到|显示|变成|包含)\s*([A-Za-z0-9\u4e00-\u9fff_.\-]{2,32})\s*时提醒我",
+            prompt,
+        )
+        if explicit_trigger_match:
+            queries.append(explicit_trigger_match.group(1).strip())
 
         price_match = re.search(r"价格\s*(?:低于|小于|不高于)\s*([0-9]+(?:\.[0-9]+)?)", prompt)
         if price_match:
@@ -482,19 +571,38 @@ class WatchSpecPlanner:
         vision = {
             "enabled": False,
             "provider": "ollama",
-            "model": "Molmo-7B-D-0924",
+            "model": "qwen2.5vl:7b",
             "trigger_when_ocr_sparse": True,
             "ocr_sparse_min_chars": 12,
             "trigger_on_visual_regions": True,
             "trigger_on_watch_intent": True,
             "trigger_on_question_semantics": True,
+            "disable_for_text_only_tasks": True,
+            "disable_for_numeric_only_tasks": True,
+            "disable_for_threshold_rules": True,
+            "sampling_every_n_runs": 1,
+            "sampling_min_interval_sec": 0,
             "max_calls_per_minute": 6,
         }
         assumptions: List[str] = []
-        visual_keywords = ["图表", "图片", "视觉", "看图", "颜色", "图标", "按钮"]
+        visual_keywords = ["图表", "图片", "视觉", "看图", "颜色", "图标", "按钮", "布局", "曲线", "走势", "仪表盘"]
+        simple_text_only_keywords = ["只看文字", "只看文本", "只看数字", "不需要看图", "不需要颜色", "不需要按钮", "不需要图表"]
+        if any(keyword in prompt for keyword in simple_text_only_keywords):
+            assumptions.append("当前任务以文字和数字读取为主，默认不启用本地视觉增强")
+            return vision, assumptions
         if any(keyword in prompt for keyword in visual_keywords):
             vision["enabled"] = True
-            assumptions.append("请求中包含视觉理解诉求，已建议开启本地视觉增强")
+            assumptions.append("请求中包含高视觉理解诉求，已建议在需要时开启本地视觉增强")
+        every_n_runs_match = re.search(r"每隔\s*([0-9]{1,3})\s*次(?:截图|采样|图片)", prompt)
+        if every_n_runs_match:
+            vision["sampling_every_n_runs"] = max(1, int(every_n_runs_match.group(1)))
+            vision["enabled"] = True
+            assumptions.append(f"已按对话要求设置为每隔 {vision['sampling_every_n_runs']} 次截图再调用一次本地视觉模型")
+        min_interval_match = re.search(r"(?:至少间隔|最少间隔|间隔)\s*([0-9]{1,4})\s*秒", prompt)
+        if min_interval_match:
+            vision["sampling_min_interval_sec"] = max(0, int(min_interval_match.group(1)))
+            vision["enabled"] = True
+            assumptions.append(f"已按对话要求设置本地视觉模型最少间隔 {vision['sampling_min_interval_sec']} 秒")
         return vision, assumptions
 
     def _build_alert(self, *, mode: str, webhook_url: Optional[str]) -> Dict[str, Any]:
@@ -503,6 +611,8 @@ class WatchSpecPlanner:
             "channel": "wecom_webhook",
             "webhook_url_env": "AYES_WECOM_WEBHOOK_URL",
             "webhook_url": (webhook_url or "").strip(),
+            "message_title": "",
+            "message_template": "",
             "priority_threshold": "medium",
             "cooldown_sec": 120,
             "dedupe_window_sec": 300,

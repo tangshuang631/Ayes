@@ -1490,6 +1490,104 @@ async function refreshVisionModels() {
   renderVisionModels(data.items || []);
 }
 
+async function refreshControlSettings() {
+  const payload = await requestJson("/api/control/settings");
+  const settings = payload.settings || {};
+  const captureSleepInput = document.getElementById("captureSleepInput");
+  const cleanupReminderDaysInput = document.getElementById("cleanupReminderDaysInput");
+  const settingsStatus = document.getElementById("settingsStatus");
+  if (captureSleepInput) {
+    captureSleepInput.checked = Boolean(settings.capture_screen_when_display_sleep);
+  }
+  if (cleanupReminderDaysInput) {
+    cleanupReminderDaysInput.value = settings.cleanup_reminder_days || 7;
+  }
+  if (settingsStatus) {
+    settingsStatus.textContent = settings.capture_sleep_note || "";
+  }
+}
+
+async function saveControlSettings() {
+  const payload = {
+    capture_screen_when_display_sleep: document.getElementById("captureSleepInput").checked,
+    cleanup_reminder_days: Number(document.getElementById("cleanupReminderDaysInput").value || 7),
+  };
+  const result = await requestJson("/api/control/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const settingsStatus = document.getElementById("settingsStatus");
+  if (settingsStatus) {
+    settingsStatus.textContent = `已保存 | 清理提醒 ${result.settings?.cleanup_reminder_days || "-"} 天 | 熄屏整屏策略 ${result.settings?.capture_screen_when_display_sleep ? "开启" : "关闭"}`;
+  }
+}
+
+async function refreshTasksForSettings() {
+  const payload = await requestJson("/api/tasks?limit=50");
+  const container = document.getElementById("settingsTaskList");
+  if (!container) {
+    return;
+  }
+  const items = payload.items || [];
+  container.innerHTML = "";
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-state">当前没有持久化任务。</div>';
+    return;
+  }
+  items.forEach((item) => {
+    const node = document.createElement("div");
+    node.className = "timeline-item";
+    node.innerHTML = `
+      <div class="timeline-title">${item.task_id || "未知任务"}${item.is_current ? " | 当前" : ""}</div>
+      <div class="timeline-meta">${item.mode || "-"} | ${formatEventTarget(item.target)} | ${formatTimestamp(item.created_at)}</div>
+    `;
+    container.appendChild(node);
+  });
+}
+
+async function saveCurrentRegionsToTask() {
+  const regionsJson = document.getElementById("regionsJsonInput").value.trim();
+  let regions = [];
+  if (regionsJson) {
+    try {
+      const parsed = JSON.parse(regionsJson);
+      regions = Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return;
+    }
+  }
+  for (const region of regions) {
+    await requestJson("/api/watch/current/regions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ region }),
+    });
+  }
+  await refreshStatus();
+  await refreshScreenshot();
+}
+
+async function prepareVisionFromSettings() {
+  const result = await requestJson("/api/vision/prepare", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ requested_by: "settings_panel" }),
+  });
+  setText("settingsStatus", result);
+}
+
+async function enableVisionFromSettings() {
+  const selectedVisionModel = document.getElementById("visionModelSelect").value.trim();
+  const model = selectedVisionModel || document.getElementById("visionModelInput").value.trim() || "qwen2.5vl:7b";
+  const result = await requestJson("/api/vision/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: true, provider: "ollama", model, auto_use_when_available: true }),
+  });
+  setText("settingsStatus", result);
+}
+
 async function queryMemory() {
   const keyword = document.getElementById("memoryKeyword").value;
   await refreshScreenshot();
@@ -1726,6 +1824,7 @@ document.getElementById("resetRegionsBtn").onclick = () => {
   renderRegionList();
   renderRegionOverlay();
 };
+document.getElementById("saveCurrentRegionsBtn").onclick = saveCurrentRegionsToTask;
 document.getElementById("loadSelectedPreviewBtn").onclick = () => {
   const previewPath = getSelectedTargetPreviewPath();
   if (!previewPath) {
@@ -1742,6 +1841,23 @@ document.getElementById("visionModelSelect").onchange = (event) => {
 document.getElementById("regionsJsonInput").addEventListener("change", (event) => {
   loadRegionsFromTextValue(event.target.value);
 });
+document.getElementById("saveSettingsBtn").onclick = saveControlSettings;
+document.getElementById("refreshTasksForSettingsBtn").onclick = refreshTasksForSettings;
+document.getElementById("openLogsFromSettingsBtn").onclick = () => {
+  document.getElementById("collapsedLogSection").open = true;
+  document.getElementById("collapsedLogSection").scrollIntoView({ behavior: "smooth", block: "start" });
+};
+document.getElementById("prepareVisionFromSettingsBtn").onclick = prepareVisionFromSettings;
+document.getElementById("enableVisionFromSettingsBtn").onclick = enableVisionFromSettings;
+
+function applyInitialHashRoute() {
+  if (window.location.hash === "#roi-editor") {
+    document.getElementById("loadSelectedPreviewBtn").scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  if (window.location.hash === "#settings") {
+    document.getElementById("settingsPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
 
 const roiStage = document.getElementById("roiEditorStage");
 const roiImage = document.getElementById("roiEditorImage");
@@ -1846,6 +1962,9 @@ notifyFrontendSessionOpen().finally(() => {
   refreshScreenshot();
   refreshMemoryItems();
   refreshVisionModels();
+  refreshControlSettings();
+  refreshTasksForSettings();
+  applyInitialHashRoute();
   ensureStatusPolling();
   ensureSessionHeartbeat();
 });

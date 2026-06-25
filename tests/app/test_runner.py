@@ -331,7 +331,7 @@ def test_runner_vision_event_contains_structured_observation() -> None:
             "vision": {
                 "enabled": True,
                 "provider": "ollama",
-                "model": "Molmo-7B-D-0924",
+                "model": "qwen2.5vl:7b",
                 "trigger_when_ocr_sparse": True,
                 "ocr_sparse_min_chars": 999,
                 "trigger_on_visual_regions": True,
@@ -675,6 +675,85 @@ def test_runner_throttles_vision_enhancement_by_calls_per_minute() -> None:
     assert any(event.event_type == "visual_summary" for event in first_events)
     assert not any(event.event_type == "visual_summary" for event in second_events)
     assert any(item["category"] == "vision" and "速率限制" in item["message"] for item in logs)
+
+
+def test_runner_skips_vision_for_numeric_threshold_tasks_even_when_ocr_sparse() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "triggered",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "vision": {
+                "enabled": True,
+                "provider": "ollama",
+                "model": "fake-vision-model",
+                "trigger_when_ocr_sparse": True,
+                "ocr_sparse_min_chars": 12,
+                "disable_for_numeric_only_tasks": True,
+                "disable_for_threshold_rules": True,
+            },
+            "watch_intent": {
+                "enabled": True,
+                "summary": "价格低于 299 时提醒",
+                "queries": ["价格低于 299"],
+                "rules": [{"type": "numeric_threshold", "field": "price", "operator": "lt", "value": 299}],
+            },
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = FakeCapture()
+    runner.ocr = SparseOCR()
+    runner.vision = FakeVision()
+    events = runner.run_once(now=100.0)
+    assert not any(event.event_type == "visual_summary" for event in events)
+    decision = next(event for event in events if event.event_type == "vision_skipped")
+    assert "threshold_rule_disabled" in (decision.visual.attributes.get("vision_blocked_reason") or "")
+
+
+def test_runner_uses_vision_every_n_runs_when_enabled_by_user_policy() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {
+                "type": "screen",
+                "screen_id": 1,
+                "regions": [{"region_id": "roi_chart", "name": "图表区", "x": 0, "y": 0, "w": 1, "h": 1}],
+            },
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "vision": {
+                "enabled": True,
+                "provider": "ollama",
+                "model": "fake-vision-model",
+                "trigger_on_visual_regions": True,
+                "sampling_every_n_runs": 3,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = FakeCapture()
+    runner.ocr = SparseOCR()
+    runner.vision = FakeVision()
+    first = runner.run_once(now=100.0)
+    second = runner.run_once(now=101.0)
+    third = runner.run_once(now=102.0)
+    assert not any(event.event_type == "visual_summary" for event in first)
+    assert not any(event.event_type == "visual_summary" for event in second)
+    assert any(event.event_type == "visual_summary" for event in third)
 
 
 def test_runner_cleans_expired_evidence_files_but_keeps_recent_ones(tmp_path) -> None:

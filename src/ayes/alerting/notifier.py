@@ -20,7 +20,7 @@ class WebhookNotifier:
         payload = {
             "msgtype": "text",
             "text": {
-                "content": self._build_message(event),
+                "content": self._build_message(event, alert_config=alert_config),
             },
             "ayes_event": asdict(event),
         }
@@ -46,11 +46,29 @@ class WebhookNotifier:
             return direct_url
         return os.environ.get(alert_config.webhook_url_env, "").strip()
 
-    def _build_message(self, event: TimelineEvent) -> str:
+    def _build_message(self, event: TimelineEvent, *, alert_config: AlertConfig) -> str:
         process_name = event.target.process_name or "-"
         window_title = event.target.window_title or "-"
+        title = (alert_config.message_title or "").strip() or "命中监控目标"
+        template = (alert_config.message_template or "").strip()
+        if template:
+            values = {
+                "task_id": event.task_id,
+                "timestamp": int(event.timestamp),
+                "process_name": process_name,
+                "window_title": window_title,
+                "priority": event.priority,
+                "confidence": event.confidence,
+                "summary": event.summary,
+                "event_id": event.event_id,
+            }
+            try:
+                body = template.format(**values)
+            except KeyError:
+                body = template
+            return f"[Ayes] {title}\n\n{body}"
         return (
-            "[Ayes] 命中监控目标\n\n"
+            f"[Ayes] {title}\n\n"
             f"任务：{event.task_id}\n"
             f"时间：{int(event.timestamp)}\n"
             f"进程：{process_name}\n"

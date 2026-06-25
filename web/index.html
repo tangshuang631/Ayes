@@ -81,6 +81,7 @@
           <div class="query-row">
             <button id="resetRegionsBtn" class="text-button">清空区域</button>
             <button id="loadSelectedPreviewBtn" class="text-button">载入目标预览</button>
+            <button id="saveCurrentRegionsBtn" class="text-button">保存到当前任务</button>
           </div>
           <div id="roiEditorEmpty" class="result-meta">先从候选列表选择屏幕、进程或窗口，再载入预览进行框选。</div>
           <div id="roiEditorShell" class="roi-editor-shell hidden">
@@ -130,6 +131,27 @@
               </div>
             </section>
           </details>
+        </section>
+        <section id="settingsPanel" class="panel-section">
+          <div class="section-head">
+            <h2>后台与设置</h2>
+            <button id="saveSettingsBtn" class="text-button">保存设置</button>
+          </div>
+          <div class="result-meta">这里用于配置托盘菜单之外的低频项。进程/窗口监控默认更适合熄屏场景；整屏熄屏监控取决于 macOS 是否仍提供可读显示帧。</div>
+          <div class="query-row two-columns">
+            <label class="check-row"><input id="captureSleepInput" type="checkbox" /> 整屏监控尝试使用熄屏虚拟屏幕</label>
+            <input id="cleanupReminderDaysInput" type="number" min="1" value="7" placeholder="清理提醒天数" />
+          </div>
+          <div class="query-row two-columns">
+            <button id="refreshTasksForSettingsBtn" class="text-button">刷新任务列表</button>
+            <button id="openLogsFromSettingsBtn" class="text-button">查看近期日志</button>
+          </div>
+          <div class="query-row two-columns">
+            <button id="prepareVisionFromSettingsBtn" class="text-button">检查本地视觉增强</button>
+            <button id="enableVisionFromSettingsBtn" class="text-button">启用当前视觉配置</button>
+          </div>
+          <div id="settingsStatus" class="result-meta"></div>
+          <div id="settingsTaskList" class="timeline-list"></div>
         </section>
         <section class="panel-section collapsed-panel-section">
           <details id="taskScopeSection" class="collapsed-section">

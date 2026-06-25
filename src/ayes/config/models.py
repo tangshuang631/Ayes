@@ -135,12 +135,17 @@ class SamplingConfig:
 class VisionConfig:
     enabled: bool = False
     provider: str = "ollama"
-    model: str = "Molmo-7B-D-0924"
+    model: str = "qwen2.5vl:7b"
     trigger_when_ocr_sparse: bool = True
     ocr_sparse_min_chars: int = 12
     trigger_on_visual_regions: bool = True
     trigger_on_watch_intent: bool = True
     trigger_on_question_semantics: bool = True
+    disable_for_text_only_tasks: bool = True
+    disable_for_numeric_only_tasks: bool = True
+    disable_for_threshold_rules: bool = True
+    sampling_every_n_runs: int = 1
+    sampling_min_interval_sec: int = 0
     max_calls_per_minute: int = 6
 
     @classmethod
@@ -149,7 +154,7 @@ class VisionConfig:
         return cls(
             enabled=_require_bool(data.get("enabled", False), "vision.enabled"),
             provider=provider,
-            model=_require_str(data.get("model", "Molmo-7B-D-0924"), "vision.model"),
+            model=_require_str(data.get("model", "qwen2.5vl:7b"), "vision.model"),
             trigger_when_ocr_sparse=_require_bool(
                 data.get("trigger_when_ocr_sparse", True),
                 "vision.trigger_when_ocr_sparse",
@@ -167,6 +172,20 @@ class VisionConfig:
                 data.get("trigger_on_question_semantics", True),
                 "vision.trigger_on_question_semantics",
             ),
+            disable_for_text_only_tasks=_require_bool(
+                data.get("disable_for_text_only_tasks", True),
+                "vision.disable_for_text_only_tasks",
+            ),
+            disable_for_numeric_only_tasks=_require_bool(
+                data.get("disable_for_numeric_only_tasks", True),
+                "vision.disable_for_numeric_only_tasks",
+            ),
+            disable_for_threshold_rules=_require_bool(
+                data.get("disable_for_threshold_rules", True),
+                "vision.disable_for_threshold_rules",
+            ),
+            sampling_every_n_runs=_require_int(data.get("sampling_every_n_runs", 1), "vision.sampling_every_n_runs", 1),
+            sampling_min_interval_sec=_require_int(data.get("sampling_min_interval_sec", 0), "vision.sampling_min_interval_sec", 0),
             max_calls_per_minute=_require_int(data.get("max_calls_per_minute", 6), "vision.max_calls_per_minute", 1),
         )
 
@@ -313,6 +332,8 @@ class AlertConfig:
     channel: str = "wecom_webhook"
     webhook_url_env: str = "AYES_WECOM_WEBHOOK_URL"
     webhook_url: str = ""
+    message_title: str = ""
+    message_template: str = ""
     priority_threshold: str = "medium"
     cooldown_sec: int = 120
     dedupe_window_sec: int = 300
@@ -329,11 +350,27 @@ class AlertConfig:
             webhook_url = raw_webhook_url.strip()
         else:
             raise ConfigError("alert.webhook_url 必须是字符串")
+        raw_message_title = data.get("message_title", "")
+        if raw_message_title is None:
+            message_title = ""
+        elif isinstance(raw_message_title, str):
+            message_title = raw_message_title.strip()
+        else:
+            raise ConfigError("alert.message_title 必须是字符串")
+        raw_message_template = data.get("message_template", "")
+        if raw_message_template is None:
+            message_template = ""
+        elif isinstance(raw_message_template, str):
+            message_template = raw_message_template.strip()
+        else:
+            raise ConfigError("alert.message_template 必须是字符串")
         return cls(
             enabled=_require_bool(data.get("enabled", False), "alert.enabled"),
             channel=_require_str(data.get("channel", "wecom_webhook"), "alert.channel"),
             webhook_url_env=_require_str(data.get("webhook_url_env", "AYES_WECOM_WEBHOOK_URL"), "alert.webhook_url_env"),
             webhook_url=webhook_url,
+            message_title=message_title,
+            message_template=message_template,
             priority_threshold=priority_threshold,
             cooldown_sec=_require_int(data.get("cooldown_sec", 120), "alert.cooldown_sec", 0),
             dedupe_window_sec=_require_int(data.get("dedupe_window_sec", 300), "alert.dedupe_window_sec", 0),

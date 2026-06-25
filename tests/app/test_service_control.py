@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ayes.app.service_control import ServiceConfig, ensure_service_started
+from ayes.app.service_control import ServiceConfig, default_service_config, ensure_service_started, wait_for_pid_exit
 
 
 def build_config(tmp_path: Path) -> ServiceConfig:
@@ -87,3 +87,41 @@ def test_ensure_service_started_reports_log_hint_when_launch_never_becomes_ready
 
     assert "未在预期时间内就绪" in str(excinfo.value)
     assert "bind on address" in str(excinfo.value)
+
+
+def test_wait_for_pid_exit_returns_true_after_process_stops() -> None:
+    states = iter([True, True, False])
+
+    exited = wait_for_pid_exit(
+        4321,
+        timeout_sec=0.1,
+        poll_interval_sec=0.0,
+        pid_alive_check=lambda pid: next(states) if pid == 4321 else False,
+    )
+
+    assert exited is True
+
+
+def test_wait_for_pid_exit_returns_false_when_process_stays_alive() -> None:
+    exited = wait_for_pid_exit(
+        4321,
+        timeout_sec=0.01,
+        poll_interval_sec=0.0,
+        pid_alive_check=lambda pid: pid == 4321,
+    )
+
+    assert exited is False
+
+
+def test_default_service_config_honors_ayes_runtime_dir_env(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "installed-skill" / "runtime"
+    repo_root = tmp_path / "Ayes"
+    repo_root.mkdir()
+    monkeypatch.setenv("AYES_RUNTIME_DIR", str(runtime_dir))
+
+    config = default_service_config(repo_root)
+
+    assert config.root_dir == repo_root.resolve()
+    assert config.runtime_dir == runtime_dir.resolve()
+    assert config.pid_file == runtime_dir.resolve() / "ayes-server.pid"
+    assert config.log_file == runtime_dir.resolve() / "ayes-server.log"

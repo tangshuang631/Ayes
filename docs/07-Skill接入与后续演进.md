@@ -73,11 +73,12 @@
 1. `targets` 或工作台选择目标
 2. `plan-watch-spec` 生成任务草案
 3. 智能体按 `questions[]` 逐条补问
-4. 智能体复述 `confirmation_summary`
-5. `confirm-plan` 确认并装载最终任务
-5. `start`
-6. `observe-live` 回读实时运行上下文
-7. `recent / screenshot / ask / alerts / logs` 按问题深挖细节
+4. 若 webhook、本地视觉模型或其他依赖未就绪，智能体按 `setup_guidance[]` 持续指导补齐配置
+5. 智能体复述 `confirmation_summary`
+6. `confirm-plan` 确认并装载最终任务
+7. `start`
+8. `observe-live` 回读实时运行上下文
+9. `recent / screenshot / ask / alerts / logs` 按问题深挖细节
 
 ## 2.1 当前阶段补充要求
 

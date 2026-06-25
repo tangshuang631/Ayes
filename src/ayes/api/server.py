@@ -12,12 +12,14 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ayes.app.state import AppState
+from ayes.app.paths import repo_root, runtime_root
 from ayes.api.contracts import (
     build_agent_contract_payload,
     build_memory_items_payload,
     build_observe_live_payload,
     build_preview_overlay,
     build_query_result_payload,
+    build_region_bind_contract_payload,
     describe_location_summary,
     extract_structured_observation,
 )
@@ -30,20 +32,20 @@ from ayes.targets.preview import TargetPreviewService
 from ayes.vision.ollama import OllamaService
 
 
-BASE_DIR = Path(__file__).resolve().parents[3]
+BASE_DIR = repo_root()
 WEB_DIR = BASE_DIR / "web"
+RUNTIME_DIR = runtime_root(BASE_DIR)
 
 app = FastAPI(title="Ayes Workbench")
 state = AppState()
-target_preview_service = TargetPreviewService(runtime_dir=BASE_DIR / "runtime")
+target_preview_service = TargetPreviewService(runtime_dir=RUNTIME_DIR)
 ollama_service = OllamaService()
 planner_service = WatchSpecPlanner()
 
 if (WEB_DIR / "static").exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
-RUNTIME_DIR = BASE_DIR / "runtime"
-if RUNTIME_DIR.exists():
-    app.mount("/runtime", StaticFiles(directory=str(RUNTIME_DIR)), name="runtime")
+RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/runtime", StaticFiles(directory=str(RUNTIME_DIR)), name="runtime")
 
 
 @app.get("/")
@@ -75,6 +77,7 @@ def _decorate_event_payload(item: dict) -> dict:
 
 
 def _build_screenshot_payload() -> dict:
+    state.persist_latest_screenshot()
     if not state.last_screenshot_path:
         return {"path": None, "regions": [], "target": None, "capture_target": None, "capture_status": None, "capture_timestamp": None}
     path = state.last_screenshot_path
@@ -98,11 +101,88 @@ def _build_screenshot_payload() -> dict:
     current_status = state.status()
     return {
         "path": path,
+        "image_width": state.last_screenshot_width,
+        "image_height": state.last_screenshot_height,
         "regions": regions,
         "target": asdict(state.current_spec.target) if state.current_spec else None,
         "capture_target": current_status.get("last_capture_target"),
         "capture_status": current_status.get("last_capture_status"),
         "capture_timestamp": current_status.get("last_run_at"),
+    }
+
+
+def _build_ollama_status_payload(*, default_model: str) -> dict:
+    try:
+        return ollama_service.status_report(default_model=default_model)
+    except TypeError:
+        return ollama_service.status_report()
+
+
+def _build_vision_status_payload() -> dict:
+    settings = state.get_vision_enhancement_settings()
+    default_model = str(settings.get("model") or "qwen2.5vl:7b")
+    provider_status = {}
+    recommended_action = "check_on_user_enable_request"
+    user_steps = [
+        "仅当用户明确希望开启本地大模型增强时，再执行 vision prepare 做本地就绪检查。",
+        "若 vision prepare 显示缺 Ollama、缺服务或缺默认模型，再按返回步骤安装、启动、拉取并启用。",
+    ]
+    agent_message = "当前默认本地视觉模型为 qwen2.5vl:7b。默认不主动检查 Ollama；只有用户明确希望开启本地大模型增强时，才应执行 vision prepare 做就绪检查。"
+    agent_can_attempt_after_permission = True
+    expected_effect = "本地视觉模型可辅助 skill 对截图进行结构化理解，并将结果写入事件、记忆、日志和回答链路。"
+    return {
+        "default_local_model": default_model,
+        "readiness_check_required": True,
+        "settings": settings,
+        "provider_status": provider_status,
+        "installation_guidance": {
+            "agent_message": agent_message,
+            "user_steps": user_steps,
+            "agent_can_attempt_after_permission": agent_can_attempt_after_permission,
+            "expected_effect": expected_effect,
+        },
+    }
+
+
+def _build_vision_prepare_payload(*, requested_by: str) -> dict:
+    settings = state.get_vision_enhancement_settings()
+    default_model = str(settings.get("model") or "qwen2.5vl:7b")
+    provider_status = _build_ollama_status_payload(default_model=default_model)
+    recommended_action = str(provider_status.get("recommended_action") or "ready")
+    user_steps = []
+    agent_can_attempt_after_permission = False
+    if recommended_action == "install_ollama":
+        user_steps = [
+            "先安装 Ollama 并启动本地服务。",
+            "执行 ollama serve。",
+            "执行 ollama pull qwen2.5vl:7b。",
+            "再启用本地视觉增强。",
+        ]
+        agent_can_attempt_after_permission = True
+    elif recommended_action == "start_service":
+        user_steps = [
+            "启动本地 Ollama 服务：ollama serve。",
+            "确认服务可达后再启用本地视觉增强。",
+        ]
+        agent_can_attempt_after_permission = True
+    elif recommended_action == "pull_default_model":
+        user_steps = [
+            "执行 ollama pull qwen2.5vl:7b。",
+            "拉取完成后启用本地视觉增强。",
+        ]
+        agent_can_attempt_after_permission = True
+    else:
+        user_steps = [
+            "本地视觉增强依赖已就绪，可直接启用。",
+        ]
+    return {
+        "requested_by": requested_by,
+        "default_local_model": default_model,
+        "provider": "ollama",
+        "provider_status": provider_status,
+        "agent_can_attempt_after_permission": agent_can_attempt_after_permission,
+        "user_steps": user_steps,
+        "expected_effect": "启用后，本地视觉模型会在图表多、OCR 稀疏、按钮/布局理解等高视觉负载场景辅助 skill 进行结构化读取，并写入记忆、日志和回答。",
     }
 
 
@@ -246,6 +326,58 @@ def can_shutdown_service() -> JSONResponse:
     )
 
 
+@app.get("/api/control/status")
+def get_control_status() -> JSONResponse:
+    return JSONResponse(state.control_status())
+
+
+@app.post("/api/control/pause-all")
+def pause_all_watches() -> JSONResponse:
+    return JSONResponse({"status": state.pause_all_watches(reason="manual")})
+
+
+@app.post("/api/control/resume-all")
+def resume_all_watches() -> JSONResponse:
+    return JSONResponse({"status": state.resume_all_watches()})
+
+
+@app.get("/api/control/open-data-dir")
+def open_data_dir() -> JSONResponse:
+    payload = state.control_status()
+    return JSONResponse({"status": "ok", "data_dir": payload["data_dir"], "archive_dir": payload["archive_dir"]})
+
+
+@app.post("/api/control/cleanup-reminder")
+def update_cleanup_reminder(payload: dict = Body(...)) -> JSONResponse:
+    reminder = state.update_cleanup_reminder(
+        suppress_forever=payload.get("suppress_forever"),
+        snoozed_until=payload.get("snoozed_until"),
+        last_prompt_at=payload.get("last_prompt_at"),
+        next_check_after_days=payload.get("next_check_after_days"),
+    )
+    return JSONResponse({"status": "ok", "cleanup_reminder": reminder})
+
+
+@app.post("/api/control/cleanup-reminder/check")
+def check_cleanup_reminder(payload: dict = Body(...)) -> JSONResponse:
+    result = state.check_cleanup_reminder_due(now=payload.get("now"))
+    return JSONResponse(result)
+
+
+@app.get("/api/control/settings")
+def get_control_settings() -> JSONResponse:
+    return JSONResponse({"settings": state.get_app_settings()})
+
+
+@app.post("/api/control/settings")
+def update_control_settings(payload: dict = Body(...)) -> JSONResponse:
+    settings = state.update_app_settings(
+        capture_screen_when_display_sleep=payload.get("capture_screen_when_display_sleep"),
+        cleanup_reminder_days=payload.get("cleanup_reminder_days"),
+    )
+    return JSONResponse({"status": "ok", "settings": settings})
+
+
 @app.get("/api/windows")
 def list_windows() -> JSONResponse:
     state.log_store.write(category="api", level="info", message="读取窗口列表")
@@ -264,8 +396,31 @@ def list_targets() -> JSONResponse:
 
 @app.get("/api/vision/models")
 def list_vision_models() -> JSONResponse:
-    items = ollama_service.list_models()
-    return JSONResponse({"available": ollama_service.is_available(), "items": items})
+    settings = state.get_vision_enhancement_settings()
+    default_model = str(settings.get("model") or "qwen2.5vl:7b")
+    return JSONResponse(_build_ollama_status_payload(default_model=default_model))
+
+
+@app.get("/api/vision/settings")
+def get_vision_settings() -> JSONResponse:
+    return JSONResponse(state.get_vision_enhancement_settings())
+
+
+@app.post("/api/vision/settings")
+def update_vision_settings(payload: dict = Body(...)) -> JSONResponse:
+    settings = state.update_vision_enhancement_settings(
+        enabled=payload.get("enabled"),
+        provider=payload.get("provider"),
+        model=payload.get("model"),
+        auto_use_when_available=payload.get("auto_use_when_available"),
+    )
+    return JSONResponse({"status": "ok", "vision_settings": settings})
+
+
+@app.post("/api/vision/prepare")
+def prepare_vision_enablement(payload: dict = Body(...)) -> JSONResponse:
+    requested_by = str(payload.get("requested_by") or "user_enable_local_vision").strip() or "user_enable_local_vision"
+    return JSONResponse(_build_vision_prepare_payload(requested_by=requested_by))
 
 
 @app.post("/api/specs/window/{window_id}")
@@ -370,6 +525,50 @@ def plan_watch_spec(payload: dict = Body(...)) -> JSONResponse:
     return JSONResponse(draft.to_dict())
 
 
+@app.post("/api/agent/region-bind-request")
+def build_region_bind_request(payload: dict = Body(...)) -> JSONResponse:
+    plan = payload.get("plan") or {}
+    task_id = str(plan.get("task_id") or payload.get("task_id") or "").strip()
+    target_ref = plan.get("resolved_target") or ((plan.get("draft_spec") or {}).get("target")) or {}
+    capture_ref = payload.get("capture_ref") or {}
+    if not capture_ref and state.last_screenshot_path:
+        capture_ref = {
+            "capture_id": f"cap_{task_id or 'latest'}",
+            "image_path": state.last_screenshot_path if str(state.last_screenshot_path).startswith("/") else f"/{state.last_screenshot_path}",
+            "image_width": state.last_screenshot_width,
+            "image_height": state.last_screenshot_height,
+        }
+    region_intents = plan.get("region_intents") or []
+    return JSONResponse(
+        {
+            "bind_version": "1.0",
+            "task_id": task_id,
+            "target_ref": target_ref,
+            "capture_ref": capture_ref,
+            "region_intents": region_intents,
+        }
+    )
+
+
+@app.post("/api/agent/region-bind-result")
+def accept_region_bind_result(payload: dict = Body(...)) -> JSONResponse:
+    state.set_region_binding_context(
+        {
+            "task_id": payload.get("task_id"),
+            "target_ref": payload.get("target_ref") or {},
+            "capture_ref": payload.get("capture_ref") or {},
+            "bindings": payload.get("region_bindings") or [],
+            "unbound_region_intents": payload.get("unbound_region_intents") or [],
+        }
+    )
+    return JSONResponse({"status": "accepted", "region_binding_context": state._last_region_binding_context or {}})
+
+
+@app.get("/api/agent/region-bind-contract")
+def get_region_bind_contract() -> JSONResponse:
+    return JSONResponse(build_region_bind_contract_payload())
+
+
 @app.post("/api/watch/confirm-plan")
 def confirm_watch_plan(payload: dict = Body(...)) -> JSONResponse:
     plan = payload.get("plan")
@@ -380,6 +579,15 @@ def confirm_watch_plan(payload: dict = Body(...)) -> JSONResponse:
         return JSONResponse({"error": str(exc)}, status_code=400)
     task_id = str(normalized_plan.get("task_id") or payload.get("task_id") or "task_web").strip() or "task_web"
     state.set_runner(spec, task_id=task_id)
+    state.set_region_binding_context(
+        {
+            "task_id": task_id,
+            "target_ref": normalized_plan.get("resolved_target") or {},
+            "capture_ref": confirmations.get("capture_ref") or {},
+            "bindings": normalized_plan.get("region_bindings") or [],
+            "unbound_region_intents": normalized_plan.get("unbound_region_intents") or [],
+        }
+    )
     state.log_store.write(category="watch", level="info", message="已从任务草案确认并装载监控任务", task_id=task_id, metadata={"mode": spec.mode, "target_type": spec.target.type})
     return JSONResponse(
         {
@@ -398,11 +606,7 @@ def run_watch_once() -> JSONResponse:
     if state.current_runner is None:
         return JSONResponse({"error": "当前没有已装载监控任务"}, status_code=400)
     events = [asdict(event) for event in state.current_runner.run_once()]
-    latest_frame = state.current_runner.last_captured_frame
-    if latest_frame is not None:
-        screenshot_path = Path("runtime/web-last-frame.png")
-        screenshot_path.write_bytes(latest_frame.image_bytes)
-        state.last_screenshot_path = str(screenshot_path)
+    state.persist_latest_screenshot()
     state.log_store.write(category="watch", level="info", message="执行一次监控采样", task_id=state.current_task_id, metadata={"emitted_events": len(events)})
     return JSONResponse({"events": events, "status": state.status()})
 
@@ -421,6 +625,24 @@ def start_watch() -> JSONResponse:
 def stop_watch() -> JSONResponse:
     state.clear_runner()
     return JSONResponse({"status": state.status()})
+
+
+@app.post("/api/watch/current/regions")
+def add_current_region(payload: dict = Body(...)) -> JSONResponse:
+    try:
+        target = state.add_current_region(payload.get("region") or {})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"status": "ok", "target": target, "watch_status": state.status()})
+
+
+@app.delete("/api/watch/current/regions/{region_id}")
+def delete_current_region(region_id: str) -> JSONResponse:
+    try:
+        target = state.delete_current_region(region_id)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"status": "ok", "target": target, "watch_status": state.status()})
 
 
 @app.get("/api/events")
@@ -656,6 +878,9 @@ def observe_live_context(
                 memory_items=[],
                 alerts=[],
                 logs=[],
+                cleanup_reminder=state.get_cleanup_reminder(),
+                region_binding_context=state._last_region_binding_context or {},
+                vision_status=_build_vision_status_payload(),
                 observed_at=observed_at,
             )
         )
@@ -675,6 +900,9 @@ def observe_live_context(
             memory_items=memory_items,
             alerts=alerts,
             logs=logs,
+            cleanup_reminder=state.get_cleanup_reminder(),
+            region_binding_context=state._last_region_binding_context or {},
+            vision_status=_build_vision_status_payload(),
             observed_at=observed_at,
         )
     )
@@ -686,6 +914,32 @@ def get_watch_task(task_id: str) -> JSONResponse:
     if task is None:
         return JSONResponse({"error": "任务不存在"}, status_code=404)
     return JSONResponse(task)
+
+
+@app.get("/api/tasks")
+def list_watch_tasks(limit: int = Query(100, ge=1, le=500)) -> JSONResponse:
+    items = state.list_tasks(limit=limit)
+    return JSONResponse({"items": items, "count": len(items)})
+
+
+@app.post("/api/watch/switch-task")
+def switch_watch_task(payload: dict = Body(...)) -> JSONResponse:
+    task_id = str(payload.get("task_id") or "").strip()
+    if not task_id:
+        return JSONResponse({"error": "task_id 不能为空"}, status_code=400)
+    task = state.switch_task(task_id)
+    if task is None:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+    return JSONResponse({"status": "switched", "task": task, "watch_status": state.status()})
+
+
+@app.delete("/api/watch/task/{task_id}")
+def delete_watch_task(task_id: str) -> JSONResponse:
+    task = state.sqlite_store.get_task(task_id)
+    if task is None:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+    deleted = state.delete_task(task_id)
+    return JSONResponse({"status": "deleted", "task_id": task_id, "deleted": deleted})
 
 
 @app.get("/api/timeline/recent")

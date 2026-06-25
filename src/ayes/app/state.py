@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from pathlib import Path
 from typing import Optional
 
 from ayes.app.runner import WatchRunner
+from ayes.app.paths import runtime_root
 from ayes.api.contracts import _describe_direction, build_task_payload, describe_location_summary
-from ayes.config.models import WatchSpec
+from ayes.config.models import TargetRegion, WatchSpec
 from ayes.logs.store import LogStore
 from ayes.memory.long_term import build_long_term_summary
 from ayes.storage.sqlite_store import SQLiteStore
@@ -18,6 +20,8 @@ from ayes.targets.discovery.macos import MacOSWindowDiscovery
 
 class AppState:
     def __init__(self) -> None:
+        self.runtime_dir = runtime_root()
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.sqlite_store = SQLiteStore()
         self.log_store = LogStore(sink=self.sqlite_store.insert_log)
         self.window_discovery = MacOSWindowDiscovery()
@@ -26,13 +30,23 @@ class AppState:
         self.current_task_id: Optional[str] = None
         self.last_task_id: Optional[str] = None
         self.last_screenshot_path: Optional[str] = None
+        self.last_screenshot_width: Optional[int] = None
+        self.last_screenshot_height: Optional[int] = None
         self.last_error: Optional[str] = None
         self._frontend_sessions: dict[str, float] = {}
         self._frontend_session_ttl_sec = 30.0
         self._background_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._paused_at: Optional[float] = None
+        self._pause_reason: Optional[str] = None
+        self._last_region_binding_context: Optional[dict] = None
+        self._last_cleanup_reminder_check_at: Optional[float] = None
         self._last_long_term_summary_at: Optional[float] = None
         self._last_long_term_event_index: int = 0
+        self._ensure_cleanup_reminder_defaults()
+        self._ensure_vision_enhancement_defaults()
+        self._ensure_app_settings_defaults()
         self.log_store.write(category="system", level="info", message="Ayes AppState 初始化完成")
 
     def _build_task_snapshot(self) -> Optional[dict]:
@@ -97,6 +111,7 @@ class AppState:
             task_id=task_id,
             event_sink=self.sqlite_store.insert_event,
             log_sink=self._runner_log_sink,
+            runtime_dir=self.runtime_dir,
         )
         task_payload = build_task_payload(task_id=task_id, spec=spec)
         self.sqlite_store.upsert_task(
@@ -110,6 +125,9 @@ class AppState:
         self._last_long_term_event_index = 0
         self.log_store.write(category="watch", level="info", message="监控任务已装载", task_id=task_id)
         return self.current_runner
+
+    def set_region_binding_context(self, context: Optional[dict]) -> None:
+        self._last_region_binding_context = context
 
     def _flush_long_term_summary(self, *, force: bool = False) -> None:
         if self.current_runner is None or self.current_spec is None or self.current_task_id is None:
@@ -162,7 +180,42 @@ class AppState:
         self.current_task_id = None
         self._last_long_term_summary_at = None
         self._last_long_term_event_index = 0
+        self._pause_event.clear()
+        self._paused_at = None
+        self._pause_reason = None
+        self._last_region_binding_context = None
         self.log_store.write(category="watch", level="info", message="监控任务已停止")
+
+    def switch_task(self, task_id: str) -> Optional[dict]:
+        task = self.sqlite_store.get_task(task_id)
+        if task is None:
+            return None
+        spec = WatchSpec.from_dict(task["spec"])
+        self.clear_runner()
+        self.set_runner(spec, task_id=task_id)
+        self.log_store.write(category="watch", level="info", message="已切换到历史任务", task_id=task_id)
+        return self.sqlite_store.get_task(task_id)
+
+    def list_tasks(self, *, limit: int = 100) -> list[dict]:
+        items = self.sqlite_store.list_tasks(limit=limit)
+        current_task_id = self.current_task_id
+        last_task_id = self.last_task_id
+        normalized = []
+        for item in items:
+            payload = dict(item)
+            payload["is_current"] = payload["task_id"] == current_task_id
+            payload["is_last_active"] = payload["task_id"] == last_task_id
+            normalized.append(payload)
+        return normalized
+
+    def delete_task(self, task_id: str) -> dict:
+        if task_id == self.current_task_id:
+            self.clear_runner()
+        deleted = self.sqlite_store.delete_task_data(task_id)
+        if task_id == self.last_task_id:
+            self.last_task_id = None
+        self.log_store.write(category="watch", level="info", message="已删除任务及相关记忆", task_id=task_id, metadata=deleted)
+        return deleted
 
     def start_background_watch(self) -> bool:
         if self.current_runner is None:
@@ -175,8 +228,13 @@ class AppState:
         def _loop() -> None:
             self.log_store.write(category="watch", level="info", message="后台持续监控已启动", task_id=self.current_task_id)
             while not self._stop_event.is_set() and self.current_runner is not None:
+                if self._pause_event.is_set():
+                    self._stop_event.wait(0.2)
+                    continue
                 try:
                     events = self.current_runner.run_once()
+                    self.persist_latest_screenshot()
+                    self._maybe_check_cleanup_reminder(now=time.time())
                     for event in events:
                         if getattr(event, "source", "") == "action":
                             self.log_store.write(
@@ -213,6 +271,33 @@ class AppState:
     def is_background_running(self) -> bool:
         return self._background_thread is not None and self._background_thread.is_alive()
 
+    def remember_screenshot(self, *, path: str, width: Optional[int], height: Optional[int]) -> None:
+        self.last_screenshot_path = path
+        self.last_screenshot_width = width
+        self.last_screenshot_height = height
+
+    def persist_latest_screenshot(self) -> Optional[dict]:
+        if self.current_runner is None or self.current_runner.last_captured_frame is None:
+            return None
+        frame = self.current_runner.last_captured_frame
+        latest_dir = self.runtime_dir / "latest"
+        latest_dir.mkdir(parents=True, exist_ok=True)
+        safe_frame_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(frame.frame_id or "frame"))
+        timestamp_ms = int(float(frame.timestamp or time.time()) * 1000)
+        screenshot_name = f"latest-frame-{timestamp_ms}-{safe_frame_id}.png"
+        screenshot_path = latest_dir / screenshot_name
+        screenshot_path.write_bytes(frame.image_bytes)
+        compatibility_path = self.runtime_dir / "web-last-frame.png"
+        compatibility_path.write_bytes(frame.image_bytes)
+        self.remember_screenshot(path=f"runtime/latest/{screenshot_name}", width=frame.width, height=frame.height)
+        return {
+            "path": str(screenshot_path),
+            "compatibility_path": str(compatibility_path),
+            "image_width": frame.width,
+            "image_height": frame.height,
+            "timestamp": frame.timestamp,
+        }
+
     def _prune_frontend_sessions(self) -> None:
         now = time.time()
         expired = [session_id for session_id, updated_at in self._frontend_sessions.items() if now - updated_at > self._frontend_session_ttl_sec]
@@ -241,6 +326,255 @@ class AppState:
 
     def can_shutdown_service(self) -> bool:
         return (not self.is_background_running()) and self.connected_frontends() == 0
+
+    def is_paused(self) -> bool:
+        return self._pause_event.is_set()
+
+    def pause_all_watches(self, *, reason: str = "manual", now: Optional[float] = None) -> dict:
+        paused_at = now if now is not None else time.time()
+        self._pause_event.set()
+        self._paused_at = paused_at
+        self._pause_reason = reason
+        task_id = self.current_task_id or self.last_task_id
+        self.log_store.write(
+            category="watch",
+            level="info",
+            message="后台监控已暂停",
+            task_id=task_id,
+            metadata={"event_type": "watch_paused", "reason": reason},
+            timestamp=paused_at,
+        )
+        return self.control_status()
+
+    def resume_all_watches(self, *, now: Optional[float] = None) -> dict:
+        resumed_at = now if now is not None else time.time()
+        self._pause_event.clear()
+        previous_reason = self._pause_reason
+        self._paused_at = None
+        self._pause_reason = None
+        task_id = self.current_task_id or self.last_task_id
+        self.log_store.write(
+            category="watch",
+            level="info",
+            message="后台监控已恢复",
+            task_id=task_id,
+            metadata={"event_type": "watch_resumed", "reason": previous_reason or "manual"},
+            timestamp=resumed_at,
+        )
+        return self.control_status()
+
+    def control_status(self) -> dict:
+        runtime_root = self._runtime_root()
+        cleanup_dir = runtime_root / "archive"
+        cleanup_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "is_paused": self.is_paused(),
+            "paused_at": self._paused_at,
+            "pause_reason": self._pause_reason,
+            "has_runner": self.current_runner is not None,
+            "is_running": self.is_background_running(),
+            "task_id": self.current_task_id or self.last_task_id,
+            "data_dir": str(runtime_root),
+            "archive_dir": str(cleanup_dir),
+            "cleanup_reminder": self.get_cleanup_reminder(),
+        }
+
+    def _runtime_root(self):
+        return self.runtime_dir
+
+    def _ensure_cleanup_reminder_defaults(self) -> None:
+        if self.sqlite_store.get_cleanup_reminder() is not None:
+            return
+        archive_dir = self._runtime_root() / "archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        self.sqlite_store.upsert_cleanup_reminder(
+            enabled=True,
+            last_prompt_at=None,
+            snoozed_until=None,
+            suppress_forever=False,
+            data_dir=str(archive_dir),
+            next_check_after_days=7,
+        )
+
+    def get_cleanup_reminder(self) -> dict:
+        payload = self.sqlite_store.get_cleanup_reminder()
+        if payload is None:
+            self._ensure_cleanup_reminder_defaults()
+            payload = self.sqlite_store.get_cleanup_reminder() or {}
+        return payload
+
+    def _ensure_vision_enhancement_defaults(self) -> None:
+        if self.sqlite_store.get_vision_enhancement_settings() is not None:
+            return
+        self.sqlite_store.upsert_vision_enhancement_settings(
+            enabled=False,
+            provider="ollama",
+            model="qwen2.5vl:7b",
+            auto_use_when_available=True,
+        )
+
+    def get_vision_enhancement_settings(self) -> dict:
+        payload = self.sqlite_store.get_vision_enhancement_settings()
+        if payload is None:
+            self._ensure_vision_enhancement_defaults()
+            payload = self.sqlite_store.get_vision_enhancement_settings() or {}
+        return payload
+
+    def update_vision_enhancement_settings(
+        self,
+        *,
+        enabled: Optional[bool] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        auto_use_when_available: Optional[bool] = None,
+    ) -> dict:
+        current = self.get_vision_enhancement_settings()
+        self.sqlite_store.upsert_vision_enhancement_settings(
+            enabled=bool(enabled) if enabled is not None else bool(current.get("enabled", False)),
+            provider=str(provider or current.get("provider") or "ollama"),
+            model=str(model or current.get("model") or "qwen2.5vl:7b"),
+            auto_use_when_available=bool(auto_use_when_available)
+            if auto_use_when_available is not None
+            else bool(current.get("auto_use_when_available", True)),
+        )
+        return self.get_vision_enhancement_settings()
+
+    def _default_app_settings(self) -> dict:
+        return {
+            "capture_screen_when_display_sleep": False,
+            "cleanup_reminder_days": 7,
+            "capture_sleep_note": "进程或窗口监控优先使用窗口捕获；整屏熄屏监控依赖 macOS 是否仍提供可读显示帧，不可用时会建议切换到进程监控。",
+        }
+
+    def _ensure_app_settings_defaults(self) -> None:
+        if self.sqlite_store.get_app_settings() is not None:
+            return
+        self.sqlite_store.upsert_app_settings(self._default_app_settings())
+
+    def get_app_settings(self) -> dict:
+        payload = self.sqlite_store.get_app_settings()
+        if payload is None:
+            self._ensure_app_settings_defaults()
+            payload = self.sqlite_store.get_app_settings() or {}
+        defaults = self._default_app_settings()
+        merged = {**defaults, **payload}
+        return merged
+
+    def update_app_settings(
+        self,
+        *,
+        capture_screen_when_display_sleep: Optional[bool] = None,
+        cleanup_reminder_days: Optional[int] = None,
+    ) -> dict:
+        current = self.get_app_settings()
+        next_payload = dict(current)
+        if capture_screen_when_display_sleep is not None:
+            next_payload["capture_screen_when_display_sleep"] = bool(capture_screen_when_display_sleep)
+        if cleanup_reminder_days is not None:
+            next_payload["cleanup_reminder_days"] = max(int(cleanup_reminder_days), 1)
+            self.update_cleanup_reminder(next_check_after_days=next_payload["cleanup_reminder_days"])
+        self.sqlite_store.upsert_app_settings(next_payload)
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="应用设置已更新",
+            task_id=self.current_task_id or self.last_task_id,
+            metadata={"settings": next_payload},
+        )
+        return self.get_app_settings()
+
+    def _replace_current_regions(self, regions: list[TargetRegion]) -> dict:
+        if self.current_spec is None or self.current_task_id is None:
+            raise RuntimeError("当前没有已装载监控任务")
+        was_running = self.is_background_running()
+        was_paused = self.is_paused()
+        if was_running:
+            self.stop_background_watch()
+        updated_target = replace(self.current_spec.target, regions=regions)
+        updated_spec = replace(self.current_spec, target=updated_target)
+        self.set_runner(updated_spec, task_id=self.current_task_id)
+        if was_paused:
+            self.pause_all_watches(reason="roi_update_restore_pause")
+        if was_running:
+            self.start_background_watch()
+        return asdict(updated_target)
+
+    def add_current_region(self, region_payload: dict) -> dict:
+        if self.current_spec is None:
+            raise RuntimeError("当前没有已装载监控任务")
+        region = TargetRegion.from_dict(region_payload)
+        existing = [item for item in self.current_spec.target.regions if item.region_id != region.region_id]
+        target_payload = self._replace_current_regions([*existing, region])
+        self.log_store.write(
+            category="watch",
+            level="info",
+            message="当前任务 ROI 已添加",
+            task_id=self.current_task_id,
+            metadata={"region": asdict(region)},
+        )
+        return target_payload
+
+    def delete_current_region(self, region_id: str) -> dict:
+        if self.current_spec is None:
+            raise RuntimeError("当前没有已装载监控任务")
+        remaining = [item for item in self.current_spec.target.regions if item.region_id != region_id]
+        target_payload = self._replace_current_regions(remaining)
+        self.log_store.write(
+            category="watch",
+            level="info",
+            message="当前任务 ROI 已删除",
+            task_id=self.current_task_id,
+            metadata={"region_id": region_id},
+        )
+        return target_payload
+
+    def update_cleanup_reminder(
+        self,
+        *,
+        suppress_forever: Optional[bool] = None,
+        snoozed_until: Optional[float] = None,
+        last_prompt_at: Optional[float] = None,
+        next_check_after_days: Optional[int] = None,
+    ) -> dict:
+        current = self.get_cleanup_reminder()
+        self.sqlite_store.upsert_cleanup_reminder(
+            enabled=bool(current.get("enabled", True)),
+            last_prompt_at=last_prompt_at if last_prompt_at is not None else current.get("last_prompt_at"),
+            snoozed_until=snoozed_until if snoozed_until is not None else current.get("snoozed_until"),
+            suppress_forever=bool(suppress_forever) if suppress_forever is not None else bool(current.get("suppress_forever", False)),
+            data_dir=str(current.get("data_dir") or (self._runtime_root() / "archive")),
+            next_check_after_days=int(next_check_after_days if next_check_after_days is not None else (current.get("next_check_after_days") or 7)),
+        )
+        return self.get_cleanup_reminder()
+
+    def check_cleanup_reminder_due(self, *, now: Optional[float] = None) -> dict:
+        current_now = now if now is not None else time.time()
+        reminder = self.get_cleanup_reminder()
+        if not reminder.get("enabled", True) or reminder.get("suppress_forever", False):
+            return {"status": "disabled", "cleanup_reminder": reminder}
+        snoozed_until = reminder.get("snoozed_until")
+        if snoozed_until is not None and float(snoozed_until) > current_now:
+            return {"status": "snoozed", "cleanup_reminder": reminder}
+        last_prompt_at = float(reminder.get("last_prompt_at") or 0.0)
+        interval_seconds = int(reminder.get("next_check_after_days") or 7) * 24 * 60 * 60
+        if last_prompt_at <= 0 or (current_now - last_prompt_at) >= interval_seconds:
+            self.log_store.write(
+                category="control",
+                level="info",
+                message="数据清理提醒已到期",
+                task_id=self.current_task_id or self.last_task_id,
+                metadata={"event_type": "cleanup_reminder_due"},
+                timestamp=current_now,
+            )
+            updated = self.update_cleanup_reminder(last_prompt_at=current_now)
+            return {"status": "prompt_due", "cleanup_reminder": updated}
+        return {"status": "not_due", "cleanup_reminder": reminder}
+
+    def _maybe_check_cleanup_reminder(self, *, now: float) -> None:
+        if self._last_cleanup_reminder_check_at is not None and (now - self._last_cleanup_reminder_check_at) < 60:
+            return
+        self._last_cleanup_reminder_check_at = now
+        self.check_cleanup_reminder_due(now=now)
 
     def _build_health_summary(self, *, task_id: Optional[str]) -> dict:
         if not task_id:
@@ -470,6 +804,23 @@ class AppState:
         latest_key_event = self._build_latest_key_event()
         recent_ocr_read = self._build_recent_ocr_read()
         activity_status = self._build_activity_status(now=now)
+        task_context = {
+            "current_task_id": self.current_task_id,
+            "last_task_id": self.last_task_id,
+            "current_task_available": self.current_task_id is not None,
+            "last_task_available": self.last_task_id is not None,
+            "recent_tasks": [
+                {
+                    "task_id": item["task_id"],
+                    "mode": item["mode"],
+                    "target": item["target"],
+                    "created_at": item["created_at"],
+                    "is_current": item["is_current"],
+                    "is_last_active": item["is_last_active"],
+                }
+                for item in self.list_tasks(limit=5)
+            ],
+        }
         return {
             "has_runner": self.current_runner is not None,
             "is_running": self.is_background_running(),
@@ -496,6 +847,7 @@ class AppState:
             "recent_ocr_read": recent_ocr_read,
             "activity_status": activity_status,
             "task_snapshot": self._build_task_snapshot(),
+            "task_context": task_context,
             "health_summary": health_summary,
             "last_error": self.last_error,
             "log_count": len(self.log_store.list_entries()),

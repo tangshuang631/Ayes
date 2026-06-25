@@ -211,6 +211,9 @@ def build_observe_live_payload(
     memory_items: List[Dict[str, Any]],
     alerts: List[Dict[str, Any]],
     logs: List[Dict[str, Any]],
+    cleanup_reminder: Dict[str, Any],
+    region_binding_context: Dict[str, Any],
+    vision_status: Dict[str, Any],
     observed_at: float,
 ) -> Dict[str, Any]:
     decorated_recent_events = [_decorate_live_event(item) for item in recent_events[:limit]]
@@ -229,6 +232,9 @@ def build_observe_live_payload(
         memory_items=decorated_memory_items,
         observed_at=observed_at,
     )
+    vision_next_action = _build_vision_next_action(vision_status)
+    configuration_guidance = _build_configuration_guidance(status=status, vision_status=vision_status)
+    task_context = _build_task_context_hint(status=status, task_id=task_id)
     return {
         "schema_version": "1.0",
         "task_id": task_id,
@@ -269,10 +275,16 @@ def build_observe_live_payload(
             "error_count": sum(1 for item in trimmed_logs if str(item.get("level") or "").lower() == "error"),
             "warn_count": sum(1 for item in trimmed_logs if str(item.get("level") or "").lower() in {"warn", "warning"}),
         },
+        "cleanup_reminder": cleanup_reminder,
+        "region_binding_context": _build_region_binding_context(region_binding_context),
+        "vision_status": vision_status,
         "evidence_status": evidence_status,
         "agent_hints": {
             "summary": evidence_status["summary"],
             "suggested_next_steps": _build_live_next_steps(status=status, evidence_status=evidence_status),
+            "vision_next_action": vision_next_action,
+            "configuration_guidance": configuration_guidance,
+            "task_context": task_context,
         },
     }
 
@@ -338,6 +350,9 @@ def _build_live_evidence_status(
 
 def _build_live_next_steps(*, status: Dict[str, Any], evidence_status: Dict[str, Any]) -> List[str]:
     if not evidence_status["has_runner"]:
+        recent_tasks = ((status.get("task_context") or {}).get("recent_tasks") or [])
+        if recent_tasks:
+            return ["当前没有装载中的任务；可先从 tasks 里恢复历史任务，或重新通过 plan-spec/confirm-plan 创建新任务。"]
         return ["先通过 plan-spec/confirm-plan 或工作台装载监控任务。"]
     if not evidence_status["is_running"]:
         return ["如需持续监控，调用 start 恢复后台采样。"]
@@ -346,6 +361,105 @@ def _build_live_next_steps(*, status: Dict[str, Any], evidence_status: Dict[str,
     if status.get("last_error"):
         return ["读取 logs 排查最近一次后台错误。"]
     return ["可以结合 ask/recent/memory-items 对最近时间窗继续追问。"]
+
+
+def _build_vision_next_action(vision_status: Dict[str, Any]) -> Dict[str, Any]:
+    provider_status = vision_status.get("provider_status") or {}
+    installation_guidance = vision_status.get("installation_guidance") or {}
+    action = str(provider_status.get("recommended_action") or "")
+    if not action and vision_status.get("readiness_check_required"):
+        action = "check_on_user_enable_request"
+    if not action:
+        action = "ready"
+    return {
+        "action": action,
+        "provider": "ollama",
+        "default_model": vision_status.get("default_local_model") or provider_status.get("default_model") or "qwen2.5vl:7b",
+        "message": installation_guidance.get("agent_message") or "当前本地视觉增强已可用。",
+        "user_steps": installation_guidance.get("user_steps") or [],
+        "agent_can_attempt_after_permission": bool(installation_guidance.get("agent_can_attempt_after_permission", False)),
+        "expected_effect": installation_guidance.get("expected_effect") or "",
+    }
+
+
+def _build_configuration_guidance(*, status: Dict[str, Any], vision_status: Dict[str, Any]) -> List[Dict[str, Any]]:
+    guidance: List[Dict[str, Any]] = []
+    current_spec = status.get("spec") or {}
+    alert = current_spec.get("alert") or {}
+    mode = str(status.get("mode") or current_spec.get("mode") or "")
+    if mode == "triggered" and not str(alert.get("webhook_url") or "").strip():
+        guidance.append(
+            {
+                "topic": "wecom_webhook",
+                "status": "needs_user_setup",
+                "summary": "当前 triggered 任务缺少企业微信 webhook，提醒暂时无法真正发出。",
+                "user_steps": [
+                    "去企业微信群机器人配置页获取 webhook URL。",
+                    "把完整 webhook URL 发给 agent，由 agent 写入 confirm-plan 或重新确认任务。",
+                    "若暂时不想通知，可改成 observe 模式继续观察。",
+                ],
+                "agent_steps": [
+                    "继续通过对话指导用户获取并填写 webhook，而不是只报缺失字段。",
+                    "拿到 webhook 后继续执行 confirm-plan 或重建任务，不要让流程停在中间态。",
+                ],
+            }
+        )
+    installation_guidance = vision_status.get("installation_guidance") or {}
+    guidance.append(
+        {
+            "topic": "local_vision",
+            "status": "on_demand_only",
+            "summary": installation_guidance.get("agent_message")
+            or "默认不主动检查 Ollama；只有用户明确要求开启本地大模型增强时才继续准备流程。",
+            "user_steps": installation_guidance.get("user_steps") or [],
+            "agent_steps": [
+                "仅当用户明确希望开启本地视觉增强时，才继续执行 vision prepare。",
+                "如果用户不会操作，就继续按返回步骤指导或在获权后代为执行。",
+            ],
+        }
+    )
+    return guidance
+
+
+def _build_task_context_hint(*, status: Dict[str, Any], task_id: str) -> Dict[str, Any]:
+    context = status.get("task_context") or {}
+    current_task_id = context.get("current_task_id")
+    last_task_id = context.get("last_task_id")
+    recent_tasks = context.get("recent_tasks") or []
+    message = ""
+    if task_id and task_id == current_task_id:
+        message = f"当前正在查看任务 {task_id}。"
+    elif task_id and task_id == last_task_id:
+        message = f"当前未装载该任务，但最近活动任务是 {task_id}，可直接 switch-task 恢复。"
+    elif task_id:
+        message = f"当前正在按 task_id={task_id} 回读持久化证据。"
+    elif current_task_id:
+        message = f"当前已装载任务 {current_task_id}。"
+    elif recent_tasks:
+        message = "当前没有装载中的任务，但存在可恢复的历史任务。"
+    else:
+        message = "当前没有装载任务，也没有可恢复的历史任务。"
+    return {
+        "current_task_id": current_task_id,
+        "last_task_id": last_task_id,
+        "requested_task_id": task_id or None,
+        "recent_tasks": recent_tasks[:5],
+        "message": message,
+    }
+
+
+def _build_region_binding_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    bindings = list(context.get("bindings") or [])
+    unbound = list(context.get("unbound_region_intents") or [])
+    return {
+        "task_id": context.get("task_id"),
+        "target_ref": context.get("target_ref") or {},
+        "capture_ref": context.get("capture_ref") or {},
+        "bindings": bindings,
+        "bound_count": len(bindings),
+        "unbound_region_intents": unbound,
+        "unbound_count": len(unbound),
+    }
 
 
 def _format_time_text(timestamp: Any) -> str:
@@ -382,6 +496,80 @@ def _describe_direction(rect_norm: Dict[str, Any]) -> str:
     return "中间"
 
 
+def build_region_bind_contract_payload() -> Dict[str, Any]:
+    return {
+        "bind_version": "1.0",
+        "request": {
+            "task_id": "必填，必须关联当前草案或待确认任务",
+            "target_ref": {
+                "type": "process|window|screen",
+                "process_name": "可选",
+                "window_id": "可选",
+                "screen_id": "可选",
+            },
+            "capture_ref": {
+                "capture_id": "必填",
+                "image_path": "建议提供最近截图绝对路径",
+                "image_width": "必填",
+                "image_height": "必填",
+            },
+            "region_intents": [
+                {
+                    "region_intent_id": "必填",
+                    "name": "必填",
+                    "purpose": "可选但建议提供",
+                    "required": "可选，默认 true",
+                }
+            ],
+        },
+        "result": {
+            "task_id": "必填",
+            "target_ref": "需与 request 对应",
+            "capture_ref": "需与 request 对应",
+            "region_bindings": [
+                {
+                    "region_intent_id": "必填",
+                    "region_id": "必填",
+                    "name": "必填",
+                    "x": "必填",
+                    "y": "必填",
+                    "w": "必填",
+                    "h": "必填",
+                    "coordinate_space": "v1 建议固定为 target",
+                    "binding_space": "建议为 capture_image",
+                    "source": "external_selector|screenshot_annotation|manual_coordinates",
+                    "confidence": "可选",
+                    "notes": "可选",
+                }
+            ],
+            "unbound_region_intents": [
+                {
+                    "region_intent_id": "必填",
+                    "name": "建议提供",
+                    "reason": "建议提供未绑定原因",
+                }
+            ],
+        },
+        "confirm_plan_rules": [
+            "region_bindings[] 必须可直接转成 watch spec.target.regions[]",
+            "required=true 且未绑定的区域不得静默丢失",
+            "必要时可退回整目标监控，但仅限非 required 区域",
+        ],
+        "action_binding_extension": {
+            "refresh_click": {
+                "action_type": "refresh_click",
+                "point_id": "refresh_main",
+                "x": "必填",
+                "y": "必填",
+                "coordinate_space": "target|screen|window",
+                "binding_space": "capture_image",
+                "source": "external_selector|screenshot_annotation|manual_coordinates",
+                "confidence": "可选",
+            }
+        },
+    }
+
+
 def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
     return {
         "watch.create": {
@@ -395,12 +583,35 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "method": "POST",
             "path": "/api/agent/plan-watch-spec",
             "request": {"task_id": "必填", "prompt": "必填", "target": "可选"},
-            "response_keys": ["task_id", "mode", "draft_spec", "missing_fields", "questions", "region_intents", "action_intents", "ambiguities", "confirmation_summary", "can_apply_directly"],
+            "response_keys": ["task_id", "mode", "draft_spec", "missing_fields", "questions", "region_intents", "action_intents", "setup_guidance", "ambiguities", "confirmation_summary", "can_apply_directly"],
+        },
+        "region_bind.request": {
+            "method": "POST",
+            "path": "/api/agent/region-bind-request",
+            "request": {"plan": "必填", "capture_ref": "必填"},
+            "response_keys": ["bind_version", "task_id", "target_ref", "capture_ref", "region_intents"],
+        },
+        "region_bind.result": {
+            "method": "POST",
+            "path": "/api/agent/region-bind-result",
+            "request": {"bind_version": "必填", "task_id": "必填", "target_ref": "必填", "capture_ref": "必填", "region_bindings": "必填"},
+            "response_keys": ["status", "region_binding_context"],
+        },
+        "region_bind.contract": {
+            "method": "GET",
+            "path": "/api/agent/region-bind-contract",
+            "response_keys": ["bind_version", "request", "result", "confirm_plan_rules", "action_binding_extension"],
         },
         "watch.confirm_plan": {
             "method": "POST",
             "path": "/api/watch/confirm-plan",
-            "request": {"plan": "必填", "confirmations": "可选", "region_bindings": "推荐放在 confirmations 下"},
+            "request": {
+                "plan": "必填",
+                "confirmations": "可选",
+                "region_bindings": "推荐放在 confirmations 下",
+                "alert_message_title": "可放在 confirmations 下",
+                "alert_message_template": "可放在 confirmations 下",
+            },
             "response_keys": ["status", "task_id", "mode", "spec", "target"],
         },
         "watch.status": {
@@ -408,11 +619,60 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "path": "/api/watch/status",
             "response_keys": ["has_runner", "is_running", "task_id", "last_task_id", "target", "mode", "event_count"],
         },
+        "tasks.list": {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": {"limit": "1-500"},
+            "response_keys": ["items", "count"],
+        },
+        "tasks.switch": {
+            "method": "POST",
+            "path": "/api/watch/switch-task",
+            "request": {"task_id": "必填"},
+            "response_keys": ["status", "task", "watch_status"],
+        },
+        "tasks.delete": {
+            "method": "DELETE",
+            "path": "/api/watch/task/{task_id}",
+            "response_keys": ["status", "task_id", "deleted"],
+        },
         "agent.observe_live": {
             "method": "GET",
             "path": "/api/agent/observe-live",
             "query": {"task_id": "可选", "minutes": "1-15", "limit": "1-100"},
-            "response_keys": ["schema_version", "task_id", "observed_at", "time_scope", "status", "screenshot", "recent_events", "memory_items", "alerts", "logs", "evidence_status", "agent_hints"],
+            "response_keys": ["schema_version", "task_id", "observed_at", "time_scope", "status", "screenshot", "recent_events", "memory_items", "alerts", "logs", "cleanup_reminder", "region_binding_context", "vision_status", "evidence_status", "agent_hints"],
+        },
+        "control.status": {
+            "method": "GET",
+            "path": "/api/control/status",
+            "response_keys": ["is_paused", "paused_at", "pause_reason", "has_runner", "is_running", "task_id", "data_dir", "archive_dir"],
+        },
+        "control.pause_all": {
+            "method": "POST",
+            "path": "/api/control/pause-all",
+            "response_keys": ["status"],
+        },
+        "control.resume_all": {
+            "method": "POST",
+            "path": "/api/control/resume-all",
+            "response_keys": ["status"],
+        },
+        "control.open_data_dir": {
+            "method": "GET",
+            "path": "/api/control/open-data-dir",
+            "response_keys": ["status", "data_dir", "archive_dir"],
+        },
+        "control.cleanup_reminder": {
+            "method": "POST",
+            "path": "/api/control/cleanup-reminder",
+            "request": {"suppress_forever": "可选", "snoozed_until": "可选", "last_prompt_at": "可选"},
+            "response_keys": ["status", "cleanup_reminder"],
+        },
+        "control.cleanup_reminder_check": {
+            "method": "POST",
+            "path": "/api/control/cleanup-reminder/check",
+            "request": {"now": "可选"},
+            "response_keys": ["status", "cleanup_reminder"],
         },
         "watch.start": {
             "method": "POST",
@@ -480,6 +740,18 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
         "vision.models": {
             "method": "GET",
             "path": "/api/vision/models",
-            "response_keys": ["available", "items"],
+            "response_keys": ["available", "binary_available", "service_reachable", "default_model", "default_model_installed", "items", "recommended_action"],
+        },
+        "vision.prepare": {
+            "method": "POST",
+            "path": "/api/vision/prepare",
+            "request": {"requested_by": "建议填写 agent_enable_local_vision 或 user_enable_local_vision"},
+            "response_keys": ["requested_by", "default_local_model", "provider", "provider_status", "agent_can_attempt_after_permission", "user_steps", "expected_effect"],
+        },
+        "vision.settings": {
+            "method": "POST",
+            "path": "/api/vision/settings",
+            "request": {"enabled": "可选", "provider": "可选", "model": "可选", "auto_use_when_available": "可选"},
+            "response_keys": ["status", "vision_settings"],
         },
     }

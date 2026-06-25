@@ -6,6 +6,7 @@ import base64
 import json
 import shutil
 import subprocess
+import urllib.error
 import urllib.request
 from typing import Any, Dict, List
 
@@ -18,6 +19,13 @@ class OllamaService:
 
     def is_available(self) -> bool:
         return shutil.which(self.command) is not None
+
+    def is_service_reachable(self) -> bool:
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=2) as response:
+                return response.status == 200
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+            return False
 
     def list_models(self) -> List[Dict[str, Any]]:
         if not self.is_available():
@@ -50,6 +58,32 @@ class OllamaService:
             modified = " ".join(parts[3:]) if len(parts) > 3 else ""
             models.append({"name": name, "id": model_id, "size": size, "modified": modified})
         return models
+
+    def status_report(self, *, default_model: str = "qwen2.5vl:7b") -> Dict[str, Any]:
+        binary_available = self.is_available()
+        service_reachable = self.is_service_reachable() if binary_available else False
+        items = self.list_models() if service_reachable else []
+        installed_names = {str(item.get("name") or "") for item in items}
+        default_model_installed = default_model in installed_names
+        available = binary_available and service_reachable
+        if not binary_available:
+            recommended_action = "install_ollama"
+        elif not service_reachable:
+            recommended_action = "start_service"
+        elif not default_model_installed:
+            recommended_action = "pull_default_model"
+        else:
+            recommended_action = "ready"
+        return {
+            "provider": "ollama",
+            "available": available,
+            "binary_available": binary_available,
+            "service_reachable": service_reachable,
+            "default_model": default_model,
+            "default_model_installed": default_model_installed,
+            "items": items,
+            "recommended_action": recommended_action,
+        }
 
     def generate_vision_summary(
         self,

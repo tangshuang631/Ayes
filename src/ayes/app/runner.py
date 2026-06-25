@@ -13,6 +13,7 @@ from typing import Callable, List, Optional
 from io import BytesIO
 from uuid import uuid4
 
+from ayes.app.paths import runtime_root
 from ayes.alerting.notifier import WebhookNotifier
 from ayes.capture.models import CaptureFrame, CaptureResult
 from ayes.capture.screen import MacOSScreenCapture
@@ -38,6 +39,7 @@ class WatchRunner:
         task_id: str = "task_mvp",
         event_sink: Optional[Callable] = None,
         log_sink: Optional[Callable[[dict], None]] = None,
+        runtime_dir: Optional[Path] = None,
     ) -> None:
         self.spec = spec
         self.task_id = task_id
@@ -64,7 +66,10 @@ class WatchRunner:
         self._last_alert_at: Optional[float] = None
         self._last_alert_key: Optional[str] = None
         self._vision_call_timestamps: List[float] = []
-        self._evidence_dir = Path("runtime/evidence")
+        self._vision_run_counter: int = 0
+        self._last_vision_run_at: Optional[float] = None
+        self.runtime_dir = (runtime_dir or runtime_root()).resolve()
+        self._evidence_dir = self.runtime_dir / "evidence"
         self._last_evidence_cleanup_at: Optional[float] = None
         self._last_process_window_signature: Optional[tuple[int, str]] = None
         self._alert_notifier = WebhookNotifier()
@@ -162,7 +167,7 @@ class WatchRunner:
                     region=region,
                     ocr_char_count=ocr_result.char_count,
                 )
-                if vision_reasons:
+                if vision_reasons or (vision_blocked_reason and vision_blocked_reason != "vision_disabled"):
                     vision_audit_event = self._build_vision_decision_event(
                         now=now,
                         frame=frame,
@@ -579,6 +584,13 @@ class WatchRunner:
     def _evaluate_vision_enhancement(self, *, region: Optional[TargetRegion], ocr_char_count: int):
         if not self.spec.vision.enabled:
             return False, [], "vision_disabled"
+        self._vision_run_counter += 1
+        blocked_reason = self._vision_policy_block_reason(region=region)
+        if blocked_reason:
+            return False, [], blocked_reason
+        sampling_block_reason = self._vision_sampling_block_reason()
+        if sampling_block_reason:
+            return False, [], sampling_block_reason
         if self._is_vision_rate_limited():
             self._write_log(
                 category="vision",
@@ -601,6 +613,35 @@ class WatchRunner:
             if any(keyword in haystack for keyword in visual_keywords):
                 reasons.append("watch_intent_visual")
         return bool(reasons), reasons, ""
+
+    def _vision_policy_block_reason(self, *, region: Optional[TargetRegion]) -> str:
+        queries = " ".join(self.spec.watch_intent.queries).lower()
+        summary = str(getattr(self.spec.watch_intent, "summary", "") or "").lower()
+        haystack = f"{queries} {summary}"
+        if self.spec.vision.disable_for_threshold_rules:
+            for rule in self.spec.watch_intent.rules:
+                if getattr(rule, "type", "") == "numeric_threshold":
+                    return "threshold_rule_disabled"
+        if self.spec.vision.disable_for_numeric_only_tasks:
+            numeric_keywords = ["价格低于", "价格高于", "库存", "有货", "低于", "高于", "阈值", "数字"]
+            if any(keyword in haystack for keyword in numeric_keywords) and not any(
+                keyword in haystack for keyword in ["图表", "颜色", "按钮", "图标", "布局", "走势"]
+            ):
+                return "numeric_only_task_disabled"
+        if self.spec.vision.disable_for_text_only_tasks:
+            if any(keyword in haystack for keyword in ["只看文字", "只看文本", "只看数字", "不需要看图", "不需要颜色", "不需要按钮", "不需要图表"]):
+                return "text_only_task_disabled"
+        return ""
+
+    def _vision_sampling_block_reason(self) -> str:
+        every_n_runs = max(int(self.spec.vision.sampling_every_n_runs or 1), 1)
+        if every_n_runs > 1 and (self._vision_run_counter % every_n_runs) != 0:
+            return "sampling_every_n_runs"
+        min_interval = max(int(self.spec.vision.sampling_min_interval_sec or 0), 0)
+        if min_interval > 0 and self._last_vision_run_at is not None:
+            if (self._last_run_at or time.time()) - self._last_vision_run_at < min_interval:
+                return "sampling_min_interval_sec"
+        return ""
 
     def _build_vision_decision_event(
         self,
@@ -750,12 +791,12 @@ class WatchRunner:
         full_name = f"{event_id}_{stamp}_full.png"
         full_path = self._evidence_dir / full_name
         full_path.write_bytes(target_frame.image_bytes)
-        refs.append(str(full_path).replace("\\", "/"))
+        refs.append(f"runtime/evidence/{full_name}")
         if region is not None:
             roi_name = f"{event_id}_{stamp}_roi_{region.region_id}.png"
             roi_path = self._evidence_dir / roi_name
             roi_path.write_bytes(region_frame.image_bytes)
-            refs.append(str(roi_path).replace("\\", "/"))
+            refs.append(f"runtime/evidence/{roi_name}")
         return refs
 
     def _is_vision_rate_limited(self) -> bool:
@@ -811,6 +852,7 @@ class WatchRunner:
         cutoff = now - 60
         self._vision_call_timestamps = [item for item in self._vision_call_timestamps if item >= cutoff]
         self._vision_call_timestamps.append(now)
+        self._last_vision_run_at = now
 
     def _write_log(
         self,

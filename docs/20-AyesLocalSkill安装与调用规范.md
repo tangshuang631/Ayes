@@ -44,11 +44,20 @@
 
 ### 3.1 仓库内正式 skill
 
-- `skills/ayes-local/SKILL.md`
-- `skills/ayes-local/agents/openai.yaml`
-- `skills/ayes-local/references/installation.md`
-- `skills/ayes-local/references/commands.md`
-- `skills/ayes-local/references/troubleshooting.md`
+- `skills/final/ayes-local/SKILL.md`
+- `skills/final/ayes-local/agents/openai.yaml`
+- `skills/final/ayes-local/references/installation.md`
+- `skills/final/ayes-local/references/commands.md`
+- `skills/final/ayes-local/references/troubleshooting.md`
+
+这里的 `skills/final/ayes-local/` 必须视为最终交付产物目录。
+
+额外约束：
+
+- 目录内只放可安装给最终用户的正式无状态 skill 模板
+- 不得携带用户任务、webhook、截图、日志、短期/长期记忆等运行态状态
+- 用户首次安装后，应通过 agent 对话和正式命令面按需补齐所有真实配置
+- 任何开发期或本机测试期使用过的真实企业微信 webhook，都不得写入正式 skill 模板、示例产物或安装结果
 
 ### 3.2 本地工具入口
 
@@ -87,9 +96,11 @@
   agents/openai.yaml
   references/
   scripts/
+  runtime/
 ```
 
 其中 `scripts/` 下允许包含由安装脚本生成的本地包装脚本。
+其中 `runtime/` 是该安装实例的本地运行态目录，存放数据库、截图、日志和证据；正式 skill 模板不得携带该目录。
 
 ## 5. 安装流要求
 
@@ -111,6 +122,14 @@
 当前生成包装脚本的推荐名称为：
 
 - `ayes-agent-local`
+- `ayes-menubar-local`
+
+包装脚本必须导出：
+
+- `PYTHONPATH=<repo_root>/src`
+- `AYES_RUNTIME_DIR=<skill_root>/ayes-local/runtime`
+
+这样安装后的运行态不会落到开发仓库 `runtime/`。
 
 ## 6. 调用入口要求
 
@@ -151,6 +170,7 @@
 - webhook / 本地通知等即时提醒由后台服务直接负责
 - skill / agent 不作为第一触发通知渠道
 - skill / agent 负责回读与解释，而不是代替服务发通知
+- 用户一旦明确授权并提供 webhook，后台服务就应能在 Codex / OpenClaw 不在线回复时继续独立完成企业微信外发
 
 ## 8. `ayes-agent` 最低能力面
 
@@ -186,13 +206,23 @@
 - `ensure-service`：保证本地 Ayes 服务可复用或被拉起
 - `targets`：读取候选目标摘要
 - `plan-spec`：把自然语言和已知目标转成任务草案、缺失项与确认摘要
+- `plan-spec`：除 `questions[] / region_intents[] / action_intents[]` 外，还必须返回 `setup_guidance[]`，用于缺配置时通过对话继续补齐
 - `confirm-plan`：在补齐 webhook / 目标 / ROI / 点击点后确认装载最终任务
 - `task`：读取任务配置或持久化任务信息
+- `tasks` / `switch-task` / `delete-task`：列出、恢复、切换或删除历史任务及其独立记忆
 - `observe-live`：聚合当前状态、截图、近期事件、短期记忆、告警、日志和证据质量，是 agent 追问屏幕现状时的优先入口
+- `observe-live.agent_hints.task_context`：告诉 agent 当前正在看哪个任务、是否只是回读持久化证据、有哪些历史任务可恢复
 - `recent` / `ask` / `screenshot`：构成细颗粒追问和回退闭环
 - `alerts`：读取最近告警审计结果，回答“是否通知过 / 为什么没通知”
 - `control`：读取或变更后台运行状态，例如暂停全部任务、恢复全部任务、打开数据目录提示
+- `control cleanup-reminder --next-check-after-days N`：调整清理提醒间隔，默认 7 天
 - `region-bind-contract`：输出正式 `region-bind` 输入输出格式说明，便于 agent 或外部工具按同一合同产出绑定结果
+
+补充要求：
+
+- `start` 在默认本地服务地址上启动持续监控后，应尽力自动拉起 macOS 菜单栏控制入口；菜单栏失败不得导致监控启动失败
+- `screenshot` 必须返回最近真实采样帧的唯一文件路径，而不是只返回可能缓存的固定文件名
+- 菜单栏必须可进入 ROI 管理和设置界面
 
 ## 9. 技能文档要求
 
@@ -203,6 +233,8 @@
 - 默认调用顺序
 - 自然语言任务如何先走草案再走确认
 - 如何优先读取 `questions[]` 并逐条补问
+- 如何在 webhook、本地视觉模型或其他依赖未就绪时读取 `setup_guidance[]` 并继续指导用户完成配置
+- 如何在用户说“继续之前的任务”时先定位 `task_id`，再恢复并继续追问
 - 如何在需要 ROI、多区域和刷新点击点时引用正式 `region-bind` 合同
 - 没有目标或 ROI 时如何回退到工作台
 - 如何回答用户，而不是只返回原始 JSON
@@ -272,6 +304,58 @@
 - 明确说明后台任务当前已暂停
 - 返回最近一次暂停时间和原因
 - 如果用户希望继续监控，优先调用 `control resume-all`
+
+## 12.5 webhook 与自定义消息边界
+
+- 正式发布给用户的 `ayes-local` skill 必须保持无状态，不得预置任何真实 webhook 地址
+- 用户在本机明确授权后，agent 才能把 webhook 通过 `confirm-plan` 写入当前任务配置
+- 如果用户没有自定义消息模板，默认发送任务创建阶段由 agent 确认后的提醒内容
+- 如果用户要求更灵活的消息标题或正文，应通过 `confirm-plan` 写入：
+  - `alert_message_title`
+  - `alert_message_template`
+- 自定义消息模板应至少支持：
+  - `{task_id}`
+  - `{timestamp}`
+  - `{process_name}`
+  - `{window_title}`
+  - `{priority}`
+  - `{confidence}`
+  - `{summary}`
+  - `{event_id}`
+
+## 12.6 安装后 smoke 验证要求
+
+当前正式安装后 smoke 入口为：
+
+```bash
+python3 scripts/smoke_ayes_local_skill.py
+```
+
+它应至少支持两类验证：
+
+1. 本地 round-trip smoke
+2. 真实企业微信外发 smoke
+
+本地 round-trip smoke 用于证明：
+
+- 安装脚本能生成可执行的 `ayes-agent-local`
+- smoke 会先回收可安全关闭的旧本地服务，再验证当前安装产物
+- `plan-spec -> confirm-plan -> start -> run-once -> alerts/ask` 主链路可跑通
+- 本地临时 webhook 接收端能真实收到 POST
+
+真实企业微信外发 smoke 用于证明：
+
+- 用户在本机授权并提供真实 webhook 后
+- Ayes 后台服务可以独立完成企业微信通知
+- 即使 Codex / OpenClaw 不是即时在线回复，也不影响 webhook 成功外发
+
+如果用户要验证自定义消息标题与正文模板，安装后 smoke 还应支持：
+
+```bash
+python3 scripts/smoke_ayes_local_skill.py \
+  --alert-message-title "库存提醒" \
+  --alert-message-template "任务 {task_id} 命中：{summary}"
+```
 
 ## 13. 当前阶段结论
 

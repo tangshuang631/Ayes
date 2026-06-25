@@ -277,7 +277,7 @@ def test_ask_payload_exposes_structured_vision_matches() -> None:
                 attributes={
                     "vision_reasons": ["ocr_sparse"],
                     "vision_blocked_reason": "",
-                    "vision_model": "Molmo-7B-D-0924",
+                    "vision_model": "qwen2.5vl:7b",
                     "vision_provider": "ollama",
                     "detail_lines": ["下降图表位于中间", "右上有红色按钮"],
                 },
@@ -293,7 +293,7 @@ def test_ask_payload_exposes_structured_vision_matches() -> None:
     assert payload["structured_vision_matches"]
     first = payload["structured_vision_matches"][0]
     assert first["provider"] == "ollama"
-    assert first["model"] == "Molmo-7B-D-0924"
+    assert first["model"] == "qwen2.5vl:7b"
     assert first["region_name"] == "图表区"
     assert first["detail_lines"] == ["下降图表位于中间", "右上有红色按钮"]
 

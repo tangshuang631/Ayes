@@ -10,12 +10,13 @@ from typing import Any, Dict, List, Optional
 
 from ayes.events.models import TimelineEvent
 from ayes.logs.models import LogEntry
+from ayes.app.paths import runtime_root
 
 
 class SQLiteStore:
-    def __init__(self, db_path: str = "data/ayes.db") -> None:
-        self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: str | None = None) -> None:
+        self.db_path = db_path or str(runtime_root() / "data" / "ayes.db")
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -72,7 +73,52 @@ class SQLiteStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS cleanup_reminder_state (
+                    state_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vision_enhancement_state (
+                    state_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_settings_state (
+                    state_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
             connection.commit()
+
+    def upsert_app_settings(self, payload: Dict[str, Any]) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO app_settings_state (state_key, payload_json)
+                VALUES (?, ?)
+                """,
+                ("app_settings", json.dumps(payload, ensure_ascii=False)),
+            )
+            connection.commit()
+
+    def get_app_settings(self) -> Optional[Dict[str, Any]]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM app_settings_state WHERE state_key = ?",
+                ("app_settings",),
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row[0])
 
     def upsert_task(self, *, task_id: str, mode: str, target: dict, spec: dict, created_at: float) -> None:
         with self._connect() as connection:
@@ -231,6 +277,46 @@ class SQLiteStore:
             "created_at": row[4],
         }
 
+    def list_tasks(self, *, limit: int = 100) -> List[Dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT task_id, mode, target_json, spec_json, created_at
+                FROM watch_tasks
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "task_id": row[0],
+                "mode": row[1],
+                "target": json.loads(row[2]),
+                "spec": json.loads(row[3]),
+                "created_at": row[4],
+            }
+            for row in rows
+        ]
+
+    def delete_task_data(self, task_id: str) -> Dict[str, int]:
+        deleted = {"tasks": 0, "events": 0, "logs": 0, "long_term_summaries": 0}
+        with self._connect() as connection:
+            deleted["events"] = int(
+                (connection.execute("DELETE FROM events WHERE task_id = ?", (task_id,)).rowcount or 0)
+            )
+            deleted["logs"] = int(
+                (connection.execute("DELETE FROM logs WHERE task_id = ?", (task_id,)).rowcount or 0)
+            )
+            deleted["long_term_summaries"] = int(
+                (connection.execute("DELETE FROM long_term_summaries WHERE task_id = ?", (task_id,)).rowcount or 0)
+            )
+            deleted["tasks"] = int(
+                (connection.execute("DELETE FROM watch_tasks WHERE task_id = ?", (task_id,)).rowcount or 0)
+            )
+            connection.commit()
+        return deleted
+
     def insert_long_term_summary(
         self,
         *,
@@ -313,3 +399,75 @@ class SQLiteStore:
             )
             connection.commit()
             return int(cursor.rowcount or 0)
+
+    def upsert_cleanup_reminder(
+        self,
+        *,
+        enabled: bool,
+        last_prompt_at: Optional[float],
+        snoozed_until: Optional[float],
+        suppress_forever: bool,
+        data_dir: str,
+        next_check_after_days: int,
+    ) -> None:
+        payload = {
+            "enabled": enabled,
+            "last_prompt_at": last_prompt_at,
+            "snoozed_until": snoozed_until,
+            "suppress_forever": suppress_forever,
+            "data_dir": data_dir,
+            "next_check_after_days": next_check_after_days,
+        }
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO cleanup_reminder_state (state_key, payload_json)
+                VALUES (?, ?)
+                """,
+                ("cleanup_reminder", json.dumps(payload, ensure_ascii=False)),
+            )
+            connection.commit()
+
+    def get_cleanup_reminder(self) -> Optional[Dict[str, Any]]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM cleanup_reminder_state WHERE state_key = ?",
+                ("cleanup_reminder",),
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row[0])
+
+    def upsert_vision_enhancement_settings(
+        self,
+        *,
+        enabled: bool,
+        provider: str,
+        model: str,
+        auto_use_when_available: bool,
+    ) -> None:
+        payload = {
+            "enabled": enabled,
+            "provider": provider,
+            "model": model,
+            "auto_use_when_available": auto_use_when_available,
+        }
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO vision_enhancement_state (state_key, payload_json)
+                VALUES (?, ?)
+                """,
+                ("vision_enhancement", json.dumps(payload, ensure_ascii=False)),
+            )
+            connection.commit()
+
+    def get_vision_enhancement_settings(self) -> Optional[Dict[str, Any]]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM vision_enhancement_state WHERE state_key = ?",
+                ("vision_enhancement",),
+            ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row[0])

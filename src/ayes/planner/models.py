@@ -40,6 +40,19 @@ class ActionIntent:
 
 
 @dataclass(frozen=True)
+class SetupGuidance:
+    guidance_id: str
+    topic: str
+    status: str
+    summary: str
+    blocking_fields: List[str] = field(default_factory=list)
+    user_steps: List[str] = field(default_factory=list)
+    agent_steps: List[str] = field(default_factory=list)
+    commands: List[str] = field(default_factory=list)
+    can_agent_attempt_after_permission: bool = False
+
+
+@dataclass(frozen=True)
 class WatchPlanDraft:
     plan_version: str
     task_id: str
@@ -53,6 +66,7 @@ class WatchPlanDraft:
     questions: List[PlanQuestion] = field(default_factory=list)
     region_intents: List[RegionIntent] = field(default_factory=list)
     action_intents: List[ActionIntent] = field(default_factory=list)
+    setup_guidance: List[SetupGuidance] = field(default_factory=list)
     ambiguities: List[PlanIssue] = field(default_factory=list)
     assumptions: List[str] = field(default_factory=list)
     confirmation_summary: List[str] = field(default_factory=list)

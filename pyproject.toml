@@ -20,6 +20,7 @@ dev = ["pytest>=8,<9"]
 ayes = "ayes.cli.main:main"
 ayes-launcher = "ayes.cli.launcher:main"
 ayes-agent = "ayes.cli.agent_tool:main"
+ayes-menubar = "ayes.cli.menubar:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

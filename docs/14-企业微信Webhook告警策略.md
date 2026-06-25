@@ -133,6 +133,20 @@ webhook 地址不允许硬编码进代码或文档示例。
 
 如果后续支持多任务多 webhook，可扩展为安全本地配置，但仍不应写死在 `watch spec` 明文样例中。
 
+为了在不依赖外部企业微信网络的情况下验证告警发送链路，允许在用户本机执行本地 round-trip smoke：
+
+```bash
+python3 scripts/smoke_webhook_flow.py
+```
+
+该脚本的目标是证明：
+
+- 后台告警消息格式符合当前文本模板
+- 本地 webhook 接收端可以真实收到 POST
+- 后续可把同一 webhook URL 用于本机临时自测
+
+如果当前执行环境不允许监听本地端口，应把这一步保留为“用户本机实测项”，而不是错误地宣称已完成真实 round-trip 验证。
+
 ## 9. 失败处理
 
 发送失败必须记录。
@@ -215,6 +229,8 @@ webhook 地址不允许硬编码进代码或文档示例。
 - `channel`
 - `webhook_url_env`
 - `webhook_url`
+- `message_title`
+- `message_template`
 - `priority_threshold`
 - `cooldown_sec`
 - `dedupe_window_sec`

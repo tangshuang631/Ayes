@@ -13,6 +13,8 @@ from typing import Callable, Literal, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from ayes.app.paths import runtime_root
+
 
 EnsureResult = Literal["reused", "started"]
 
@@ -45,7 +47,7 @@ class ServiceConfig:
 
 def default_service_config(root_dir: Optional[Path] = None) -> ServiceConfig:
     resolved_root = (root_dir or Path(__file__).resolve().parents[3]).resolve()
-    runtime_dir = resolved_root / "runtime"
+    runtime_dir = runtime_root(resolved_root)
     return ServiceConfig(
         root_dir=resolved_root,
         runtime_dir=runtime_dir,
@@ -164,6 +166,23 @@ def stop_pid(pid: Optional[int]) -> None:
         os.kill(pid, signal.SIGTERM)
     except OSError:
         return
+
+
+def wait_for_pid_exit(
+    pid: Optional[int],
+    *,
+    timeout_sec: float = 5.0,
+    poll_interval_sec: float = 0.1,
+    pid_alive_check: Callable[[Optional[int]], bool] = is_pid_alive,
+) -> bool:
+    if not pid:
+        return True
+    deadline = time.time() + max(timeout_sec, 0.0)
+    while time.time() <= deadline:
+        if not pid_alive_check(pid):
+            return True
+        time.sleep(max(poll_interval_sec, 0.0))
+    return not pid_alive_check(pid)
 
 
 def can_shutdown_service(config: ServiceConfig, *, timeout_sec: float = 1.0) -> bool:

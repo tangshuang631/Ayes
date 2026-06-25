@@ -105,7 +105,7 @@
   "vision": {
     "enabled": false,
     "provider": "ollama",
-    "model": "Molmo-7B-D-0924",
+    "model": "qwen2.5vl:7b",
     "trigger_when_ocr_sparse": true,
     "ocr_sparse_min_chars": 12,
     "trigger_on_visual_regions": true,
@@ -153,6 +153,9 @@
     "enabled": true,
     "channel": "wecom_webhook",
     "webhook_url_env": "AYES_WECOM_WEBHOOK_URL",
+    "webhook_url": "",
+    "message_title": "",
+    "message_template": "",
     "priority_threshold": "medium",
     "cooldown_sec": 120,
     "dedupe_window_sec": 300
@@ -290,6 +293,28 @@ OCR 频率由 `ocr_interval_ms` 控制。
 - `vision.enabled`
 - `vision.provider`
 - `vision.model`
+  默认应使用 `qwen2.5vl:7b` 作为 Ollama 直拉直用的稳定多模态模型；`Molmo` 仅作为后续实验增强路径，不作为默认值。
+- 当 agent 与用户交互希望开启本地大模型增强而本机尚未安装 Ollama、未启动服务或未拉取默认模型时：
+  agent 必须显式提示当前默认本地视觉模型为 `qwen2.5vl:7b`，并给出安装、启动、拉取与启用步骤；若已获得用户授权，agent 也可代为执行这些操作，然后再开启本地视觉增强。
+
+## 本地视觉增强触发边界
+
+- 默认关闭，不得把本地大模型视觉能力作为主链路依赖；基础读取优先走 OCR。
+- 只有用户明确要求开启本地 Ollama 模型增强时，agent 才应执行 `vision prepare` 做本地就绪检查。
+- 即使已开启本地增强，也只有在以下高视觉负载场景才允许触发：
+  - 图表、曲线、仪表盘、颜色状态、按钮、图标、布局、弹窗结构等视觉信息主导
+  - OCR 文本稀疏，但画面结构信息明显
+  - 用户或 agent 当前任务明确要求“看图表 / 看按钮 / 看颜色 / 看布局”
+- 以下场景默认禁止触发本地视觉模型：
+  - 纯文本读取
+  - 纯数字读取
+  - 价格、库存、阈值等明确规则判断
+  - 用户明确声明“不需要看图 / 颜色 / 按钮 / 图表”
+- 当 webhook、本地视觉模型或其他外部依赖未就绪时，planner 不得只返回缺失字段；还必须返回结构化 `setup_guidance[]`，让 agent 可通过对话反复指导用户完成配置并继续任务。
+- 用户可以通过对话进一步调整采样策略，例如：
+  - 每隔 N 次截图才交给本地模型一次
+  - 至少间隔 N 秒才允许再次调用
+- 若用户未明确提出上述采样策略，则默认不做周期性大模型视觉采样。
 - `vision.trigger_when_ocr_sparse`
 - `vision.ocr_sparse_min_chars`
 - `vision.trigger_on_visual_regions`
@@ -377,6 +402,9 @@ OCR 频率由 `ocr_interval_ms` 控制。
 推荐字段：
 
 - `webhook_url_env`
+- `webhook_url`
+- `message_title`
+- `message_template`
 - `priority_threshold`
 - `cooldown_sec`
 - `dedupe_window_sec`

@@ -129,6 +129,12 @@ def test_observe_live_endpoint_returns_agent_ready_context() -> None:
     assert payload["recent_events"]["limit"] == 10
     assert payload["memory_items"]["limit"] == 10
     assert payload["status"]["task_id"] == "task_observe_live"
+    assert "cleanup_reminder" in payload
+    assert "region_binding_context" in payload
+    assert "configuration_guidance" in payload["agent_hints"]
+    assert isinstance(payload["agent_hints"]["configuration_guidance"], list)
+    assert "task_context" in payload["agent_hints"]
+    assert payload["agent_hints"]["task_context"]["current_task_id"] == "task_observe_live"
 
 
 def test_status_endpoint_includes_health_summary_diagnostics() -> None:
@@ -145,6 +151,7 @@ def test_status_endpoint_includes_health_summary_diagnostics() -> None:
     assert "count" in health["recent_memory"]
     assert "error_count" in health["recent_logs"]
     assert "warn_count" in health["recent_logs"]
+    assert "task_context" in payload
 
 
 def test_windows_endpoint_returns_items_key() -> None:
@@ -270,7 +277,26 @@ def test_plan_watch_spec_endpoint_returns_draft_and_missing_confirmation() -> No
     assert payload["draft_spec"]["watch_intent"]["rules"][0]["field"] == "price"
     assert any(item["field"] == "alert.webhook_url" for item in payload["missing_fields"])
     assert any(question["kind"] == "webhook_missing" for question in payload["questions"])
+    webhook_guidance = next(item for item in payload["setup_guidance"] if item["topic"] == "wecom_webhook")
+    assert "alert.webhook_url" in webhook_guidance["blocking_fields"]
+    assert any("webhook" in item.lower() for item in webhook_guidance["user_steps"])
     assert payload["can_apply_directly"] is False
+
+
+def test_plan_watch_spec_extracts_explicit_trigger_keyword_from_natural_language() -> None:
+    response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_keyword_trigger",
+            "prompt": "帮我监控当前主屏幕里出现 Codex 时提醒我",
+            "target": {"type": "screen", "screen_id": 1},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "triggered"
+    assert payload["draft_spec"]["watch_intent"]["enabled"] is True
+    assert payload["draft_spec"]["watch_intent"]["queries"] == ["Codex"]
 
 
 def test_plan_watch_spec_endpoint_emits_region_and_refresh_questions() -> None:
@@ -321,6 +347,63 @@ def test_confirm_plan_endpoint_loads_runner_after_confirmation() -> None:
     assert payload["task_id"] == "task_plan_apply"
     assert payload["spec"]["alert"]["enabled"] is True
     assert payload["spec"]["alert"]["webhook_url"] == "http://127.0.0.1:18999/webhook"
+
+
+def test_triggered_plan_can_continue_after_webhook_guidance_is_fulfilled() -> None:
+    plan_response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_guided_webhook",
+            "prompt": "帮我监控 Safari 里的商品价格低于 299 时提醒我",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert plan_response.status_code == 200
+    plan_payload = plan_response.json()
+    assert any(item["topic"] == "wecom_webhook" for item in plan_payload["setup_guidance"])
+    assert any(question["kind"] == "webhook_missing" for question in plan_payload["questions"])
+
+    confirm_response = client.post(
+        "/api/watch/confirm-plan",
+        json={
+            "plan": plan_payload,
+            "confirmations": {
+                "webhook_url": "http://127.0.0.1:18999/webhook",
+            },
+        },
+    )
+    assert confirm_response.status_code == 200
+    confirm_payload = confirm_response.json()
+    assert confirm_payload["status"] == "loaded"
+    assert confirm_payload["spec"]["alert"]["webhook_url"] == "http://127.0.0.1:18999/webhook"
+
+
+def test_confirm_plan_can_persist_custom_alert_message_template() -> None:
+    plan_response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_alert_template",
+            "prompt": "帮我监控 Safari 里的库存恢复时提醒我",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert plan_response.status_code == 200
+
+    confirm_response = client.post(
+        "/api/watch/confirm-plan",
+        json={
+            "plan": plan_response.json(),
+            "confirmations": {
+                "webhook_url": "http://127.0.0.1:18999/webhook",
+                "alert_message_title": "库存提醒",
+                "alert_message_template": "任务 {task_id} 命中：{summary}",
+            },
+        },
+    )
+    assert confirm_response.status_code == 200
+    confirm_payload = confirm_response.json()
+    assert confirm_payload["spec"]["alert"]["message_title"] == "库存提醒"
+    assert confirm_payload["spec"]["alert"]["message_template"] == "任务 {task_id} 命中：{summary}"
 
 
 def test_confirm_plan_endpoint_merges_region_and_refresh_confirmations() -> None:
@@ -418,6 +501,107 @@ def test_confirm_plan_endpoint_prefers_region_bindings_for_final_regions() -> No
     assert regions[1]["region_id"] == "roi_stock"
     assert payload["plan"]["region_bindings"][0]["source"] == "screenshot_annotation"
 
+    observe_response = client.get("/api/agent/observe-live", params={"task_id": "task_plan_region_bindings", "minutes": 5, "limit": 10})
+    assert observe_response.status_code == 200
+    observe_payload = observe_response.json()
+    assert observe_payload["region_binding_context"]["bound_count"] == 2
+    assert observe_payload["region_binding_context"]["bindings"][0]["region_id"] == "roi_price"
+    assert observe_payload["region_binding_context"]["bindings"][1]["source"] == "external_selector"
+
+
+def test_region_bind_request_and_result_round_trip() -> None:
+    plan_response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_region_bind_api",
+            "prompt": "帮我监控 Safari 页面里的价格和库存，只看两个重点区域",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert plan_response.status_code == 200
+    plan_payload = plan_response.json()
+
+    request_response = client.post(
+        "/api/agent/region-bind-request",
+        json={
+            "plan": plan_payload,
+            "capture_ref": {
+                "capture_id": "cap_demo_1",
+                "image_path": "/tmp/runtime/evidence/2026-06-25__task_region_bind_api/cap.png",
+                "image_width": 1440,
+                "image_height": 900,
+            },
+        },
+    )
+    assert request_response.status_code == 200
+    request_payload = request_response.json()
+    assert request_payload["bind_version"] == "1.0"
+    assert request_payload["task_id"] == "task_region_bind_api"
+    assert len(request_payload["region_intents"]) >= 2
+
+    price_intent = next(item for item in request_payload["region_intents"] if item["name"] == "价格区")
+    result_response = client.post(
+        "/api/agent/region-bind-result",
+        json={
+            "bind_version": "1.0",
+            "task_id": "task_region_bind_api",
+            "target_ref": request_payload["target_ref"],
+            "capture_ref": request_payload["capture_ref"],
+            "region_bindings": [
+                {
+                    "region_intent_id": price_intent["region_intent_id"],
+                    "region_id": "roi_price",
+                    "name": "价格区",
+                    "x": 100,
+                    "y": 200,
+                    "w": 300,
+                    "h": 120,
+                    "coordinate_space": "target",
+                    "binding_space": "capture_image",
+                    "source": "external_selector",
+                }
+            ],
+            "unbound_region_intents": [],
+        },
+    )
+    assert result_response.status_code == 200
+    result_payload = result_response.json()
+    assert result_payload["status"] == "accepted"
+    assert result_payload["region_binding_context"]["bindings"][0]["region_id"] == "roi_price"
+
+
+def test_region_bind_contract_endpoint_returns_formal_schema() -> None:
+    response = client.get("/api/agent/region-bind-contract")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["bind_version"] == "1.0"
+    assert "request" in payload
+    assert "result" in payload
+    assert "confirm_plan_rules" in payload
+    assert payload["result"]["region_bindings"][0]["source"] == "external_selector|screenshot_annotation|manual_coordinates"
+
+
+def test_region_bind_request_uses_latest_screenshot_when_capture_ref_missing() -> None:
+    state.remember_screenshot(path="runtime/web-last-frame.png", width=2, height=2)
+
+    plan_response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_region_bind_auto_capture",
+            "prompt": "帮我监控 Safari 页面里的价格和库存，只看两个重点区域",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert plan_response.status_code == 200
+    plan_payload = plan_response.json()
+
+    request_response = client.post("/api/agent/region-bind-request", json={"plan": plan_payload})
+    assert request_response.status_code == 200
+    request_payload = request_response.json()
+    assert request_payload["capture_ref"]["image_path"].endswith("runtime/web-last-frame.png")
+    assert request_payload["capture_ref"]["image_width"] == 2
+    assert request_payload["capture_ref"]["image_height"] == 2
+
 
 def test_watch_config_endpoint_supports_process_target_and_refresh_click() -> None:
     response = client.post(
@@ -479,7 +663,7 @@ def test_watch_config_endpoint_supports_multi_regions_and_vision_config() -> Non
             "vision": {
                 "enabled": True,
                 "provider": "ollama",
-                "model": "Molmo-7B-D-0924",
+                "model": "qwen2.5vl:7b",
                 "trigger_when_ocr_sparse": True,
                 "ocr_sparse_min_chars": 12,
             },
@@ -490,7 +674,7 @@ def test_watch_config_endpoint_supports_multi_regions_and_vision_config() -> Non
     payload = response.json()
     assert payload["target"]["regions"][0]["region_id"] == "roi_main"
     assert payload["spec"]["vision"]["enabled"] is True
-    assert payload["spec"]["vision"]["model"] == "Molmo-7B-D-0924"
+    assert payload["spec"]["vision"]["model"] == "qwen2.5vl:7b"
 
 
 def test_status_endpoint_exposes_current_spec_payload() -> None:
@@ -516,7 +700,7 @@ def test_status_endpoint_exposes_current_spec_payload() -> None:
                 ],
             },
             "sampling": {"screenshot_interval_ms": 3000, "ocr_interval_ms": 1200},
-            "vision": {"enabled": True, "model": "Molmo-7B-D-0924"},
+            "vision": {"enabled": True, "model": "qwen2.5vl:7b"},
             "alert": {"enabled": True},
             "watch_intent": {"enabled": False},
         },
@@ -774,6 +958,199 @@ def test_targets_endpoint_exposes_preview_and_collapse_metadata() -> None:
 
 
 def test_vision_models_endpoint_returns_availability_shape() -> None:
+    from ayes.api import server
+
+    class FakeOllamaService:
+        def status_report(self):
+            return {
+                "provider": "ollama",
+                "binary_available": True,
+                "service_reachable": False,
+                "available": False,
+                "default_model": "qwen2.5vl:7b",
+                "default_model_installed": False,
+                "items": [],
+                "recommended_action": "start_service",
+            }
+
+    original = server.ollama_service
+    server.ollama_service = FakeOllamaService()
+    try:
+        response = client.get("/api/vision/models")
+    finally:
+        server.ollama_service = original
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["available"] is False
+    assert payload["binary_available"] is True
+    assert payload["service_reachable"] is False
+    assert payload["default_model"] == "qwen2.5vl:7b"
+    assert payload["default_model_installed"] is False
+    assert payload["recommended_action"] == "start_service"
+    assert "items" in payload
+
+
+def test_vision_settings_endpoint_persists_agent_visible_state() -> None:
+    response = client.post(
+        "/api/vision/settings",
+        json={
+            "enabled": True,
+            "provider": "ollama",
+            "model": "qwen2.5vl:7b",
+            "auto_use_when_available": True,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["vision_settings"]["enabled"] is True
+    assert payload["vision_settings"]["model"] == "qwen2.5vl:7b"
+    get_response = client.get("/api/vision/settings")
+    assert get_response.status_code == 200
+    assert get_response.json()["enabled"] is True
+
+
+def test_observe_live_includes_vision_status() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_observe_live_vision",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post(
+        "/api/vision/settings",
+        json={
+            "enabled": True,
+            "provider": "ollama",
+            "model": "qwen2.5vl:7b",
+            "auto_use_when_available": True,
+        },
+    )
+    response = client.get("/api/agent/observe-live", params={"task_id": "task_observe_live_vision", "minutes": 5, "limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "vision_status" in payload
+    assert payload["vision_status"]["settings"]["enabled"] is True
+    assert payload["vision_status"]["settings"]["model"] == "qwen2.5vl:7b"
+    assert payload["vision_status"]["default_local_model"] == "qwen2.5vl:7b"
+
+
+def test_observe_live_includes_vision_enable_guidance_when_ollama_not_ready() -> None:
+    from ayes.api import server
+
+    class FakeOllamaService:
+        def status_report(self, default_model="qwen2.5vl:7b"):
+            raise AssertionError("observe-live 不应主动探测 Ollama 就绪状态")
+
+    original = server.ollama_service
+    server.ollama_service = FakeOllamaService()
+    try:
+        response = client.get("/api/agent/observe-live", params={"task_id": "task_observe_live_vision", "minutes": 5, "limit": 10})
+    finally:
+        server.ollama_service = original
+
+    assert response.status_code == 200
+    payload = response.json()
+    vision_status = payload["vision_status"]
+    assert vision_status["default_local_model"] == "qwen2.5vl:7b"
+    assert vision_status["readiness_check_required"] is True
+    assert vision_status["provider_status"] == {}
+    assert "installation_guidance" in vision_status
+    assert any("vision prepare" in item for item in vision_status["installation_guidance"]["user_steps"])
+    assert payload["agent_hints"]["vision_next_action"]["action"] == "check_on_user_enable_request"
+    assert payload["agent_hints"]["vision_next_action"]["default_model"] == "qwen2.5vl:7b"
+
+
+def test_plan_spec_visual_prompt_uses_qwen_default_and_enable_guidance() -> None:
+    response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_visual_qwen",
+            "prompt": "帮我实时看图表和按钮颜色变化，并在需要时启用本地视觉增强",
+            "target": {"type": "screen", "screen_id": 1},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["draft_spec"]["vision"]["enabled"] is True
+    assert payload["draft_spec"]["vision"]["model"] == "qwen2.5vl:7b"
+    assert any("qwen2.5vl:7b" in item for item in payload["confirmation_summary"])
+    vision_guidance = next(item for item in payload["setup_guidance"] if item["topic"] == "local_vision")
+    assert vision_guidance["can_agent_attempt_after_permission"] is True
+    assert any("vision prepare" in item for item in vision_guidance["commands"])
+
+
+def test_vision_prepare_endpoint_checks_ollama_only_on_explicit_request() -> None:
+    from ayes.api import server
+
+    class FakeOllamaService:
+        def status_report(self, default_model="qwen2.5vl:7b"):
+            return {
+                "provider": "ollama",
+                "available": False,
+                "binary_available": False,
+                "service_reachable": False,
+                "default_model": default_model,
+                "default_model_installed": False,
+                "items": [],
+                "recommended_action": "install_ollama",
+            }
+
+    original = server.ollama_service
+    server.ollama_service = FakeOllamaService()
+    try:
+        response = client.post("/api/vision/prepare", json={"requested_by": "agent_enable_local_vision"})
+    finally:
+        server.ollama_service = original
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested_by"] == "agent_enable_local_vision"
+    assert payload["default_local_model"] == "qwen2.5vl:7b"
+    assert payload["provider_status"]["recommended_action"] == "install_ollama"
+    assert payload["agent_can_attempt_after_permission"] is True
+    assert any("ollama pull qwen2.5vl:7b" in item for item in payload["user_steps"])
+
+
+def test_plan_spec_keeps_vision_disabled_for_simple_text_monitoring() -> None:
+    response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_plain_text_only",
+            "prompt": "帮我监控 Safari 里的商品价格低于 299 时提醒我，只看文字和数字，不需要看图表和颜色",
+            "target": {"type": "process", "process_name": "Safari"},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["draft_spec"]["vision"]["enabled"] is False
+    assert any("默认不启用本地视觉增强" in item for item in payload["confirmation_summary"])
+
+
+def test_plan_spec_parses_visual_sampling_policy_from_prompt() -> None:
+    response = client.post(
+        "/api/agent/plan-watch-spec",
+        json={
+            "task_id": "task_plan_visual_sampling_policy",
+            "prompt": "帮我看图表和按钮变化，开启本地视觉增强，但默认不要每次都调大模型，每隔 5 次截图交给本地模型一次，至少间隔 30 秒",
+            "target": {"type": "screen", "screen_id": 1},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    vision = payload["draft_spec"]["vision"]
+    assert vision["enabled"] is True
+    assert vision["sampling_every_n_runs"] == 5
+    assert vision["sampling_min_interval_sec"] == 30
+    assert any("每隔 5 次截图" in item or "30 秒" in item for item in payload["confirmation_summary"])
+
+
+def test_vision_models_endpoint_returns_availability_shape_legacy_keys() -> None:
     response = client.get("/api/vision/models")
     assert response.status_code == 200
     payload = response.json()
@@ -951,7 +1328,7 @@ def test_timeline_recent_exposes_vision_trigger_reason_event() -> None:
             "vision": {
                 "enabled": True,
                 "provider": "ollama",
-                "model": "Molmo-7B-D-0924",
+                "model": "qwen2.5vl:7b",
                 "trigger_when_ocr_sparse": True,
                 "ocr_sparse_min_chars": 999,
                 "trigger_on_visual_regions": True,
@@ -970,7 +1347,7 @@ def test_timeline_recent_exposes_vision_trigger_reason_event() -> None:
         attrs = ((vision_reason_event.get("visual") or {}).get("attributes") or {})
         assert attrs.get("vision_triggered") is True
         assert isinstance(attrs.get("vision_reasons"), list)
-        assert attrs.get("vision_model") == "Molmo-7B-D-0924"
+        assert attrs.get("vision_model") == "qwen2.5vl:7b"
 
 
 def test_ollama_vision_result_splits_detail_lines() -> None:

@@ -141,9 +141,14 @@ def test_watch_spec_supports_multi_regions_and_vision_config() -> None:
             "vision": {
                 "enabled": True,
                 "provider": "ollama",
-                "model": "Molmo-7B-D-0924",
+                "model": "qwen2.5vl:7b",
                 "trigger_when_ocr_sparse": True,
                 "ocr_sparse_min_chars": 10,
+                "disable_for_text_only_tasks": True,
+                "disable_for_numeric_only_tasks": True,
+                "disable_for_threshold_rules": True,
+                "sampling_every_n_runs": 3,
+                "sampling_min_interval_sec": 20,
             },
             "watch_intent": {"enabled": False},
         }
@@ -151,7 +156,12 @@ def test_watch_spec_supports_multi_regions_and_vision_config() -> None:
     assert len(spec.target.regions) == 2
     assert spec.target.regions[0].region_id == "roi_main"
     assert spec.vision.enabled is True
-    assert spec.vision.model == "Molmo-7B-D-0924"
+    assert spec.vision.model == "qwen2.5vl:7b"
+    assert spec.vision.disable_for_text_only_tasks is True
+    assert spec.vision.disable_for_numeric_only_tasks is True
+    assert spec.vision.disable_for_threshold_rules is True
+    assert spec.vision.sampling_every_n_runs == 3
+    assert spec.vision.sampling_min_interval_sec == 20
 
 
 def test_alert_config_accepts_direct_webhook_url_for_local_smoke() -> None:
@@ -170,3 +180,23 @@ def test_alert_config_accepts_direct_webhook_url_for_local_smoke() -> None:
     )
     assert spec.alert.enabled is True
     assert spec.alert.webhook_url == "http://127.0.0.1:18999/webhook"
+
+
+def test_alert_config_accepts_custom_message_template() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "triggered",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": True, "queries": ["库存恢复"]},
+            "alert": {
+                "enabled": True,
+                "channel": "wecom_webhook",
+                "webhook_url": "http://127.0.0.1:18999/webhook",
+                "message_title": "库存提醒",
+                "message_template": "任务 {task_id} 命中：{summary}",
+            },
+        }
+    )
+    assert spec.alert.message_title == "库存提醒"
+    assert spec.alert.message_template == "任务 {task_id} 命中：{summary}"
