@@ -69,6 +69,7 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - [20-AyesLocalSkill安装与调用规范.md](/Users/apple/Desktop/2026/Ayes/docs/20-AyesLocalSkill安装与调用规范.md)
 - [21-对话式任务规划与配置确认流.md](/Users/apple/Desktop/2026/Ayes/docs/21-对话式任务规划与配置确认流.md)
 - [22-OCR与视觉融合结构化观察.md](/Users/apple/Desktop/2026/Ayes/docs/22-OCR与视觉融合结构化观察.md)
+- [23-RegionBind与后台控制契约.md](/Users/apple/Desktop/2026/Ayes/docs/23-RegionBind与后台控制契约.md)
 
 ## 5. 文档维护规则
 
@@ -93,6 +94,7 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉时序回放引擎。
 - 调整 `ayes-local` skill 的安装流、目录产物、命令包装、智能体调用规范和后台配合方式时，优先修改 [20-AyesLocalSkill安装与调用规范.md](/Users/apple/Desktop/2026/Ayes/docs/20-AyesLocalSkill安装与调用规范.md)
 - 调整自然语言到 `watch spec` 的任务规划、配置确认流、任务草案结构和智能体编排方式时，优先修改 [21-对话式任务规划与配置确认流.md](/Users/apple/Desktop/2026/Ayes/docs/21-对话式任务规划与配置确认流.md)
 - 调整 OCR 结果、视觉增强结果和统一结构化观察输出时，优先修改 [22-OCR与视觉融合结构化观察.md](/Users/apple/Desktop/2026/Ayes/docs/22-OCR与视觉融合结构化观察.md)
+- 调整 `region-bind` 合同、外部选择器结果格式、刷新点击点绑定结构、托盘/状态栏后台控制语义和数据清理提醒时，优先修改 [23-RegionBind与后台控制契约.md](/Users/apple/Desktop/2026/Ayes/docs/23-RegionBind与后台控制契约.md)
 
 ## 6. 临时文档位置
 

@@ -14,6 +14,7 @@
 - 触发条件
 - 企业微信 webhook 策略
 - 受控刷新点击策略
+- ROI 绑定后的正式区域结果
 
 后续代码实现、CLI、HTTP API、skill / tool 接入都必须围绕本契约展开。
 
@@ -80,6 +81,7 @@
     "only_observable_windows": true,
     "regions": [
       {
+        "region_intent_id": "ri_price",
         "region_id": "roi_main",
         "name": "价格区域",
         "x": 120,
@@ -87,6 +89,8 @@
         "w": 360,
         "h": 180,
         "coordinate_space": "target",
+        "binding_space": "capture_image",
+        "source": "external_selector",
         "enabled": true
       }
     ]
@@ -188,8 +192,10 @@ v1 正式支持：
 - ROI 必须跟随已选 `screen / process / window` 目标存在
 - ROI 使用矩形框选
 - ROI 必须保存 `region_id`
+- 如果 ROI 来自规划器区域意图，必须保留 `region_intent_id`
 - ROI 必须保存名称，便于问答和日志展示
 - ROI 坐标必须落入统一坐标体系
+- ROI 如来自外部绑定，应保留 `source` 和可选 `binding_space`
 - 没有配置 ROI 时，默认监控整个目标画面
 
 第一阶段建议先采用：
@@ -420,3 +426,7 @@ OCR 频率由 `ocr_interval_ms` 控制。
 `watch spec` 是后续实现的配置中心。
 
 任何新增监控模式、采样策略、OCR 频率、记忆策略、webhook 策略、受控动作策略，都必须先更新本文件，再进入实现。
+
+ROI 坐标的产生过程、外部绑定结果格式和后台控制侧的绑定协作方式，统一见：
+
+- [23-RegionBind与后台控制契约.md](/Users/apple/Desktop/2026/Ayes/docs/23-RegionBind与后台控制契约.md)
