@@ -183,6 +183,15 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 - 按需视觉增强
 - 对话式任务草案与配置确认流
 
+无 ROI 任务的默认观察策略：
+
+- 没有配置 ROI 时，Ayes 会继续监控整个屏幕、窗口或进程目标
+- 系统会自动生成主内容区、全目标、顶部栏、左右侧栏和底部栏等注意力区域
+- 主内容区权重最高，优先用于“当前主要内容”和本地视觉增强触发
+- 顶部、侧栏、底部和全目标不是被忽略；它们仍会进入 OCR 事件和记忆，只是权重较低，避免边角小字抢占主摘要
+- 回答“最近主要在做什么”时优先看 `structured_observation.attention.primary=true` 或长期摘要里的 `main_content_snapshot`
+- 回答“旁边/顶部/底部有没有什么信息”时也要检索低权重区域事件，不能只看主内容区
+
 记忆策略：
 
 - 每个任务都有独立记忆策略和目录，默认在 `$HOME/.codex/skills/ayes-local/runtime/memory/<task_id>/`

@@ -23,6 +23,7 @@ from ayes.detect.diff import ByteDiffDetector
 from ayes.events.factory import build_event
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, WatchMatch
 from ayes.memory.short_term import QueryResult, ShortTermMemoryStore
+from ayes.observation.attention import AttentionRegion, build_default_attention_regions
 from ayes.observation.fusion import build_structured_observation, merge_vision_observation
 from ayes.ocr.models import ImageInput
 from ayes.ocr.service import OCRService
@@ -138,6 +139,7 @@ class WatchRunner:
             self.ticker.mark_ocr(now_ms)
             regions = self._effective_regions(frame)
             for region in regions:
+                attention = self._attention_for_region(region, frame)
                 cropped = self._crop_frame_to_region(frame, region)
                 ocr_result = self.ocr.recognize(
                     ImageInput(
@@ -157,6 +159,7 @@ class WatchRunner:
                     blocks=ocr_result.blocks,
                     region=region,
                     target_frame=frame,
+                    attention=attention,
                 )
                 self._record_event(event)
                 emitted.append(event)
@@ -166,6 +169,7 @@ class WatchRunner:
                 should_run_vision, vision_reasons, vision_blocked_reason = self._evaluate_vision_enhancement(
                     region=region,
                     ocr_char_count=ocr_result.char_count,
+                    attention=attention,
                 )
                 if vision_reasons or (vision_blocked_reason and vision_blocked_reason != "vision_disabled"):
                     vision_audit_event = self._build_vision_decision_event(
@@ -175,6 +179,7 @@ class WatchRunner:
                         triggered=should_run_vision,
                         reasons=vision_reasons,
                         blocked_reason=vision_blocked_reason,
+                        attention=attention,
                     )
                     self._record_event(vision_audit_event)
                     emitted.append(vision_audit_event)
@@ -184,6 +189,7 @@ class WatchRunner:
                         frame=cropped,
                         region=region,
                         target_frame=frame,
+                        attention=attention,
                     )
                     if vision_event is not None:
                         self._record_event(vision_event)
@@ -412,6 +418,7 @@ class WatchRunner:
         blocks=None,
         region: Optional[TargetRegion] = None,
         target_frame: Optional[CaptureFrame] = None,
+        attention: Optional[AttentionRegion] = None,
     ):
         event = build_event(
             task_id=self.task_id,
@@ -465,6 +472,8 @@ class WatchRunner:
             provider=provider,
             blocks=event_text_blocks,
         )
+        if attention is not None:
+            structured_observation["attention"] = self._attention_payload(attention)
         return replace(
             event,
             region=event_region,
@@ -485,6 +494,7 @@ class WatchRunner:
                     "ocr_block_count": len(block_items),
                     "ocr_avg_confidence": round(avg_confidence, 4),
                     "ocr_sparse": sparse_text,
+                    "attention": self._attention_payload(attention) if attention is not None else {},
                     "structured_observation": structured_observation,
                 },
                 provider=provider,
@@ -495,7 +505,32 @@ class WatchRunner:
 
     def _effective_regions(self, frame: CaptureFrame) -> List[Optional[TargetRegion]]:
         enabled_regions = [region for region in self.spec.target.regions if region.enabled]
-        return enabled_regions or [None]
+        if enabled_regions:
+            return enabled_regions
+        if frame.width < 64 or frame.height < 64:
+            return [None]
+        return [item.region for item in build_default_attention_regions(width=frame.width, height=frame.height)]
+
+    def _attention_for_region(self, region: Optional[TargetRegion], frame: CaptureFrame) -> Optional[AttentionRegion]:
+        if region is None:
+            return None
+        if not str(region.region_id or "").startswith("auto_"):
+            return None
+        for item in build_default_attention_regions(width=frame.width, height=frame.height):
+            if item.region.region_id == region.region_id:
+                return item
+        return None
+
+    def _attention_payload(self, attention: Optional[AttentionRegion]) -> dict:
+        if attention is None:
+            return {}
+        return {
+            "region_id": attention.region.region_id,
+            "role": attention.role,
+            "weight": attention.weight,
+            "primary": attention.primary,
+            "reason": attention.reason,
+        }
 
     def _crop_frame_to_region(self, frame: CaptureFrame, region: Optional[TargetRegion]) -> CaptureFrame:
         if region is None:
@@ -581,9 +616,17 @@ class WatchRunner:
     def _bbox_is_normalized(self, values: List[float]) -> bool:
         return bool(values) and all(0.0 <= value <= 1.0 for value in values)
 
-    def _evaluate_vision_enhancement(self, *, region: Optional[TargetRegion], ocr_char_count: int):
+    def _evaluate_vision_enhancement(
+        self,
+        *,
+        region: Optional[TargetRegion],
+        ocr_char_count: int,
+        attention: Optional[AttentionRegion] = None,
+    ):
         if not self.spec.vision.enabled:
             return False, [], "vision_disabled"
+        if attention is not None and not attention.primary:
+            return False, [], "non_primary_attention_region"
         self._vision_run_counter += 1
         blocked_reason = self._vision_policy_block_reason(region=region)
         if blocked_reason:
@@ -652,6 +695,7 @@ class WatchRunner:
         triggered: bool,
         reasons: List[str],
         blocked_reason: str,
+        attention: Optional[AttentionRegion] = None,
     ):
         event_type = "vision_triggered" if triggered else "vision_skipped"
         summary = (
@@ -685,6 +729,7 @@ class WatchRunner:
                     "vision_blocked_reason": blocked_reason,
                     "vision_model": self.spec.vision.model,
                     "vision_provider": self.spec.vision.provider,
+                    "attention": self._attention_payload(attention) if attention is not None else {},
                 },
                 provider=self.spec.vision.provider,
             ),
@@ -698,6 +743,7 @@ class WatchRunner:
         frame: CaptureFrame,
         region: Optional[TargetRegion],
         target_frame: CaptureFrame,
+        attention: Optional[AttentionRegion] = None,
     ):
         try:
             self._mark_vision_call(now)
@@ -747,6 +793,14 @@ class WatchRunner:
             ),
             summary=result.summary[:120],
         )
+        base_observation = build_structured_observation(
+            region=asdict(self._event_region_from_target_region(region, target_frame)),
+            full_text="",
+            provider="",
+            blocks=[],
+        )
+        if attention is not None:
+            base_observation["attention"] = self._attention_payload(attention)
         return replace(
             event,
             region=self._event_region_from_target_region(region, target_frame),
@@ -755,13 +809,9 @@ class WatchRunner:
                 labels=result.labels,
                 attributes={
                     **result.attributes,
+                    "attention": self._attention_payload(attention) if attention is not None else {},
                     "structured_observation": merge_vision_observation(
-                        build_structured_observation(
-                            region=asdict(self._event_region_from_target_region(region, target_frame)),
-                            full_text="",
-                            provider="",
-                            blocks=[],
-                        ),
+                        base_observation,
                         result=result,
                         fusion_notes=["OCR 文本较稀疏，已补充视觉摘要"],
                     ),

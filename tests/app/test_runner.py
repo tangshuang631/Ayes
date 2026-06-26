@@ -59,6 +59,23 @@ class FakeCapture:
         )
 
 
+class LargeFakeCapture:
+    def capture_main_display(self, *, timestamp: float) -> CaptureResult:
+        return CaptureResult(
+            ok=True,
+            status="ok",
+            frame=CaptureFrame(
+                frame_id="large_frame_1",
+                timestamp=timestamp,
+                target_type="screen",
+                target_id="main",
+                width=100,
+                height=80,
+                image_bytes=make_png_bytes("white"),
+            ),
+        )
+
+
 class FakeDiscovery:
     def __init__(self, *, window_by_id=None, process_window=None) -> None:
         self.window_by_id = window_by_id
@@ -136,6 +153,41 @@ class FakeOCRWithBlocks:
         )
 
 
+class FakeLayoutAwareOCR:
+    def recognize(self, image, options=None) -> OCRResult:
+        width = int(getattr(image, "width", 0) or 0)
+        height = int(getattr(image, "height", 0) or 0)
+        if width <= 2 and height <= 2:
+            return OCRResult(
+                provider="fake",
+                elapsed_ms=1,
+                full_text="角落状态 1",
+                char_count=len("角落状态 1"),
+                blocks=[
+                    OCRTextBlock(
+                        text="角落状态 1",
+                        confidence=0.9,
+                        bbox=[0.05, 0.05, 0.25, 0.05, 0.25, 0.18, 0.05, 0.18],
+                        line_index=0,
+                    )
+                ],
+            )
+        return OCRResult(
+            provider="fake",
+            elapsed_ms=1,
+            full_text="Apifox 登录页",
+            char_count=len("Apifox 登录页"),
+            blocks=[
+                OCRTextBlock(
+                    text="Apifox 登录页",
+                    confidence=0.98,
+                    bbox=[0.25, 0.28, 0.78, 0.28, 0.78, 0.62, 0.25, 0.62],
+                    line_index=0,
+                )
+            ],
+        )
+
+
 class FailingVision:
     def generate_vision_summary(self, *, model: str, image_bytes: bytes, prompt: str) -> VisionResult:
         raise RuntimeError("mock vision failure")
@@ -162,8 +214,8 @@ def test_runner_writes_ocr_event_and_supports_recent_query() -> None:
     runner.ocr = FakeOCR()
     first = runner.run_once(now=100.0)
     second = runner.run_once(now=101.0)
-    assert len(first) == 1
-    assert len(second) == 1
+    assert any(event.event_type == "text_change" for event in first)
+    assert any(event.event_type == "text_change" for event in second)
     result = runner.ask_recent(minutes=5, keyword="库存", now=102.0)
     assert len(result.matched_events) >= 1
     assert "库存" in result.answer
@@ -192,11 +244,11 @@ def test_runner_process_target_captures_primary_process_window() -> None:
 
     events = runner.run_once(now=100.0)
 
-    assert len(events) == 1
-    assert events[0].target.type == "process"
-    assert events[0].target.process_name == "TargetApp"
-    assert events[0].target.window_id == 42
-    assert events[0].target.window_title == "商品页"
+    text_event = next(event for event in events if event.event_type == "text_change")
+    assert text_event.target.type == "process"
+    assert text_event.target.process_name == "TargetApp"
+    assert text_event.target.window_id == 42
+    assert text_event.target.window_title == "商品页"
     assert runner.capture.window_calls == [42]
     assert runner.capture.main_display_calls == 0
 
@@ -354,6 +406,140 @@ def test_runner_vision_event_contains_structured_observation() -> None:
     assert observation["source"] == "ocr+vision"
     assert observation["visual"]["summary"] == "图表区域呈下降趋势，右侧有一个可点击按钮"
     assert "OCR 文本较稀疏" in observation["fusion_notes"][0]
+
+
+def test_runner_without_roi_generates_attention_regions_for_full_target() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = FakeCapture()
+    regions = runner._effective_regions(
+        CaptureFrame(
+            frame_id="frame_attention",
+            timestamp=100.0,
+            target_type="screen",
+            target_id="main",
+            width=100,
+            height=80,
+            image_bytes=make_png_bytes("white"),
+        )
+    )
+
+    region_ids = [region.region_id for region in regions if region is not None]
+    assert "auto_full" in region_ids
+    assert "auto_center_main" in region_ids
+    assert any(region_id.startswith("auto_") for region_id in region_ids)
+
+
+def test_runner_without_roi_prioritizes_center_attention_over_corner_text() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = LargeFakeCapture()
+    runner.ocr = FakeLayoutAwareOCR()
+
+    events = runner.run_once(now=100.0)
+
+    primary_event = next(event for event in events if event.event_type == "text_change")
+    observation = primary_event.visual.attributes["structured_observation"]
+    assert observation["text"]["full_text"] == "Apifox 登录页"
+    assert observation["region"]["region_id"] == "auto_center_main"
+
+
+def test_runner_without_roi_still_records_lower_weight_context_regions() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = LargeFakeCapture()
+    runner.ocr = SparseOCR()
+
+    events = runner.run_once(now=100.0)
+
+    region_ids = {event.region.region_id for event in events if event.event_type == "text_change"}
+    assert "auto_center_main" in region_ids
+    assert "auto_top_bar" in region_ids
+    assert "auto_left_panel" in region_ids
+    assert "auto_right_panel" in region_ids
+    assert "auto_bottom_bar" in region_ids
+    assert "auto_full" in region_ids
+
+
+def test_runner_without_roi_triggers_vision_on_primary_attention_region_only() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "vision": {
+                "enabled": True,
+                "provider": "ollama",
+                "model": "qwen2.5vl:7b",
+                "trigger_when_ocr_sparse": True,
+                "ocr_sparse_min_chars": 999,
+                "trigger_on_visual_regions": True,
+                "trigger_on_watch_intent": False,
+                "trigger_on_question_semantics": False,
+                "max_calls_per_minute": 6,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = LargeFakeCapture()
+    runner.ocr = SparseOCR()
+    runner.vision = FakeVision()
+
+    events = runner.run_once(now=100.0)
+
+    vision_events = [event for event in events if event.event_type == "visual_summary"]
+    assert len(vision_events) == 1
+    assert vision_events[0].region.region_id == "auto_center_main"
 
 
 def test_runner_process_target_emits_target_switched_event_when_representative_window_changes() -> None:

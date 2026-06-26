@@ -41,6 +41,12 @@
     "dense_text": false,
     "block_count": 2
   },
+  "attention": {
+    "region_id": "auto_center_main",
+    "role": "main_content",
+    "weight": 1.0,
+    "primary": true
+  },
   "visual": {
     "provider": "ollama",
     "model": "qwen2.5vl:7b",
@@ -80,6 +86,10 @@
 - `text.provider`
 - `text.char_count`
 - `layout.block_count`
+- `attention.region_id`
+- `attention.role`
+- `attention.weight`
+- `attention.primary`
 - `visual.summary`
 - `visual.detail_lines`
 - `entities`
@@ -106,6 +116,23 @@ OCR 层负责：
 - 合并 OCR 和视觉结果
 - 统一输出文本、布局、视觉、实体和警告
 - 给上层提供可稳定消费的观察对象
+
+## 5.1 无 ROI 自动注意力
+
+当任务没有配置 ROI 时，Ayes 必须仍然监控整个目标，而不是只看一个裁剪区域。
+
+默认自动生成以下注意力区域：
+
+- `auto_center_main`：主内容区，最高权重，优先用于主摘要和视觉增强触发
+- `auto_full`：全目标上下文，用于证据回溯和整体判断
+- `auto_top_bar`：顶部栏或导航信息，低权重上下文
+- `auto_left_panel`：左侧栏，低权重上下文
+- `auto_right_panel`：右侧栏，低权重上下文
+- `auto_bottom_bar`：底部状态栏或页脚，低权重上下文
+
+主内容优先不等于忽略边缘信息。低权重区域仍应进入 OCR 事件和记忆，只是不应覆盖主内容摘要，也不应默认消耗本地 VLM 调用预算。
+
+长期摘要应从结构化观察中提取 `main_content_snapshot`，至少包含主内容文本、主区域、注意力角色、视觉摘要和时间戳，便于回答“这几分钟主要做了什么”。
 
 ## 6. 与事件模型的关系
 
