@@ -13,7 +13,9 @@ def test_build_wrapper_script_binds_repo_root_and_python_bin() -> None:
 
     assert content.startswith("#!/bin/zsh")
     assert str(repo_root) in content
-    assert 'PYTHONPATH="$REPO_ROOT/src"' in content
+    assert 'if [ -d "$SKILL_DIR/src" ]; then' in content
+    assert 'export PYTHONPATH="$SKILL_DIR/src"' in content
+    assert 'export PYTHONPATH="$REPO_ROOT/src"' in content
     assert 'SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"' in content
     assert 'export AYES_RUNTIME_DIR="$SKILL_DIR/runtime"' in content
     assert "-m ayes.cli.agent_tool" in content
@@ -49,6 +51,18 @@ def test_install_skill_preserves_existing_runtime_directory(tmp_path: Path) -> N
     assert (paths.target_skill_dir / "SKILL.md").read_text(encoding="utf-8") == "skill"
 
 
+def test_build_install_paths_accepts_standalone_release_repo(tmp_path: Path) -> None:
+    repo_root = tmp_path / "ayes-local"
+    (repo_root / "SKILL.md").parent.mkdir(parents=True)
+    (repo_root / "SKILL.md").write_text("skill", encoding="utf-8")
+    (repo_root / "src" / "ayes").mkdir(parents=True)
+    skill_root = tmp_path / ".codex" / "skills"
+
+    paths = install_ayes_local_skill.build_install_paths(repo_root=repo_root, skill_root=skill_root)
+
+    assert paths.source_skill_dir == repo_root
+
+
 def test_final_skill_source_dir_is_stateless_template() -> None:
     source_dir = Path("/Users/apple/Desktop/2026/Ayes/skills/final/ayes-local")
     files = sorted(path.relative_to(source_dir).as_posix() for path in source_dir.rglob("*") if path.is_file())
@@ -58,6 +72,16 @@ def test_final_skill_source_dir_is_stateless_template() -> None:
     assert "references/installation.md" in files
     assert "references/commands.md" in files
     assert "references/troubleshooting.md" in files
+    assert "references/privacy.md" in files
+    assert "references/uninstall.md" in files
+    assert "references/release-checklist.md" in files
+    assert "references/menubar-manual-test.md" in files
+    assert "references/stress-test.md" in files
+    assert "scripts/install_ayes_local_skill.py" in files
+    assert "scripts/run_ayes_service.py" in files
+    assert "src/ayes/cli/agent_tool.py" in files
+    assert "README.md" in files
+    assert "requirements.txt" in files
     assert all(not item.startswith("runtime/") for item in files)
     assert all("/runtime/" not in item for item in files)
     assert all(not item.endswith(".db") for item in files)

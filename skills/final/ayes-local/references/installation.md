@@ -4,23 +4,31 @@
 
 `ayes-local` 的正式安装形态是：
 
-- 从仓库里的最终无状态产物目录复制 skill 模板
+- 从公开发行仓库复制 skill 模板
 - skill 文档安装到目标智能体的 skill 根目录
-- 同时生成一个绑定当前 Ayes 仓库路径的本地包装脚本
+- 同时生成绑定安装目录运行时的本地包装脚本
 
-当前正式模板源目录固定为：
+公开发行仓库根目录应包含：
 
 ```text
-/Users/apple/Desktop/2026/Ayes/skills/final/ayes-local/
+SKILL.md
+README.md
+agents/
+references/
+scripts/
+src/
 ```
 
-该目录只包含安装产物模板，不包含任何用户运行态状态。
+该目录是无状态产物模板，不包含任何用户运行态状态、截图、记忆、日志或 webhook。
 
 默认推荐安装到 Codex：
 
 ```bash
-cd /Users/apple/Desktop/2026/Ayes
-python3 scripts/install_ayes_local_skill.py
+git clone https://github.com/tangshuang631/Ayes.git ayes-local
+cd ayes-local
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python scripts/install_ayes_local_skill.py --skill-root "$HOME/.codex/skills" --python-bin "$PWD/.venv/bin/python"
 ```
 
 默认会安装到：
@@ -41,8 +49,7 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 如果是 OpenClaw 或其他本地 Agent 环境，可指定 skill 根目录：
 
 ```bash
-cd /Users/apple/Desktop/2026/Ayes
-python3 scripts/install_ayes_local_skill.py --skill-root /path/to/agent/skills
+.venv/bin/python scripts/install_ayes_local_skill.py --skill-root /path/to/agent/skills --python-bin "$PWD/.venv/bin/python"
 ```
 
 ## 3. 安装产物
@@ -52,6 +59,8 @@ python3 scripts/install_ayes_local_skill.py --skill-root /path/to/agent/skills
 ```text
 <skill_root>/ayes-local/
   SKILL.md
+  README.md
+  requirements.txt
   agents/openai.yaml
   references/
   scripts/ayes-agent-local
@@ -117,7 +126,7 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 - 最近任务切换
 - 手动暂停、恢复、打开 ROI 管理、打开设置和打开数据目录
 
-安装后的包装脚本会导出 `AYES_RUNTIME_DIR=$HOME/.codex/skills/ayes-local/runtime`。因此正式安装使用时，运行态不会写入开发仓库 `/Users/apple/Desktop/2026/Ayes/runtime`。
+安装后的包装脚本会导出 `AYES_RUNTIME_DIR=$HOME/.codex/skills/ayes-local/runtime`。因此正式安装使用时，运行态不会写入公开发行仓库或开发仓库。
 
 任务记忆策略也存放在该安装实例的 `runtime/` 中：
 
@@ -130,7 +139,7 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 
 以下情况建议重新执行安装脚本：
 
-- `skills/final/ayes-local/` 文档结构改动
+- 公开发行仓库更新
 - `src/ayes/cli/agent_tool.py` 命令面改动
 - 仓库路径变化
 - 想切换到新的 skill 根目录

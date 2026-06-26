@@ -117,6 +117,11 @@ Use this skill when the request is about:
 - `references/installation.md`
 - `references/commands.md`
 - `references/troubleshooting.md`
+- `references/privacy.md`
+- `references/uninstall.md`
+- `references/menubar-manual-test.md`
+- `references/stress-test.md`
+- `references/release-checklist.md`
 
 ## Tooling
 

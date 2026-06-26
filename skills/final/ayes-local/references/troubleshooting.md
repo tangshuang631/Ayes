@@ -71,7 +71,7 @@ ollama pull qwen2.5vl:7b
 如果想先验证 webhook 发送链路本身，而不直接依赖真实企业微信网络，可在用户本机执行：
 
 ```bash
-cd /Users/apple/Desktop/2026/Ayes
+cd <ayes-local-repo>
 python3 scripts/smoke_webhook_flow.py
 ```
 
@@ -80,7 +80,7 @@ python3 scripts/smoke_webhook_flow.py
 如果用户已经明确授权真实企业微信 webhook，并想验证真实外发链路，则改用：
 
 ```bash
-cd /Users/apple/Desktop/2026/Ayes
+cd <ayes-local-repo>
 python3 scripts/smoke_ayes_local_skill.py \
   --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"
 ```

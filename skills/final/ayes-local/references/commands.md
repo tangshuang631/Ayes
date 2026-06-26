@@ -118,7 +118,7 @@ ayes-agent-local confirm-plan \
 如果用户想先验证安装后整条告警链路，而不立刻给真实企业微信发消息，可在本机执行：
 
 ```bash
-cd /Users/apple/Desktop/2026/Ayes
+cd <ayes-local-repo>
 python3 scripts/smoke_ayes_local_skill.py
 ```
 
@@ -132,7 +132,7 @@ python3 scripts/smoke_ayes_local_skill.py
 如果用户已经授权并提供真实企业微信 webhook，也可以直接验证真实外发：
 
 ```bash
-cd /Users/apple/Desktop/2026/Ayes
+cd <ayes-local-repo>
 python3 scripts/smoke_ayes_local_skill.py \
   --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"
 ```

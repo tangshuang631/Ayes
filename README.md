@@ -1,31 +1,82 @@
 # Ayes
 
-Ayes 是一个面向人类用户和 AI Agent 的视觉监控、时序记忆与问答工具。
+Ayes 是一个面向本地 Agent 的 macOS 屏幕、进程和 ROI 监控工具。它让 Codex、OpenClaw 或其他 Agent 可以通过本地 skill 读取最近截图、OCR 事件、短期记忆、长期摘要和告警状态，并回答“刚刚发生了什么”这类带时间维度的问题。
 
-当前主入口路线：
+当前第一版发行目标：macOS + 本地 skill。
 
-- `Ayes 本地后台服务`
-- `Ayes skill / 本地工具`
-- `Ayes 轻量 Web 工作台（配置 + 核验）`
+## 1. 给普通用户的公开发行版
 
-当前仓库先按文档约束落地第一阶段代码骨架：
+公开 GitHub 仓库建议只发布以下目录的内容：
 
-- `watch spec` 配置契约
-- 统一事件模型
-- 监控目标数据结构
-- macOS 窗口发现最小实现
-- 最小 OCR provider 链路
-- 最小短期记忆与问答链路
-- 面向 Agent 的本地 HTTP API 合同
-- 轻量 Web 工作台
+```text
+skills/final/ayes-local/
+```
 
-## 当前推荐使用方式
+也就是说，公开仓库根目录应长这样：
 
-1. 启动本地 Ayes 服务
-2. 用 Web 工作台选择监控目标与 ROI
-3. 装载任务并开始持续监控
-4. 通过 Web 工作台做人类核验
-5. 通过 Ayes skill 或本地工具把最近截图、事件、记忆和问答结果交给 Codex / Agent
+```text
+README.md
+SKILL.md
+agents/
+references/
+scripts/
+src/
+```
+
+不要把开发仓库的 `runtime/`、测试截图、历史任务、日志、数据库或真实 webhook 发布到公开仓库。
+
+用户安装公开发行版：
+
+```bash
+git clone https://github.com/tangshuang631/Ayes.git ayes-local
+cd ayes-local
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python scripts/install_ayes_local_skill.py --skill-root "$HOME/.codex/skills" --python-bin "$PWD/.venv/bin/python"
+```
+
+验证：
+
+```bash
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local ensure-service
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local contracts
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local status
+$HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
+```
+
+OpenClaw 或其他 Agent：
+
+```bash
+.venv/bin/python scripts/install_ayes_local_skill.py --skill-root /path/to/agent/skills --python-bin "$PWD/.venv/bin/python"
+```
+
+## 2. Ayes Local 能做什么
+
+- 监控整个屏幕、指定进程、指定窗口。
+- 给任务创建 ROI 子任务，只监控某个区域。
+- 回答最近几分钟做了什么、看了什么、页面有什么变化。
+- 基于短期紧凑明细和长期简略摘要做回忆。
+- 按需读取最新截图证据。
+- 可选接入 Ollama 本地视觉模型增强复杂画面理解。
+- 可选配置企业微信 webhook 做条件提醒。
+- 菜单栏支持暂停、继续、设置、任务目录、ROI 框选和截图快捷键。
+
+## 3. 默认安全策略
+
+- 默认采样间隔 6 秒。
+- 默认采样质量 `standard`。
+- 默认不保存逐事件 evidence 截图。
+- `screenshots/latest/` 只保留少量最新帧。
+- 运行数据写入安装目录下的 `runtime/`，不会写入公开仓库或开发仓库。
+- 发行态 skill 不携带任务、历史截图、记忆、日志、webhook 或已启用视觉增强配置。
+
+## 4. 开发仓库使用方式
+
+开发时可直接从本仓库安装当前发行态：
+
+```bash
+python3 scripts/install_ayes_local_skill.py --repo-root "$(pwd)" --skill-root "$HOME/.codex/skills"
+```
 
 运行测试：
 
@@ -33,217 +84,42 @@ Ayes 是一个面向人类用户和 AI Agent 的视觉监控、时序记忆与�
 PYTHONPATH=src python3 -m pytest -q
 ```
 
-## 当前 MVP 可人工测试步骤
+## 5. 同步发行态
 
-1. 校验 watch spec
+`skills/final/ayes-local/` 是准备复制到公开 GitHub 仓库的自包含发行目录。它应包含：
 
-```bash
-PYTHONPATH=src python3 -m ayes.cli.main validate-spec runtime/mvp-observe-screen.json
-```
+- `README.md`
+- `requirements.txt`
+- `SKILL.md`
+- `agents/openai.yaml`
+- `references/*.md`
+- `scripts/install_ayes_local_skill.py`
+- `scripts/run_ayes_service.py`
+- `src/ayes/`
 
-2. 列出当前窗口候选
+当 `src/ayes` 或安装脚本变更后，需要同步到 `skills/final/ayes-local/`，再发布公开仓库。
 
-```bash
-PYTHONPATH=src python3 -m ayes.cli.main list-windows
-```
+## 6. 发行前检查
 
-如果要测试窗口监控，可先从输出中挑一个 `window_id`，再生成窗口监控 spec：
-
-```bash
-PYTHONPATH=src python3 -m ayes.cli.main create-window-spec 1100 --output runtime/mvp-observe-window.json
-```
-
-3. 执行一次最小监控链路
+发行前至少检查：
 
 ```bash
-PYTHONPATH=src python3 -m ayes.cli.main run-once runtime/mvp-observe-screen.json
+PYTHONPATH=src python3 -m pytest -q tests/cli/test_install_ayes_local_skill.py
+PYTHONPATH=src python3 -m pytest -q
 ```
 
-4. 连续执行两次监控并导出事件文件
+并阅读：
 
-```bash
-PYTHONPATH=src python3 -m ayes.cli.main run-loop runtime/mvp-observe-screen.json --iterations 2 --sleep-seconds 0.2 --dump-path runtime/mvp-events.json
-```
+- `skills/final/ayes-local/references/release-checklist.md`
+- `skills/final/ayes-local/references/privacy.md`
+- `skills/final/ayes-local/references/uninstall.md`
+- `skills/final/ayes-local/references/menubar-manual-test.md`
+- `skills/final/ayes-local/references/stress-test.md`
 
-5. 检查事件文件
+## 7. 当前限制
 
-```bash
-cat runtime/mvp-events.json
-```
-
-当前预期：
-
-- 能完成主屏截图
-- 能走通 `Vision OCR`
-- 能写出 `text_change` 事件
-- 能返回最近短期记忆中的问答结果
-
-6. 测试最小条件监控
-
-```bash
-PYTHONPATH=src python3 -m ayes.cli.main check-watch runtime/mvp-triggered-screen.json --minutes 5
-```
-
-当前内置样例使用关键词 `Codex`，便于在当前开发环境下更稳定命中。
-
-## 当前 Web 工作台测试步骤
-
-1. 启动本地服务
-
-```bash
-cd /Users/apple/Desktop/2026/Ayes
-/bin/zsh scripts/start_ayes_service.sh
-```
-
-2. 浏览器打开：
-
-```text
-http://127.0.0.1:8770/
-```
-
-3. 在页面中测试以下链路：
-
-- 点击“监控整个屏幕”
-- 点击“执行一次”
-- 查看运行状态是否出现 `has_runner: true`
-- 查看“近期事件”是否出现 `text_change`
-- 查看“问答与短期记忆”是否返回最近结果
-- 查看“近期日志”是否追加 `执行一次监控采样`
-- 查看“当前截图预览”是否出现最近截图
-- 查看页面中的 Agent 入口摘要与 API 合同查看区
-
-4. 窗口目标测试：
-
-- 在左侧窗口列表中点击某个窗口
-- 点击“执行一次”
-- 观察状态、事件、记忆和日志是否更新
-
-5. 长期摘要测试：
-
-- 先执行一次监控
-- 若已启动持续监控，可等待超过长期摘要间隔后再刷新长期摘要，观察运行中是否已出现周期性摘要
-- 点击“停止”
-- 在左侧 `task_id` 保持最近任务 id
-- 在左侧长期摘要小时范围中输入 `24`
-- 点击“按小时刷新长期摘要”或“刷新长期摘要”
-- 查看“长期摘要”区是否出现该任务的摘要记录，并确认查询上下文中可见 `hours` 范围或最近摘要范围说明
-
-## 当前闭环 smoke
-
-如果本地服务已经启动，可直接运行：
-
-```bash
-cd /Users/apple/Desktop/2026/Ayes
-python3 scripts/smoke_human_flow.py --base-url http://127.0.0.1:8770
-```
-
-如果本地后台还没启动，当前 smoke 会先尝试复用或拉起默认本地服务，再等待 `/api/status` 就绪。
-
-当前 smoke 会验证最小主链路：
-
-- 装载一个带 ROI 的屏幕任务
-- 执行一次监控
-- 读取 `status`
-- 读取 `timeline.recent`
-- 读取 `ocr/snippets`
-- 读取 `memory/items`
-- 读取 `logs`
-- 读取 `ask`
-
-## 当前 Agent / Skill 相关接口
-
-读取接口合同：
-
-```bash
-curl -s http://127.0.0.1:8770/api/agent/contracts
-```
-
-当前建议优先让 Agent 使用：
-
-- `/api/watch/load-configured`
-- `/api/watch/start`
-- `/api/watch/stop`
-- `/api/watch/status`
-- `/api/screenshot`
-- `/api/timeline/recent`
-- `/api/ask`
-- `/api/logs`
-
-## ayes-local skill 安装
-
-当前仓库已经内置正式的 `ayes-local` skill 模板和本地安装脚本。
-
-默认安装到 Codex：
-
-```bash
-cd /Users/apple/Desktop/2026/Ayes
-python3 scripts/install_ayes_local_skill.py
-```
-
-安装后将生成：
-
-```text
-$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local
-```
-
-建议先验证：
-
-```bash
-"$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local" ensure-service
-"$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local" contracts
-"$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local" status
-```
-
-如果要验证“后台持续运行 + agent 回读 + webhook 不依赖智能体回复”的完整链路，可再运行：
-
-```bash
-cd /Users/apple/Desktop/2026/Ayes
-python3 scripts/smoke_ayes_local_skill.py --webhook-url "你的企业微信 webhook 地址"
-```
-
-这个 smoke 会：
-
-- 安装临时 `ayes-local` skill
-- 调用安装后的 `ayes-agent-local`
-- 装载 triggered 任务
-- 启动监控并执行一次采样
-- 回读 `status / recent / alerts / screenshot / memory-items / logs / ask`
-
-设计原则是：
-
-- webhook 通知由 Ayes 后台服务直接负责
-- Codex / OpenClaw 只负责启动、回读和解释
-- 即使智能体当时没有立刻回复，也不应影响 webhook 是否发送成功
-
-`ayes-local` 的目标不是替代后台服务，而是让 Codex / OpenClaw / 其他 Agent 可以稳定复用：
-
-- 当前监控状态
-- 最近截图证据
-- 近期事件时间线
-- 短期记忆与长期摘要
-- 最近日志
-
-详细安装和命令说明见：
-
-- `docs/20-AyesLocalSkill安装与调用规范.md`
-- `skills/final/ayes-local/references/installation.md`
-- `skills/final/ayes-local/references/commands.md`
-- `skills/final/ayes-local/references/troubleshooting.md`
-
-当前补充能力：
-
-- `/api/timeline/long-term` 已支持可选 `hours` 范围过滤
-- `/api/ask` 已支持显式 `hours` 参数，用于超过 15 分钟窗口的长期摘要问答
-- 当用户传入 `hours` 时，问答链路会优先走长期轻量记忆层，而不是错误回落到短期记忆
-
-当前阶段的最低通过标准：
-
-- `status_has_runner=true`
-- `timeline.recent` 返回 `items`
-- `ocr/snippets` 返回 `items`
-- `memory/items` 返回 `items`
-- `ask` 返回 `answer`
-- `ask` 返回 `structured_vision_matches`
-- `status` 返回 `last_ocr_quality / last_vision_decision / last_vision_summary`
-- 若 timeline/snippet 中存在事件，应尽量带 `preview_overlay`
-- 若 timeline 中存在 OCR 或 vision 事件，应尽量能观察到 OCR 质量摘要或 vision 结构化结果
+- 第一版只支持 macOS。
+- 需要 macOS 屏幕录制权限。
+- 截图快捷键粘贴需要辅助功能权限。
+- 本地视觉增强依赖用户本机 Ollama 和视觉模型。
+- 8 小时长跑压测清单已提供，但公开发行前是否完成取决于发行方实际执行。
