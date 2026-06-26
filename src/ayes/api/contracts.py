@@ -913,6 +913,11 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "request": {"roi_name": "可选", "region": "可选", "enabled": "可选"},
             "response_keys": ["status", "roi", "task", "task_paths"],
         },
+        "tasks.roi.delete": {
+            "method": "DELETE",
+            "path": "/api/tasks/{task_id}/roi/{roi_task_id}",
+            "response_keys": ["status", "task_id", "parent_task_id", "deleted"],
+        },
         "tasks.alert": {
             "method": "GET/POST",
             "path": "/api/tasks/{task_id}/alert",

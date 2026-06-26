@@ -242,6 +242,34 @@ def test_agent_tool_roi_update_patches_child_roi(monkeypatch, capsys) -> None:
     assert '"enabled": false' in capsys.readouterr().out
 
 
+def test_agent_tool_roi_delete_calls_child_roi_delete_endpoint(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "deleted", "task_id": "task_parent__roi_price"}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "roi",
+            "delete",
+            "--task-id",
+            "task_parent",
+            "--roi-task-id",
+            "task_parent__roi_price",
+        ]
+    )
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/tasks/task_parent/roi/task_parent__roi_price"
+    assert recorded["method"] == "DELETE"
+    assert recorded["payload"] is None
+    assert '"status": "deleted"' in capsys.readouterr().out
+
+
 def test_agent_tool_task_alert_posts_webhook_settings(monkeypatch, capsys) -> None:
     recorded = {}
 
@@ -762,7 +790,7 @@ def test_build_menubar_native_host_prioritizes_paused_state(tmp_path: Path) -> N
     assert 'paused ? @"Ayes 已暂停" : (running ? @"Ayes 监控中" : @"Ayes 未监控")' in source
     assert 'paused ? @"继续上次的监控" : (running ? @"暂停监控" : @"继续上次的监控")' in source
     assert 'paused ? @selector(resume:) : (running ? @selector(pause:) : @selector(resume:))' in source
-    assert 'paused ? @"◐" : (running ? @"◉" : @"○")' in source
+    assert 'paused ? @"Ayes ◐" : (running ? @"Ayes ◉" : @"Ayes ○")' in source
 
 
 def test_build_menubar_native_host_formats_task_target_titles(tmp_path: Path) -> None:
@@ -783,6 +811,28 @@ def test_build_menubar_native_host_formats_task_target_titles(tmp_path: Path) ->
     assert "[self addTaskSubmenuWithTask:currentTask toMenu:self.menu allTasks:tasks];" in source
     assert "[self addTaskSubmenuWithTask:task toMenu:self.menu allTasks:tasks];" in source
     assert "addTaskSubmenuWithTaskId:taskId" not in source
+
+
+def test_build_menubar_roi_editor_uses_screenshot_selection_and_preview(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert "RoiSelectionView" in source
+    assert "RoiPreviewView" in source
+    assert "/api/screenshot" in source
+    assert "imagePixelRectFromDisplayedSelection" in source
+    assert "displayScaleX" in source
+    assert "displayScaleY" in source
+    assert '"coordinate_space": @"target"' in source
+    assert "ROI 预览确认" in source
+    assert "请拖拽框选 ROI 区域" in source
+    assert "toPath:roiPath" in source
+    assert "当前任务 ROI 子任务数" not in source
 
 
 def test_build_menubar_global_settings_does_not_target_current_task_sampling(tmp_path: Path) -> None:

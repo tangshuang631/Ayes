@@ -779,9 +779,29 @@ class AppState:
         return tree
 
     def delete_task(self, task_id: str) -> dict:
+        task = self.sqlite_store.get_task(task_id)
+        roi_meta = self.sqlite_store.get_task_roi(task_id)
+        task_paths = None
+        if roi_meta is not None:
+            task_paths = roi_runtime_paths(
+                self.runtime_dir,
+                roi_meta["parent_task_id"],
+                task_id,
+                timestamp=float((task or {}).get("created_at") or time.time()),
+            )
+        elif task is not None:
+            task_paths = task_runtime_paths(self.runtime_dir, task_id, timestamp=float(task.get("created_at") or time.time()))
         if task_id == self.current_task_id:
             self.clear_runner()
         deleted = self.sqlite_store.delete_task_data(task_id)
+        deleted["runtime_dirs"] = 0
+        if task_paths is not None:
+            import shutil
+
+            task_dir = task_paths["task_dir"]
+            if task_dir.exists():
+                shutil.rmtree(task_dir)
+                deleted["runtime_dirs"] = 1
         if task_id == self.last_task_id:
             self.last_task_id = None
         self.log_store.write(category="watch", level="info", message="已删除任务及相关记忆", task_id=task_id, metadata=deleted)

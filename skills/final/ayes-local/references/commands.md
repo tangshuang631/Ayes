@@ -55,6 +55,7 @@ ayes-agent-local sampling --quality space_saver --save-ocr-screenshots false
 ayes-agent-local roi list --task-id 2026-06-25__price_watch
 ayes-agent-local roi create --task-id 2026-06-25__price_watch --roi-name 价格监控 --region "roi_price|价格监控|120|240|360|160|target"
 ayes-agent-local roi update --task-id 2026-06-25__price_watch --roi-task-id 2026-06-25__price_watch__roi_价格监控 --enabled false
+ayes-agent-local roi delete --task-id 2026-06-25__price_watch --roi-task-id 2026-06-25__price_watch__roi_价格监控
 ayes-agent-local task-alert --task-id 2026-06-25__price_watch__roi_价格监控 --enabled true --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx" --message-title "价格提醒"
 ayes-agent-local switch-task --task-id 2026-06-25__price_watch
 ayes-agent-local delete-task --task-id 2026-06-25__old_watch
@@ -80,7 +81,7 @@ ayes-agent-local task --task-id task_web
 - `sampling --interval-sec 0.5-3600`：按秒更新当前任务采样间隔，允许范围 0.5 秒到 1 小时
 - `sampling --quality original|standard|space_saver|ultra_saver`：设置采样图质量；`standard` 最长边 1920，`space_saver` 最长边 1280，`ultra_saver` 最长边 960
 - `sampling --save-ocr-screenshots false`：关闭逐事件证据截图落盘，只保留记忆、事件、日志和少量 `screenshots/latest/` 最新帧；截图快捷键仍可使用 latest 临时帧
-- `roi list/create/update`：通过 agent 对话列出、创建、命名、启用/禁用某个主任务下的 ROI 子任务；ROI 子任务有独立 `task_id` 和独立目录树
+- `roi list/create/update/delete`：通过 agent 对话列出、创建、命名、启用/禁用或删除某个主任务下的 ROI 子任务；ROI 子任务有独立 `task_id` 和独立目录树
 - `task-alert`：读取或更新某个主任务/ROI 子任务的企业微信 webhook、消息标题和模板
 - `switch-task`：把历史任务恢复为当前任务
 - `delete-task`：删除指定任务及其长短期记忆、日志与长期摘要

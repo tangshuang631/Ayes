@@ -146,6 +146,7 @@ ayes-agent-local sampling --task-id task_web --interval-sec 6
 ayes-agent-local roi list --task-id task_web
 ayes-agent-local roi create --task-id task_web --roi-name 价格监控 --region "roi_price|价格监控|120|240|360|160|target"
 ayes-agent-local roi update --task-id task_web --roi-task-id task_web__roi_price --enabled false
+ayes-agent-local roi delete --task-id task_web --roi-task-id task_web__roi_price
 ayes-agent-local task-alert --task-id task_web__roi_price --enabled true --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx" --message-title "价格提醒"
 ayes-agent-local logs --task-id task_web --minutes 15
 ayes-agent-local run-once

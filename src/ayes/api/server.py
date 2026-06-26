@@ -1093,6 +1093,15 @@ def update_task_roi_child(task_id: str, roi_task_id: str, payload: dict = Body(.
     return JSONResponse({"status": "ok", **result})
 
 
+@app.delete("/api/tasks/{task_id}/roi/{roi_task_id}")
+def delete_task_roi_child(task_id: str, roi_task_id: str) -> JSONResponse:
+    roi = state.sqlite_store.get_task_roi(roi_task_id)
+    if roi is None or roi.get("parent_task_id") != task_id:
+        return JSONResponse({"error": "ROI 子任务不存在"}, status_code=404)
+    deleted = state.delete_task(roi_task_id)
+    return JSONResponse({"status": "deleted", "task_id": roi_task_id, "parent_task_id": task_id, "deleted": deleted})
+
+
 @app.get("/api/tasks/{task_id}/alert")
 def get_task_alert_settings(task_id: str) -> JSONResponse:
     task = state.sqlite_store.get_task(task_id)

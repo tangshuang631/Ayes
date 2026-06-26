@@ -202,15 +202,34 @@ def test_native_menubar_source_exposes_roi_tree_and_task_start_actions() -> None
     assert "/api/tasks/\" stringByAppendingFormat:@\"%@/roi\"" in source
 
 
-def test_native_menubar_source_explicitly_pops_menu_on_click() -> None:
+def test_native_menubar_source_uses_system_menu_and_logs_open() -> None:
     source = agent_tool._build_native_menubar_source(
         base_url="http://127.0.0.1:8770",
         runtime_dir=Path("/tmp/ayes-runtime"),
     )
 
-    assert "@selector(showMenu:)" in source
-    assert "sendActionOn:" in source
-    assert "popUpStatusItemMenu:self.menu" in source
+    assert "NSObject <NSApplicationDelegate, NSMenuDelegate>" in source
+    assert "self.statusItem.menu = menu;" in source
+    assert "menu.delegate = self;" in source
+    assert "- (void)menuWillOpen:(NSMenu *)menu" in source
+    assert '@"Ayes ○"' in source
+    assert '@"Ayes ◉"' in source
+    assert "@selector(showMenu:)" not in source
+    assert "sendActionOn:" not in source
+    assert "popUpStatusItemMenu:" not in source
+    assert '@"menubar_started"' in source
+    assert '@"menu_will_open"' in source
+
+
+def test_native_menubar_source_handles_null_current_task_id() -> None:
+    source = agent_tool._build_native_menubar_source(
+        base_url="http://127.0.0.1:8770",
+        runtime_dir=Path("/tmp/ayes-runtime"),
+    )
+
+    assert 'NSString *currentTaskId = [self safeText:[statusPayload objectForKey:@"task_id"] fallback:@""];' in source
+    assert 'NSString *currentTaskId = [statusPayload objectForKey:@"task_id"];' not in source
+    assert 'currentTaskId != nil && [currentTaskId length] > 0' not in source
 
 
 def test_python_menubar_uses_continue_last_monitor_label() -> None:

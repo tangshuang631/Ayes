@@ -303,6 +303,40 @@ def test_task_roi_api_patches_enabled_and_name_without_losing_task_spec() -> Non
     assert task_response.json()["spec"]["roi"]["enabled"] is False
 
 
+def test_task_roi_api_deletes_child_task_and_directory() -> None:
+    parent_task_id = "2026-06-26_process_monitor_Chrome_roi_delete"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": parent_task_id,
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    roi_response = client.post(
+        f"/api/tasks/{parent_task_id}/roi",
+        json={
+            "roi_name": "删除测试",
+            "region": {"region_id": "roi_delete", "name": "删除测试", "x": 1, "y": 2, "w": 30, "h": 40},
+        },
+    )
+    roi_task_id = roi_response.json()["task"]["task_id"]
+    roi_dir = Path(roi_response.json()["task_paths"]["task_dir"])
+    roi_dir.mkdir(parents=True, exist_ok=True)
+    (roi_dir / "marker.txt").write_text("roi", encoding="utf-8")
+
+    delete_response = client.delete(f"/api/tasks/{parent_task_id}/roi/{roi_task_id}")
+
+    assert delete_response.status_code == 200
+    payload = delete_response.json()
+    assert payload["status"] == "deleted"
+    assert payload["task_id"] == roi_task_id
+    assert not roi_dir.exists()
+    list_response = client.get(f"/api/tasks/{parent_task_id}/roi")
+    assert all(item["roi_task_id"] != roi_task_id for item in list_response.json()["items"])
+
+
 def test_task_alert_api_updates_task_webhook_settings() -> None:
     task_id = "2026-06-26_alert_task"
     client.post(

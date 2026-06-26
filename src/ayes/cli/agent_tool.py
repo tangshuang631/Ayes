@@ -77,7 +77,125 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     runtime_dir_literal = _objc_literal(runtime_dir.resolve().as_posix())
     return f'''#import <Cocoa/Cocoa.h>
 
-@interface AyesDelegate : NSObject <NSApplicationDelegate>
+@interface RoiSelectionView : NSView
+@property(strong) NSImage *image;
+@property(assign) NSRect selectionRect;
+@property(assign) NSPoint dragStart;
+@property(assign) BOOL dragging;
+- (instancetype)initWithImage:(NSImage *)image frame:(NSRect)frame;
+- (NSRect)imageDrawRect;
+- (NSRect)imagePixelRectFromDisplayedSelection;
+@end
+
+@implementation RoiSelectionView
+- (instancetype)initWithImage:(NSImage *)image frame:(NSRect)frame {{
+    self = [super initWithFrame:frame];
+    if (self) {{
+        self.image = image;
+        self.selectionRect = NSZeroRect;
+        self.wantsLayer = YES;
+        self.layer.backgroundColor = [[NSColor colorWithWhite:0.96 alpha:1.0] CGColor];
+    }}
+    return self;
+}}
+- (BOOL)isFlipped {{ return YES; }}
+- (NSRect)imageDrawRect {{
+    if (self.image == nil || self.image.size.width <= 0 || self.image.size.height <= 0) {{ return NSZeroRect; }}
+    CGFloat padding = 12.0;
+    CGFloat availableWidth = MAX(1.0, self.bounds.size.width - padding * 2.0);
+    CGFloat availableHeight = MAX(1.0, self.bounds.size.height - padding * 2.0);
+    CGFloat scale = MIN(availableWidth / self.image.size.width, availableHeight / self.image.size.height);
+    CGFloat drawWidth = self.image.size.width * scale;
+    CGFloat drawHeight = self.image.size.height * scale;
+    return NSMakeRect((self.bounds.size.width - drawWidth) / 2.0, (self.bounds.size.height - drawHeight) / 2.0, drawWidth, drawHeight);
+}}
+- (void)drawRect:(NSRect)dirtyRect {{
+    [[NSColor colorWithWhite:0.96 alpha:1.0] setFill];
+    NSRectFill(self.bounds);
+    NSRect drawRect = [self imageDrawRect];
+    if (self.image != nil && drawRect.size.width > 0 && drawRect.size.height > 0) {{
+        [self.image drawInRect:drawRect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0];
+    }}
+    if (self.selectionRect.size.width > 1 && self.selectionRect.size.height > 1) {{
+        [[NSColor colorWithCalibratedRed:0.0 green:0.42 blue:1.0 alpha:0.18] setFill];
+        NSBezierPath *fill = [NSBezierPath bezierPathWithRect:self.selectionRect];
+        [fill fill];
+        [[NSColor systemBlueColor] setStroke];
+        NSBezierPath *stroke = [NSBezierPath bezierPathWithRect:self.selectionRect];
+        [stroke setLineWidth:2.0];
+        [stroke stroke];
+    }}
+}}
+- (void)mouseDown:(NSEvent *)event {{
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    NSRect drawRect = [self imageDrawRect];
+    if (!NSPointInRect(point, drawRect)) {{ self.selectionRect = NSZeroRect; [self setNeedsDisplay:YES]; return; }}
+    self.dragStart = point;
+    self.selectionRect = NSMakeRect(point.x, point.y, 0, 0);
+    self.dragging = YES;
+    [self setNeedsDisplay:YES];
+}}
+- (void)mouseDragged:(NSEvent *)event {{
+    if (!self.dragging) {{ return; }}
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+    NSRect drawRect = [self imageDrawRect];
+    point.x = MIN(MAX(point.x, NSMinX(drawRect)), NSMaxX(drawRect));
+    point.y = MIN(MAX(point.y, NSMinY(drawRect)), NSMaxY(drawRect));
+    CGFloat x = MIN(self.dragStart.x, point.x);
+    CGFloat y = MIN(self.dragStart.y, point.y);
+    CGFloat w = fabs(point.x - self.dragStart.x);
+    CGFloat h = fabs(point.y - self.dragStart.y);
+    self.selectionRect = NSMakeRect(x, y, w, h);
+    [self setNeedsDisplay:YES];
+}}
+- (void)mouseUp:(NSEvent *)event {{
+    self.dragging = NO;
+}}
+- (NSRect)imagePixelRectFromDisplayedSelection {{
+    NSRect drawRect = [self imageDrawRect];
+    NSRect selected = NSIntersectionRect(self.selectionRect, drawRect);
+    if (self.image == nil || selected.size.width < 2 || selected.size.height < 2 || drawRect.size.width <= 0 || drawRect.size.height <= 0) {{ return NSZeroRect; }}
+    CGFloat displayScaleX = self.image.size.width / drawRect.size.width;
+    CGFloat displayScaleY = self.image.size.height / drawRect.size.height;
+    CGFloat x = (selected.origin.x - drawRect.origin.x) * displayScaleX;
+    CGFloat y = (selected.origin.y - drawRect.origin.y) * displayScaleY;
+    CGFloat w = selected.size.width * displayScaleX;
+    CGFloat h = selected.size.height * displayScaleY;
+    return NSMakeRect(MAX(0, floor(x)), MAX(0, floor(y)), MAX(1, round(w)), MAX(1, round(h)));
+}}
+@end
+
+@interface RoiPreviewView : NSView
+@property(strong) NSImage *image;
+@property(assign) NSRect pixelRect;
+- (instancetype)initWithImage:(NSImage *)image pixelRect:(NSRect)pixelRect frame:(NSRect)frame;
+@end
+
+@implementation RoiPreviewView
+- (instancetype)initWithImage:(NSImage *)image pixelRect:(NSRect)pixelRect frame:(NSRect)frame {{
+    self = [super initWithFrame:frame];
+    if (self) {{ self.image = image; self.pixelRect = pixelRect; self.wantsLayer = YES; }}
+    return self;
+}}
+- (BOOL)isFlipped {{ return YES; }}
+- (void)drawRect:(NSRect)dirtyRect {{
+    [[NSColor colorWithWhite:0.96 alpha:1.0] setFill];
+    NSRectFill(self.bounds);
+    if (self.image == nil || self.pixelRect.size.width <= 0 || self.pixelRect.size.height <= 0) {{ return; }}
+    CGFloat padding = 10.0;
+    CGFloat scale = MIN((self.bounds.size.width - padding * 2.0) / self.pixelRect.size.width, (self.bounds.size.height - padding * 2.0) / self.pixelRect.size.height);
+    CGFloat drawWidth = self.pixelRect.size.width * scale;
+    CGFloat drawHeight = self.pixelRect.size.height * scale;
+    NSRect drawRect = NSMakeRect((self.bounds.size.width - drawWidth) / 2.0, (self.bounds.size.height - drawHeight) / 2.0, drawWidth, drawHeight);
+    [self.image drawInRect:drawRect fromRect:self.pixelRect operation:NSCompositingOperationSourceOver fraction:1.0];
+    [[NSColor systemBlueColor] setStroke];
+    NSBezierPath *stroke = [NSBezierPath bezierPathWithRect:drawRect];
+    [stroke setLineWidth:2.0];
+    [stroke stroke];
+}}
+@end
+
+@interface AyesDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property(strong) NSStatusItem *statusItem;
 @property(strong) NSString *baseUrl;
 @property(strong) NSString *runtimeDir;
@@ -92,18 +210,28 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     self.runtimeDir = @"{runtime_dir_literal}";
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
-    self.statusItem.button.target = self;
-    self.statusItem.button.action = @selector(showMenu:);
-    [self.statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
-    [self refreshStatus:nil];
     NSMenu *menu = [[NSMenu alloc] init];
+    menu.delegate = self;
     self.menu = menu;
     NSMenuItem *title = [[NSMenuItem alloc] initWithTitle:@"Ayes 监控控制" action:nil keyEquivalent:@""];
     [title setEnabled:NO];
     [menu addItem:title];
     [menu addItem:[NSMenuItem separatorItem]];
     self.statusItem.menu = menu;
-    [self rebuildMenu];
+    [self logEvent:@"menubar_started"];
+    [self refreshStatus:nil];
+}}
+- (void)logEvent:(NSString *)message {{
+    NSString *line = [NSString stringWithFormat:@"{{\\"message\\":\\"%@\\",\\"ts\\":%.3f}}\\n", message ?: @"", [[NSDate date] timeIntervalSince1970]];
+    NSString *path = [self.runtimeDir stringByAppendingPathComponent:@"ayes-menubar.log"];
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (handle == nil) {{
+        [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        return;
+    }}
+    [handle seekToEndOfFile];
+    [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+    [handle closeFile];
 }}
 - (void)addItem:(NSString *)title action:(SEL)action toMenu:(NSMenu *)menu {{
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:@""];
@@ -197,6 +325,17 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [alert addButtonWithTitle:@"知道了"];
     [alert runModal];
 }}
+- (NSString *)absolutePathForRuntimePath:(NSString *)path {{
+    NSString *clean = [self safeText:path fallback:@""];
+    if ([clean length] == 0) {{ return @""; }}
+    if ([clean hasPrefix:@"/runtime/"]) {{
+        return [self.runtimeDir stringByAppendingPathComponent:[clean substringFromIndex:[@"/runtime/" length]]];
+    }}
+    if ([clean hasPrefix:@"runtime/"]) {{
+        return [self.runtimeDir stringByAppendingPathComponent:[clean substringFromIndex:[@"runtime/" length]]];
+    }}
+    return clean;
+}}
 - (BOOL)selectedVisionPopupItemIsVision:(NSPopUpButton *)popup {{
     id rawModel = [[popup selectedItem] representedObject];
     NSDictionary *model = [rawModel isKindOfClass:[NSDictionary class]] ? rawModel : @{{}};
@@ -220,13 +359,13 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
 - (void)refreshStatus:(id)sender {{
     BOOL running = [self statusBoolForKey:@"is_running"];
     BOOL paused = [self statusBoolForKey:@"is_paused"];
-    self.statusItem.button.title = paused ? @"◐" : (running ? @"◉" : @"○");
+    self.statusItem.button.title = paused ? @"Ayes ◐" : (running ? @"Ayes ◉" : @"Ayes ○");
     self.statusItem.button.toolTip = paused ? @"Ayes 已暂停" : (running ? @"Ayes 正在监控" : @"Ayes 未在监控");
     [self rebuildMenu];
 }}
-- (void)showMenu:(id)sender {{
+- (void)menuWillOpen:(NSMenu *)menu {{
+    [self logEvent:@"menu_will_open"];
     [self refreshStatus:nil];
-    [self.statusItem popUpStatusItemMenu:self.menu];
 }}
 - (void)pause:(id)sender {{ [self postPathSync:@"/api/control/pause-all"]; [self refreshStatus:nil]; }}
 - (void)resume:(id)sender {{ [self postPathSync:@"/api/control/resume-all"]; [self refreshStatus:nil]; }}
@@ -576,7 +715,7 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     BOOL running = [self statusBoolForKey:@"is_running"];
     BOOL paused = [self statusBoolForKey:@"is_paused"];
     NSDictionary *statusPayload = [self jsonForPath:@"/api/control/status"];
-    NSString *currentTaskId = [statusPayload objectForKey:@"task_id"];
+    NSString *currentTaskId = [self safeText:[statusPayload objectForKey:@"task_id"] fallback:@""];
     NSDictionary *tasksPayload = [self jsonForPath:@"/api/tasks?limit=5"];
     NSArray *tasks = [tasksPayload objectForKey:@"items"];
     NSDictionary *currentTask = nil;
@@ -590,8 +729,10 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
             }}
         }}
     }}
-    if (currentTask == nil && currentTaskId != nil && [currentTaskId length] > 0) {{
-        currentTask = @{{@"task_id": currentTaskId, @"target": [statusPayload objectForKey:@"target"] ?: @{{}}, @"mode": [statusPayload objectForKey:@"mode"] ?: @""}};
+    if (currentTask == nil && [currentTaskId length] > 0) {{
+        id rawStatusTarget = [statusPayload objectForKey:@"target"];
+        NSDictionary *statusTarget = [rawStatusTarget isKindOfClass:[NSDictionary class]] ? rawStatusTarget : @{{}};
+        currentTask = @{{@"task_id": currentTaskId, @"target": statusTarget, @"mode": [self safeText:[statusPayload objectForKey:@"mode"] fallback:@""]}};
     }}
     NSMenuItem *title = [[NSMenuItem alloc] initWithTitle:(paused ? @"Ayes 已暂停" : (running ? @"Ayes 监控中" : @"Ayes 未监控")) action:nil keyEquivalent:@""];
     [title setEnabled:NO];
@@ -644,12 +785,92 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
 }}
 - (void)openRoiEditor:(NSMenuItem *)sender {{
     NSString *taskId = [sender representedObject];
-    NSString *encoded = [taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
-    NSString *roiPath = [@"/api/tasks/" stringByAppendingFormat:@"%@/roi", encoded ?: @""];
-    NSDictionary *payload = [self jsonForPath:roiPath];
-    NSNumber *count = [payload objectForKey:@"count"];
-    NSString *message = [NSString stringWithFormat:@"当前任务 ROI 子任务数：%@\\n可通过 agent 命令创建或修改：ayes-agent-local roi create --task-id %@ --roi-name 名称 --region region_id|名称|x|y|w|h|target", count ?: @0, taskId ?: @""];
-    [self showInfo:message];
+    if (taskId == nil || [taskId length] == 0) {{ return; }}
+    NSString *queryTaskId = [taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+    NSDictionary *screenshotPayload = [self jsonForPath:[@"/api/screenshot?task_id=" stringByAppendingString:queryTaskId ?: @""]];
+    NSString *rawPath = [self safeText:[screenshotPayload objectForKey:@"path"] fallback:@""];
+    NSString *imagePath = [self absolutePathForRuntimePath:rawPath];
+    NSImage *image = [[NSImage alloc] initWithContentsOfFile:imagePath];
+    if (image == nil) {{
+        [NSApp activateIgnoringOtherApps:YES];
+        [self showError:@"无法读取当前任务最新截图，不能创建 ROI。请先启动或运行一次该任务。"];
+        return;
+    }}
+    CGFloat maxWidth = 760.0;
+    CGFloat maxHeight = 520.0;
+    CGFloat scale = MIN(maxWidth / image.size.width, maxHeight / image.size.height);
+    if (scale > 1.0) {{ scale = 1.0; }}
+    NSRect viewFrame = NSMakeRect(0, 0, MAX(360.0, image.size.width * scale + 24.0), MAX(260.0, image.size.height * scale + 24.0));
+    RoiSelectionView *selectionView = [[RoiSelectionView alloc] initWithImage:image frame:viewFrame];
+
+    NSAlert *selectAlert = [[NSAlert alloc] init];
+    selectAlert.messageText = @"创建 ROI";
+    selectAlert.informativeText = @"请拖拽框选 ROI 区域。进程任务会按当前截图目标坐标保存；全屏任务会按屏幕截图坐标保存。";
+    selectAlert.accessoryView = selectionView;
+    [selectAlert addButtonWithTitle:@"下一步"];
+    [selectAlert addButtonWithTitle:@"取消"];
+    [NSApp activateIgnoringOtherApps:YES];
+    if ([selectAlert runModal] != NSAlertFirstButtonReturn) {{ return; }}
+
+    NSRect pixelRect = [selectionView imagePixelRectFromDisplayedSelection];
+    if (pixelRect.size.width < 3 || pixelRect.size.height < 3) {{
+        [self showError:@"ROI 框选区域太小或为空，请重新框选。"];
+        return;
+    }}
+
+    NSTextField *nameField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 28)];
+    nameField.placeholderString = @"例如：价格监控、播放器区域、弹幕区";
+    RoiPreviewView *previewView = [[RoiPreviewView alloc] initWithImage:image pixelRect:pixelRect frame:NSMakeRect(0, 42, 360, 180)];
+    NSTextField *nameLabel = [NSTextField labelWithString:@"ROI 名称"];
+    nameLabel.frame = NSMakeRect(0, 222, 80, 22);
+    NSTextField *coordLabel = [NSTextField labelWithString:[NSString stringWithFormat:@"保存坐标：x=%ld y=%ld w=%ld h=%ld coordinate_space=target", (long)pixelRect.origin.x, (long)pixelRect.origin.y, (long)pixelRect.size.width, (long)pixelRect.size.height]];
+    coordLabel.frame = NSMakeRect(0, 28, 360, 18);
+    NSView *confirmView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 360, 244)];
+    nameField.frame = NSMakeRect(82, 218, 278, 28);
+    [confirmView addSubview:nameLabel];
+    [confirmView addSubview:nameField];
+    [confirmView addSubview:previewView];
+    [confirmView addSubview:coordLabel];
+
+    NSAlert *confirmAlert = [[NSAlert alloc] init];
+    confirmAlert.messageText = @"ROI 预览确认";
+    confirmAlert.informativeText = @"确认预览区域和坐标无误后再创建。";
+    confirmAlert.accessoryView = confirmView;
+    [confirmAlert addButtonWithTitle:@"创建 ROI"];
+    [confirmAlert addButtonWithTitle:@"取消"];
+    if ([confirmAlert runModal] != NSAlertFirstButtonReturn) {{ return; }}
+    NSString *roiName = [self safeText:nameField.stringValue fallback:@""];
+    if ([roiName length] == 0) {{
+        [self showError:@"ROI 名称不能为空。"];
+        return;
+    }}
+
+    NSString *regionIdBase = [roiName stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet alphanumericCharacterSet]];
+    if ([regionIdBase length] == 0) {{ regionIdBase = @"custom"; }}
+    NSString *regionId = [@"roi_" stringByAppendingString:regionIdBase];
+    NSString *encodedPathTaskId = [taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+    NSString *roiPath = [@"/api/tasks/" stringByAppendingFormat:@"%@/roi", encodedPathTaskId ?: @""];
+    NSDictionary *payload = @{{
+        @"roi_name": roiName,
+        @"region": @{{
+            @"region_id": regionId,
+            @"name": roiName,
+            @"x": @((NSInteger)pixelRect.origin.x),
+            @"y": @((NSInteger)pixelRect.origin.y),
+            @"w": @((NSInteger)pixelRect.size.width),
+            @"h": @((NSInteger)pixelRect.size.height),
+            @"coordinate_space": @"target",
+            @"enabled": @YES
+        }},
+        @"enabled": @YES
+    }};
+    NSDictionary *result = [self postJsonSync:payload toPath:roiPath];
+    if ([result objectForKey:@"error"] != nil) {{
+        [self showError:[result objectForKey:@"error"]];
+        return;
+    }}
+    [self showInfo:[NSString stringWithFormat:@"ROI 已创建：%@", roiName]];
+    [self refreshStatus:nil];
 }}
 - (void)openTaskSettings:(NSMenuItem *)sender {{
     NSString *taskId = [sender representedObject];
@@ -1071,6 +1292,9 @@ def build_parser() -> argparse.ArgumentParser:
     roi_update_parser.add_argument("--roi-name", default=None)
     roi_update_parser.add_argument("--region", default=None, help="region_id|name|x|y|w|h|coordinate_space")
     roi_update_parser.add_argument("--enabled", default=None)
+    roi_delete_parser = roi_subparsers.add_parser("delete", help="删除 ROI 子任务及其目录")
+    roi_delete_parser.add_argument("--task-id", required=True)
+    roi_delete_parser.add_argument("--roi-task-id", required=True)
     task_alert_parser = subparsers.add_parser("task-alert", help="读取或更新任务/ROI 的企业微信 webhook 通知配置")
     task_alert_parser.add_argument("--task-id", required=True)
     task_alert_parser.add_argument("--enabled", default=None)
@@ -1275,6 +1499,8 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
             }
             payload = {key: value for key, value in payload.items() if value is not None}
             return _request_json(base_url, f"/api/tasks/{encoded_task_id}/roi/{_path_segment(args.roi_task_id)}", method="PATCH", payload=payload)
+        if args.roi_command == "delete":
+            return _request_json(base_url, f"/api/tasks/{encoded_task_id}/roi/{_path_segment(args.roi_task_id)}", method="DELETE")
         raise RuntimeError(f"未知 roi 命令: {args.roi_command}")
     if args.command == "task-alert":
         payload = {
