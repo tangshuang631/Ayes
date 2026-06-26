@@ -13,7 +13,7 @@ def build_long_term_summary(*, task_id: str, events: Iterable[TimelineEvent]) ->
     if not collected:
         raise ValueError("无法对空事件列表生成长期摘要")
     collected = sorted(collected, key=lambda item: item.timestamp)
-    texts = [event.summary for event in collected if event.summary][:5]
+    texts = [_trim_summary(event.summary) for event in collected if _is_user_memory_event(event) and _trim_summary(event.summary)][:5]
     snapshot = _build_main_content_snapshot(collected)
     return {
         "summary_id": f"lts_{uuid4().hex}",
@@ -25,6 +25,24 @@ def build_long_term_summary(*, task_id: str, events: Iterable[TimelineEvent]) ->
         "event_ids": [event.event_id for event in collected],
         "main_content_snapshot": snapshot,
     }
+
+
+def _is_user_memory_event(event: TimelineEvent) -> bool:
+    summary = str(event.summary or "").strip()
+    if event.event_type in {"vision_skipped", "vision_triggered"}:
+        return False
+    if summary.startswith("视觉增强已跳过") or summary.startswith("视觉增强已触发"):
+        return False
+    if summary.startswith("OCR vision |"):
+        return False
+    return True
+
+
+def _trim_summary(value: str) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) > 180:
+        return text[:177] + "..."
+    return text
 
 
 def _build_main_content_snapshot(events: List[TimelineEvent]) -> dict:

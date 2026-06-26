@@ -62,9 +62,9 @@ python3 scripts/install_ayes_local_skill.py --skill-root /path/to/agent/skills
 其中：
 
 - `scripts/ayes-agent-local` 是最优先给智能体调用的本地命令包装
-- `scripts/ayes-menubar-local` 是最稳定的本地菜单栏控制入口
+- `scripts/ayes-menubar-local` 是 macOS 原生 `Ayes 菜单栏.app` 的本地菜单栏控制入口
 - `runtime/` 是安装实例自己的运行目录，数据库、日志、截图、证据和按任务切割的记忆文件默认写入这里
-- 每个任务的记忆目录为 `runtime/memory/<task_id>/`，短期详细记忆在 `short/`，长期简略摘要在 `long/`
+- 每个任务的数据目录为 `runtime/tasks/<date>/<task_id>/`；短期紧凑明细在 `memory/short/`，长期简略摘要在 `memory/long/`
 - 安装后默认无任务、无 webhook、无已启用视觉增强，后续全部通过用户与 agent 的对话逐步补齐
 
 ## 4. 安装后验证
@@ -121,10 +121,10 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 
 任务记忆策略也存放在该安装实例的 `runtime/` 中：
 
-- 短期详细记忆默认保留 7 天，最高 14 天
+- 短期紧凑明细默认保留 7 天，最高 14 天
 - 长期简略记忆默认保留 14 天，最高 30 天
 - 每个任务可以单独打开“永久保留”，打开后该任务不再自动清理记忆
-- 记忆文件按任务和日期切割，文件名包含日期、任务 ID 和 details/summary 类型，便于人工审计和 agent 回查
+- 记忆文件按任务和日期切割，文件名包含日期、任务 ID 和 details/summary 类型；默认 details 文件只保留摘要、时间、来源、区域、关键词和质量信息，不写 OCR blocks/bbox 等重字段
 
 ## 6. 重新安装时机
 

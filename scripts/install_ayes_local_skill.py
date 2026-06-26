@@ -50,24 +50,46 @@ def build_wrapper_script(*, repo_root: Path, python_bin: str, module: str) -> st
     )
 
 
+def build_menubar_wrapper_script(*, repo_root: Path, python_bin: str) -> str:
+    repo_root_posix = repo_root.resolve().as_posix().replace('"', '\\"')
+    return (
+        "#!/bin/zsh\n"
+        "set -euo pipefail\n"
+        'SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"\n'
+        f'REPO_ROOT="{repo_root_posix}"\n'
+        f'PYTHON_BIN="{python_bin}"\n'
+        'export PYTHONPATH="$REPO_ROOT/src"\n'
+        'export AYES_RUNTIME_DIR="$SKILL_DIR/runtime"\n'
+        'exec "$PYTHON_BIN" -m ayes.cli.agent_tool control menubar "$@"\n'
+    )
+
+
 def install_skill(
     *,
     repo_root: Path,
     skill_root: Path,
     python_bin: str = "python3",
     module: str = "ayes.cli.agent_tool",
-    menubar_module: str = "ayes.cli.menubar",
 ) -> InstallPaths:
     paths = build_install_paths(repo_root=repo_root, skill_root=skill_root)
     if not paths.source_skill_dir.exists():
         raise FileNotFoundError(f"未找到 skill 模板目录: {paths.source_skill_dir}")
     paths.skill_root.mkdir(parents=True, exist_ok=True)
+    runtime_backup = None
     if paths.target_skill_dir.exists():
+        runtime_dir = paths.target_skill_dir / "runtime"
+        if runtime_dir.exists():
+            runtime_backup = paths.skill_root / ".ayes-local-runtime-backup"
+            if runtime_backup.exists():
+                shutil.rmtree(runtime_backup)
+            shutil.move(str(runtime_dir), str(runtime_backup))
         shutil.rmtree(paths.target_skill_dir)
     shutil.copytree(paths.source_skill_dir, paths.target_skill_dir)
+    if runtime_backup is not None and runtime_backup.exists():
+        shutil.move(str(runtime_backup), str(paths.target_skill_dir / "runtime"))
     paths.target_scripts_dir.mkdir(parents=True, exist_ok=True)
     agent_wrapper = build_wrapper_script(repo_root=paths.repo_root, python_bin=python_bin, module=module)
-    menubar_wrapper = build_wrapper_script(repo_root=paths.repo_root, python_bin=python_bin, module=menubar_module)
+    menubar_wrapper = build_menubar_wrapper_script(repo_root=paths.repo_root, python_bin=python_bin)
     paths.agent_wrapper_path.write_text(agent_wrapper, encoding="utf-8")
     paths.agent_wrapper_path.chmod(0o755)
     paths.menubar_wrapper_path.write_text(menubar_wrapper, encoding="utf-8")
@@ -81,7 +103,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skill-root", default=str(Path.home() / ".codex" / "skills"))
     parser.add_argument("--python-bin", default="python3")
     parser.add_argument("--module", default="ayes.cli.agent_tool")
-    parser.add_argument("--menubar-module", default="ayes.cli.menubar")
     return parser
 
 
@@ -92,7 +113,6 @@ def main(argv: list[str] | None = None) -> int:
         skill_root=Path(args.skill_root),
         python_bin=args.python_bin,
         module=args.module,
-        menubar_module=args.menubar_module,
     )
     print(f"已安装 ayes-local skill: {paths.target_skill_dir}")
     print(f"本地 agent 包装命令: {paths.agent_wrapper_path}")

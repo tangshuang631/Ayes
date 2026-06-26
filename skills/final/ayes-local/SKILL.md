@@ -49,12 +49,15 @@ Use this skill when the request is about:
 1. 先读 `references/installation.md`，确认本机已安装 `ayes-local` 和 `ayes-agent-local` 包装脚本。
 2. 先用 `ayes-agent-local ensure-service` 或 `ayes-agent-local status` 确认本地服务可达。
 2. 如果用户是在追问最近情况：
-   - 先读 `ayes-agent-local observe-live --minutes 5 --limit 20`
-   - 优先使用返回的 `status / screenshot / recent_events / memory_items / alerts / logs / evidence_status / agent_hints`
-   - 如果问题和提醒有关，再按需补读 `ayes-agent-local alerts`
-   - 如果需要更细证据，再补 `ayes-agent-local memory-items`、`ayes-agent-local recent` 和 `ayes-agent-local logs`
-   - 最后用 `ayes-agent-local ask --question "..."` 组织回答
-   - 如果用户问“昨天”“最近几天”或超出短期详细记忆窗口的问题，显式用 `ayes-agent-local ask --hours ...` 或 `ayes-agent-local long-term --hours ...`
+   - 先读 `ayes-agent-local activity --minutes 5`
+   - 普通“最近在干什么/刚刚发生了什么”只使用 `activity` 返回的 `primary_summary / timeline / keywords / confidence / has_screenshot_evidence`
+   - 如果需要更细事件，再补 `ayes-agent-local memory-items --limit 5`
+   - 如果用户明确要截图证据，再补 `ayes-agent-local screenshot`；只有需要完整实时上下文时才用 `observe-live`
+   - 如果用户明确要求排障、日志或“为什么没通知”，才补 `ayes-agent-local logs`；正常回忆问题不要默认查日志
+   - `status` 只能作为运行状态和日志计数摘要来源；不要把它当成近期活动明细来源
+   - 如果问题和提醒有关，先读 `ayes-agent-local alerts`，排障时再读日志
+   - 如需组织跨时间回答，再用 `ayes-agent-local ask --question "..."`
+   - 如果用户问“昨天”“最近几天”或超出短期紧凑明细窗口的问题，显式用 `ayes-agent-local ask --hours ...` 或 `ayes-agent-local long-term --hours ...`
 3. 如果用户要求开始或恢复监控：
    - 如果用户给的是自然语言任务，先用 `ayes-agent-local plan-spec ...`
    - 优先读取返回的 `questions[]`
@@ -81,14 +84,33 @@ Use this skill when the request is about:
    - 再用 `ayes-agent-local delete-task --task-id ...`
 7. 如果用户要求调整记忆保存时间：
    - 先用 `ayes-agent-local memory-policy --task-id ...` 查看当前策略
-   - 短期详细记忆默认 7 天、最高 14 天；长期简略记忆默认 14 天、最高 30 天
+   - 短期紧凑明细默认 7 天、最高 14 天；长期简略记忆默认 14 天、最高 30 天
    - 若用户说“不自动清理/永久保留”，用 `--disable-auto-cleanup true`
    - 若用户说“恢复自动清理”，用 `--disable-auto-cleanup false`
 7. 如果用户希望通过小图标手动暂停、恢复或打开数据目录：
-   - 在 macOS 上优先运行 `~/.codex/skills/ayes-local/scripts/ayes-menubar-local`
+   - 在 macOS 上运行 `~/.codex/skills/ayes-local/scripts/ayes-menubar-local`，该入口必须启动原生 `Ayes 菜单栏.app`
    - 若已安装全局入口，也可直接运行 `ayes-menubar`
-   - 菜单栏可进入 ROI 管理、设置、暂停/恢复、任务切换和数据目录
+   - 菜单栏可查看最近任务，进入 ROI 管理、原生桌面设置弹窗、暂停/恢复、任务切换和数据目录
+   - 菜单顶部 `Ayes 监控中` 下方应列出当前正在运行的任务；这些任务入口与最近任务一致，可打开任务目录或进入专属设置
+   - 暂停后菜单顶部必须显示 `Ayes 已暂停`，主动作必须从 `暂停监控` 变成 `继续上次的监控`，并继续保留当前任务入口
+   - “打开当前任务目录”必须进入 `runtime/tasks/<date>/<task_id>/`，最近任务子菜单里的“打开任务目录”也必须进入该任务专属目录
+   - 设置弹窗不跳转 Web；采样间隔可直接在桌面弹窗调整，范围 0.5 秒到 1 小时
+   - 从某个任务右键进入“专属设置”时，设置页样式与普通设置一致，但采样和记忆配置优先写入该任务；保存失败必须明确提示，不能静默回退到全局/默认值
+   - 设置弹窗里的本地大模型增强模型必须来自 `/api/vision/models` 的 Ollama 模型下拉列表，不允许自由输入
+   - 如果用户选择非视觉模型，菜单栏和服务端都必须自动关闭本地大模型增强，并提示“当前选择增强模型为非视觉模型，已关闭本地模型增强。”
+   - 设置弹窗可配置“截图快捷键”，例如 `cmd+shift+9`；只在 Ayes 菜单栏进程运行且当前任务正在监控时生效
+   - 快捷键触发后会把最新真实采样图写入系统剪贴板，并模拟粘贴到当前焦点输入框
    - 但任务编排、证据回读和大部分交互仍应优先通过 agent 完成
+8. 如果用户要求调整采样策略：
+   - 默认采样间隔是 6 秒；截图、OCR、变化检测默认保持一致
+   - 默认采样质量是 `standard`，会把最长边限制到 1920；可选 `original / standard / space_saver / ultra_saver`
+   - 默认不保存事件证据截图；`save_ocr_screenshots=true` 只在用户明确需要逐事件原图证据时开启
+   - `screenshots/latest/` 是短期最新帧缓存，供 `screenshot` 和截图快捷键使用，即使关闭事件证据截图也会保留少量最新帧
+   - `screenshots/evidence/` 是逐事件证据图目录，长期高频开启会快速占用磁盘
+   - 用 `ayes-agent-local sampling` 查看当前任务采样策略
+   - 用 `ayes-agent-local sampling --interval-sec 6` 或 `--interval-ms 6000` 更新当前任务
+   - 用 `ayes-agent-local sampling --quality space_saver --save-ocr-screenshots false` 降低落盘压力
+   - 允许范围是 0.5 秒到 1 小时；更新会作用于当前任务的截图、OCR 和变化检测间隔
 
 更完整的安装、命令和排障细节，按需继续读取：
 
@@ -107,6 +129,8 @@ ayes-agent-local region-bind-contract
 ayes-agent-local status
 ayes-agent-local plan-spec --task-id task_web --prompt "帮我监控 Safari 里的商品价格低于 299 时提醒我" --target-type process --process-name Safari
 ayes-agent-local confirm-plan --plan-file /tmp/task_web.plan.json --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"
+ayes-agent-local activity --task-id task_web --minutes 5
+ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 5
 ayes-agent-local observe-live --task-id task_web --minutes 5 --limit 20
 ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
 ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
@@ -116,6 +140,8 @@ ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 20
 ayes-agent-local memory-policy --task-id task_web
 ayes-agent-local memory-policy --task-id task_web --short-term-days 10 --long-term-days 25 --disable-auto-cleanup true
 ayes-agent-local memory-cleanup --task-id task_web
+ayes-agent-local sampling
+ayes-agent-local sampling --interval-sec 3
 ayes-agent-local logs --task-id task_web --minutes 15
 ayes-agent-local run-once
 ayes-agent-local start
@@ -126,6 +152,7 @@ ayes-agent-local control resume-all
 ayes-agent-local control cleanup-reminder-check
 ayes-agent-local control cleanup-reminder --next-check-after-days 7
 ayes-agent-local vision prepare --requested-by agent_enable_local_vision
+ayes-agent-local vision models
 ayes-agent-local vision enable --provider ollama --model qwen2.5vl:7b --auto-use-when-available true
 ayes-agent-local vision status
 $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
@@ -143,6 +170,7 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 若连本地命令也不可用，再回退到等价的本地 HTTP API：
 
 - `/api/agent/contracts`
+- `/api/activity`
 - `/api/watch/status`
 - `/api/agent/observe-live`
 - `/api/watch/task/{task_id}`
@@ -170,9 +198,9 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 
 如果用户问的是“有没有通知到我”或“为什么没通知”，不要只看普通事件，必须优先结合：
 
-- `observe-live` 中的 `alerts / logs / evidence_status`
+- `alerts` 中的最近告警审计结果
 - 最近告警审计结果
-- 近期日志
+- 近期日志，仅在排障时读取
 - 相关截图与时间范围
 
 不要把 Ayes 当成无边界视觉理解系统。它当前的核心仍是：
@@ -194,9 +222,12 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 
 记忆策略：
 
-- 每个任务都有独立记忆策略和目录，默认在 `$HOME/.codex/skills/ayes-local/runtime/memory/<task_id>/`
-- 短期详细记忆默认保留 7 天，最高 14 天，适合回答最近几分钟、昨天、最近几天的细节问题
-- 长期简略记忆默认保留 14 天，最高 30 天，适合短期详细记忆之外的问题
+- 每个任务都有独立记忆策略和目录，默认在 `$HOME/.codex/skills/ayes-local/runtime/tasks/<date>/<task_id>/`
+- 任务目录下按类型分为 `screenshots/`、`memory/`、`config/`、`logs/`；截图继续细分 `screenshots/latest/` 和 `screenshots/evidence/`
+- `screenshots/latest/` 只保留少量最新真实采样帧和 `web-last-frame.png` 兼容指针，用于截图接口、ROI 标注、快捷键复制粘贴
+- `screenshots/evidence/` 只在 `save_ocr_screenshots=true` 时写入逐事件证据图；默认关闭以避免长时间监控产生海量图片
+- 短期紧凑明细默认保留 7 天，最高 14 天，适合回答最近几分钟、昨天、最近几天的细节问题
+- 长期简略记忆默认保留 14 天，最高 30 天，适合短期紧凑明细之外的问题
 - `disable_auto_cleanup=true` 表示永久保留该任务记忆，不再自动清理
 - 如果用户询问超出短期和长期保留范围的内容，应明确说明记忆已超出保留范围，而不是编造
 
@@ -206,13 +237,21 @@ PYTHONPATH=src python3 -m ayes.cli.agent_tool status
 - 当用户第一次没配好时继续指导
 - 配置一旦满足就继续推进任务，而不是让流程中断
 
-实时观察时的优先证据顺序：
+近期回忆时的优先证据顺序：
 
-1. `observe-live.evidence_status` 判断当前证据是否可用
-2. `observe-live.screenshot` 判断最近截图、目标和 ROI
-3. `observe-live.recent_events` 读取最近事件时间线
-4. `observe-live.memory_items` 读取短期记忆明细
-5. `observe-live.alerts / logs` 排查提醒和后台错误
+1. `activity` 读取轻量近期活动摘要，回答普通“最近在做什么”
+2. `memory-items --limit 5` 默认读取紧凑短期明细，过滤 OCR blocks、bbox、evidence_refs 等重字段
+3. `screenshot` 只在用户要求截图证据时读取
+4. `observe-live` 只在需要完整实时上下文、证据状态或 ROI/截图综合信息时读取
+5. `alerts` 用于通知相关问题
+6. `logs` 只在用户明确要求日志或排障时读取
+
+Token 节省规则：
+
+- 普通回忆问题不得默认读取 `/api/logs` 或 `ayes-agent-local logs`
+- 不得把原始 JSONL、完整 OCR blocks、bbox、evidence_refs 或完整配置快照带入回答上下文
+- `status.health_summary.recent_logs` 只代表聚合计数，不包含原始日志内容；不能用它回答“最近在做什么”
+- 需要细节时优先使用 `memory-items --limit 5`，仍不够且用户明确要原始证据/排障时再用 `memory-items --raw`
 
 补问时的顺序要求：
 

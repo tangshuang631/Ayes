@@ -22,6 +22,7 @@ ayes-agent-local ensure-service
 ayes-agent-local contracts
 ayes-agent-local region-bind-contract
 ayes-agent-local status
+ayes-agent-local activity --minutes 5
 ayes-agent-local observe-live --minutes 5 --limit 20
 ~/.codex/skills/ayes-local/scripts/ayes-menubar-local
 ayes-menubar
@@ -33,8 +34,10 @@ ayes-menubar
 - `contracts`：查看当前 HTTP 接口契约
 - `region-bind-contract`：单独读取正式 `region-bind` 输入输出合同，适合外部选择器、截图标注器或 agent 做结构对齐
 - `status`：查看当前任务、运行状态、最近健康摘要
-- `observe-live`：读取面向 agent 的实时观察上下文，是追问屏幕现状时的优先入口
-- `~/.codex/skills/ayes-local/scripts/ayes-menubar-local`：启动 skill 自带的菜单栏控制面，供用户查看当前任务/目标/ROI/最近命中，手动暂停、恢复、切换任务、进入 ROI 管理、进入设置和打开数据目录
+- `activity`：读取轻量近期活动摘要，是回答“最近在干什么/刚刚发生了什么”的默认入口
+- `observe-live`：读取完整实时观察上下文；仅在需要截图、证据状态、ROI 综合上下文或排障时使用
+- `~/.codex/skills/ayes-local/scripts/ayes-menubar-local`：启动 skill 自带的 macOS 原生菜单栏控制面，供用户查看运行中任务、最近任务，手动暂停、恢复、进入 ROI 管理、打开原生设置弹窗和打开任务专属数据目录
+- 菜单栏设置弹窗可配置截图快捷键，例如 `cmd+shift+9`；该快捷键只在菜单栏进程运行且当前任务正在监控时生效，会把最新采样图复制到剪贴板并模拟粘贴到当前输入框
 - `ayes-menubar`：若系统已安装全局命令，也可作为等价入口
 
 ## 2. 目标与任务
@@ -45,6 +48,9 @@ ayes-agent-local tasks
 ayes-agent-local memory-policy --task-id 2026-06-25__price_watch
 ayes-agent-local memory-policy --task-id 2026-06-25__price_watch --short-term-days 10 --long-term-days 25 --disable-auto-cleanup true
 ayes-agent-local memory-cleanup --task-id 2026-06-25__price_watch
+ayes-agent-local sampling
+ayes-agent-local sampling --interval-sec 6
+ayes-agent-local sampling --quality space_saver --save-ocr-screenshots false
 ayes-agent-local switch-task --task-id 2026-06-25__price_watch
 ayes-agent-local delete-task --task-id 2026-06-25__old_watch
 ayes-agent-local control status
@@ -61,9 +67,13 @@ ayes-agent-local task --task-id task_web
 
 - `targets`：读取当前可选屏幕/进程目标摘要
 - `tasks`：列出已持久化任务，便于恢复、切换和继续追问
-- `memory-policy`：读取或更新单个任务的记忆策略；短期详细记忆默认 7 天、最高 14 天，长期简略记忆默认 14 天、最高 30 天
+- `memory-policy`：读取或更新单个任务的记忆策略；短期紧凑明细默认 7 天、最高 14 天，长期简略记忆默认 14 天、最高 30 天
 - `memory-policy --disable-auto-cleanup true`：让该任务永久保留记忆，不再自动清理；传 `false` 可恢复自动清理
 - `memory-cleanup`：按当前任务策略立即执行一次过期记忆清理
+- `sampling`：读取或更新当前任务采样策略；默认 6 秒，截图 / OCR / 变化检测会同步调整
+- `sampling --interval-sec 0.5-3600`：按秒更新当前任务采样间隔，允许范围 0.5 秒到 1 小时
+- `sampling --quality original|standard|space_saver|ultra_saver`：设置采样图质量；`standard` 最长边 1920，`space_saver` 最长边 1280，`ultra_saver` 最长边 960
+- `sampling --save-ocr-screenshots false`：关闭逐事件证据截图落盘，只保留记忆、事件、日志和少量 `screenshots/latest/` 最新帧；截图快捷键仍可使用 latest 临时帧
 - `switch-task`：把历史任务恢复为当前任务
 - `delete-task`：删除指定任务及其长短期记忆、日志与长期摘要
 - `control status/pause-all/resume-all`：给 agent 和菜单栏共享同一套后台暂停/恢复状态入口
@@ -129,12 +139,15 @@ python3 scripts/smoke_ayes_local_skill.py \
 ## 3. 近期证据链路
 
 ```bash
+ayes-agent-local activity --task-id task_web --minutes 5
+ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 5
 ayes-agent-local observe-live --task-id task_web --minutes 5 --limit 20
 ayes-agent-local screenshot --task-id task_web
 ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
 ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
 ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 20
 ayes-agent-local memory-items --task-id task_web --minutes 10080 --limit 50
+ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 5 --raw
 ayes-agent-local long-term --task-id task_web --hours 336 --limit 50
 ayes-agent-local logs --task-id task_web --minutes 15
 ayes-agent-local run-once
@@ -142,15 +155,26 @@ ayes-agent-local run-once
 
 用途：
 
+- `activity`：轻量近期活动摘要，只返回时间范围、主要内容、短时间线、关键词、置信度和是否有截图证据；不返回 OCR blocks、bbox、evidence_refs、完整结构化观察或日志
 - `screenshot`：读取最近截图路径与 ROI 覆盖信息
 - `recent`：读取最近时间线事件
 - `alerts`：读取最近告警审计结果
-- `memory-items`：读取短期详细记忆事件明细；默认短期保留 7 天，最高 14 天
+- `memory-items`：读取短期记忆明细；CLI 默认返回紧凑结构，过滤 OCR blocks、bbox、evidence_refs 等重字段，默认短期保留 7 天、最高 14 天
+- `memory-items --raw`：显式读取完整原始事件结构，仅用于排障、位置证据或用户明确要求原始信息
 - `long-term`：读取长期简略摘要；默认保留 14 天，最高 30 天
-- `logs`：读取近期日志
+- `logs`：读取近期日志；只在用户明确要求日志或排障时使用，不用于普通回忆问题
 - `run-once`：执行一次即时采样，适合安装后 smoke 或人工核验
 
 `screenshot` 返回的 `path` 应指向最近真实采样帧的唯一文件名；不要假设固定的 `web-last-frame.png` 就是最新图。固定文件仅作为兼容指针存在。
+
+默认查询策略：
+
+- 普通“最近在干什么/刚才发生了什么”只用 `activity`
+- 需要少量细节时用 `memory-items --limit 5`
+- 需要截图证据时用 `screenshot`
+- 需要完整实时上下文时用 `observe-live`
+- 需要排障、日志审计或用户明确说“查日志”时才用 `logs`
+- `status` 只用于运行状态和日志聚合计数，不用于读取活动明细
 
 `observe-live` 聚合返回：
 
@@ -170,14 +194,14 @@ ayes-agent-local run-once
 - 最近有哪些可恢复的历史任务
 - 用户说“继续之前那个任务”时是否应先 `tasks` 再 `switch-task`
 
-追问“现在屏幕怎样”“最近发生了什么”“有没有通知出去”时，应先用 `observe-live`，再按问题补细颗粒命令。
+追问“最近在干什么”“最近发生了什么”时，应先用 `activity`。需要细节时补 `memory-items --limit 5`；需要截图证据时补 `screenshot` 或完整 `observe-live`；需要原始 blocks/bbox 或排障时才用 `memory-items --raw` 或 `logs`。不要为了普通回忆读取原始 JSONL、完整 OCR blocks、bbox、evidence_refs 或完整配置快照。
 
 如果用户问“昨天某个进程在做什么”“最近几天最低价是什么时候”：
 
-- 优先根据问题跨度设置 `memory-items --minutes`，短期详细记忆可查到任务策略允许的天数
-- 如果跨度超出短期详细记忆或需要概览，改用 `long-term --hours` 或 `ask --hours`
+- 优先根据问题跨度设置 `activity --minutes` 或 `memory-items --minutes`，短期紧凑明细可查到任务策略允许的天数
+- 如果跨度超出短期紧凑明细或需要概览，改用 `long-term --hours` 或 `ask --hours`
 - 如果问题超出短期和长期保留策略，应明确说明记忆已超过保留范围
-- 记忆文件按任务和日期切割存放在安装目录 `runtime/memory/<task_id>/short/` 与 `runtime/memory/<task_id>/long/`
+- 记忆文件按任务和日期切割存放在安装目录 `runtime/tasks/<date>/<task_id>/memory/short/` 与 `runtime/tasks/<date>/<task_id>/memory/long/`
 
 ## 3.1 本地视觉增强准备与启用
 
@@ -185,6 +209,7 @@ ayes-agent-local run-once
 
 ```bash
 ayes-agent-local vision prepare --requested-by agent_enable_local_vision
+ayes-agent-local vision models
 ayes-agent-local vision enable --provider ollama --model qwen2.5vl:7b --auto-use-when-available true
 ayes-agent-local vision status
 ```
@@ -192,9 +217,11 @@ ayes-agent-local vision status
 说明：
 
 - `vision prepare`：只在显式启用请求下检查 Ollama / 服务 / 默认模型是否就绪
+- `vision models`：读取本地 Ollama 模型列表；每个模型包含 `is_vision_model`，并返回 `default_selected_model`
 - `vision enable`：写入本地视觉增强配置
 - `vision status`：回读当前启用状态
 - 默认模型应使用 `qwen2.5vl:7b`
+- 如果启用时选择了非视觉模型，服务端会强制保存为 `enabled=false` 并返回 warning；菜单栏设置弹窗也会自动取消勾选
 
 ## 4. 提问
 
@@ -212,7 +239,7 @@ ayes-agent-local ask --task-id task_web --hours 24 --question "今天这个进�
 
 说明：
 
-- `minutes` 主要走短期详细链路
+- `minutes` 主要走短期紧凑明细链路
 - `hours` 主要走长期摘要链路
 - 若用户问“最近 xx 小时/昨天/最近几天”，应显式带 `--hours`
 
@@ -262,7 +289,19 @@ ayes-agent-local stop
 macOS 菜单栏图标点击或右键后，用户可进入：
 
 - ROI 管理：基于当前任务目标/最近截图打开工作台标注器，框选多个 ROI、命名、启用/禁用或删除
-- 设置：查看任务列表、近期日志、清理提醒间隔、本地视觉增强和熄屏整屏捕获策略
+- 运行中任务：显示当前正在执行的任务列表，每个任务可打开该任务专属目录或进入专属设置
+- 最近任务：显示最近任务列表，每个任务可打开该任务专属目录或进入专属设置
+- 打开数据目录：有监控任务时进入 `runtime/tasks/<date>/<task_id>/`，不再进入统一 runtime 根目录
+- 设置：原生桌面弹窗，不跳转 Web；可调整采样间隔、采样质量、是否保存事件证据截图、记忆保留策略、自动清理开关、截图快捷键、清理提醒间隔、本地视觉增强和熄屏整屏捕获策略
+- 专属设置保存失败时必须弹出错误提示；保存成功后，任务采样和记忆策略应能从 `runtime/tasks/<date>/<task_id>/config/task-settings.json` 回读
+
+任务目录结构：
+
+- `screenshots/latest/`：少量最近真实采样帧唯一文件名和兼容指针，用于 `screenshot`、ROI 标注和截图快捷键
+- `screenshots/evidence/`：逐事件证据图；默认关闭，只有 `save_ocr_screenshots=true` 时写入
+- `memory/short/` 与 `memory/long/`：按任务和日期切割的短期紧凑明细与长期简略记忆
+- `config/`：任务专属配置
+- `logs/`：任务专属日志导出位置
 
 熄屏策略说明：
 

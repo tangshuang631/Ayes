@@ -3,10 +3,13 @@ from fastapi.testclient import TestClient
 from ayes.api.server import app, state
 from ayes.capture.models import CaptureFrame, CaptureResult
 from ayes.events.factory import build_event
-from ayes.events.models import EventTarget, Observability
+from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region
 from ayes.ocr.models import OCRResult, OCRTextBlock
 from PIL import Image
 from io import BytesIO
+import json
+import os
+from pathlib import Path
 import time
 from uuid import uuid4
 
@@ -88,6 +91,207 @@ def test_status_endpoint_returns_basic_state() -> None:
     assert "has_runner" in payload
     assert "is_running" in payload
     assert "health_summary" in payload
+
+
+def test_load_configured_defaults_sampling_to_six_seconds() -> None:
+    response = client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_default_sampling",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["spec"]["sampling"]["screenshot_interval_ms"] == 6000
+    assert payload["spec"]["sampling"]["ocr_interval_ms"] == 6000
+    assert payload["spec"]["sampling"]["change_detection_interval_ms"] == 6000
+    assert payload["spec"]["sampling"]["quality"] == "standard"
+    assert payload["spec"]["sampling"]["save_ocr_screenshots"] is False
+
+
+def test_control_sampling_updates_current_task_interval_with_bounds() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_sampling_control",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.post("/api/control/sampling", json={"interval_ms": 500})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sampling"]["interval_ms"] == 500
+    assert payload["sampling"]["screenshot_interval_ms"] == 500
+    assert payload["sampling"]["ocr_interval_ms"] == 500
+    assert payload["sampling"]["change_detection_interval_ms"] == 500
+
+    too_fast = client.post("/api/control/sampling", json={"interval_ms": 499})
+    assert too_fast.status_code == 400
+    too_slow = client.post("/api/control/sampling", json={"interval_ms": 3600001})
+    assert too_slow.status_code == 400
+
+
+def test_control_sampling_updates_quality_and_screenshot_persistence() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_sampling_storage_control",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.post(
+        "/api/control/sampling",
+        json={"quality": "space_saver", "save_ocr_screenshots": False},
+    )
+
+    assert response.status_code == 200
+    sampling = response.json()["sampling"]
+    assert sampling["quality"] == "space_saver"
+    assert sampling["quality_max_dimension"] == 1280
+    assert sampling["save_ocr_screenshots"] is False
+
+    invalid = client.post("/api/control/sampling", json={"quality": "huge"})
+    assert invalid.status_code == 400
+
+
+def test_control_sampling_log_stores_change_summary_not_full_sampling_payload() -> None:
+    task_id = f"task_sampling_log_{uuid4().hex}"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": task_id,
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.post(
+        "/api/control/sampling",
+        json={"task_id": task_id, "interval_ms": 9000, "quality": "space_saver", "save_ocr_screenshots": False},
+    )
+
+    assert response.status_code == 200
+    logs = state.sqlite_store.list_logs(task_id=task_id, category="control", limit=10)
+    sampling_log = next(item for item in logs if item["message"] == "任务采样策略已更新")
+    metadata = sampling_log["metadata"]
+    assert "sampling" not in metadata
+    assert metadata["changed_keys"] == ["interval_ms", "quality"]
+    assert metadata["changes"]["interval_ms"]["to"] == 9000
+    assert metadata["changes"]["quality"]["to"] == "space_saver"
+    assert metadata["config_path"].endswith("/config/task-settings.json")
+
+
+def test_task_load_and_app_settings_logs_store_summaries_not_full_configs() -> None:
+    task_id = f"task_slim_logs_{uuid4().hex}"
+    load_response = client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": task_id,
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+            "memory": {
+                "short_term": {"retain_days": 8},
+                "long_term": {"retain_days": 22},
+                "disable_auto_cleanup": True,
+            },
+        },
+    )
+    current_settings = state.get_app_settings()
+    next_cleanup_days = 10 if int(current_settings.get("cleanup_reminder_days") or 7) != 10 else 11
+    next_hotkey = "cmd+shift+8" if current_settings.get("latest_frame_hotkey") != "cmd+shift+8" else "cmd+shift+9"
+    settings_response = client.post(
+        "/api/control/settings",
+        json={"cleanup_reminder_days": next_cleanup_days, "latest_frame_hotkey": next_hotkey},
+    )
+
+    assert load_response.status_code == 200
+    assert settings_response.status_code == 200
+    logs = state.sqlite_store.list_logs(task_id=task_id, category="watch", limit=20)
+    load_log = next(item for item in logs if item["message"] == "监控任务已装载")
+    assert "memory_policy" not in load_log["metadata"]
+    assert load_log["metadata"]["memory_policy_summary"]["short_term_retain_days"] == 8
+    assert load_log["metadata"]["config_path"].endswith("/config/task-settings.json")
+
+    control_logs = state.sqlite_store.list_logs(task_id=task_id, category="control", limit=20)
+    app_log = next(item for item in control_logs if item["message"] == "应用设置已更新")
+    assert "settings" not in app_log["metadata"]
+    assert sorted(app_log["metadata"]["changed_keys"]) == ["cleanup_reminder_days", "latest_frame_hotkey"]
+
+
+def test_control_sampling_updates_requested_task_without_switching_current() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-26_current_task",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-25_background_task",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post("/api/watch/switch-task", json={"task_id": "2026-06-26_current_task"})
+
+    response = client.post(
+        "/api/control/sampling",
+        json={"task_id": "2026-06-25_background_task", "interval_ms": 12000, "quality": "space_saver"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["sampling"]["task_id"] == "2026-06-25_background_task"
+    assert response.json()["sampling"]["interval_ms"] == 12000
+    assert state.current_task_id == "2026-06-26_current_task"
+    current_response = client.get("/api/control/sampling")
+    assert current_response.json()["sampling"]["task_id"] == "2026-06-26_current_task"
+    target_response = client.get("/api/control/sampling", params={"task_id": "2026-06-25_background_task"})
+    assert target_response.json()["sampling"]["interval_ms"] == 12000
+
+
+def test_task_specific_settings_are_persisted_to_config_snapshot() -> None:
+    task_id = "2026-06-26_task_specific_settings"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": task_id,
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.post(
+        "/api/control/sampling",
+        json={"task_id": task_id, "interval_ms": 9000, "quality": "ultra_saver", "save_ocr_screenshots": False},
+    )
+
+    assert response.status_code == 200
+    settings_response = client.get("/api/control/task-settings", params={"task_id": task_id})
+    assert settings_response.status_code == 200
+    assert settings_response.json()["settings"]["sampling"]["interval_ms"] == 9000
+    config_path = Path(settings_response.json()["settings"]["task_paths"]["config_dir"]) / "task-settings.json"
+    assert config_path.exists()
+    config_payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert config_payload["sampling"]["screenshot_interval_ms"] == 9000
+    assert config_payload["sampling"]["quality"] == "ultra_saver"
 
 
 def test_observe_live_endpoint_returns_agent_ready_context() -> None:
@@ -933,6 +1137,72 @@ def test_screenshot_endpoint_returns_active_regions_overlay() -> None:
     assert payload["capture_timestamp"] is not None
 
 
+def test_screenshot_endpoint_keeps_latest_frame_when_evidence_persistence_disabled() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_screenshot_latest_without_evidence",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1000,
+                "ocr_interval_ms": 1000,
+                "change_detection_interval_ms": 1000,
+                "save_ocr_screenshots": False,
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    assert state.current_runner is not None
+    state.current_runner.capture = FakeCapture()
+    client.post("/api/watch/run-once")
+
+    response = client.get("/api/screenshot")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["path"]
+    assert "/screenshots/latest/" in payload["path"]
+    latest_path = state.runtime_dir / payload["path"].removeprefix("/runtime/")
+    assert latest_path.exists()
+
+
+def test_screenshot_endpoint_prunes_latest_frames_to_small_cache() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_screenshot_latest_prune",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1000,
+                "ocr_interval_ms": 1000,
+                "change_detection_interval_ms": 1000,
+                "save_ocr_screenshots": False,
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    assert state.current_runner is not None
+    state.current_runner.capture = FakeCapture()
+
+    latest_dir = Path(state.current_task_paths(task_id="task_screenshot_latest_prune")["latest_dir"])
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(8):
+        path = latest_dir / f"latest-frame-old-{index}.png"
+        path.write_bytes(b"old")
+        ts = time.time() - 20 + index
+        path.touch()
+        path.chmod(0o644)
+        os.utime(path, (ts, ts))
+
+    client.post("/api/watch/run-once")
+    client.get("/api/screenshot")
+
+    assert len(list(latest_dir.glob("latest-frame-*.png"))) <= 5
+    assert (latest_dir / "web-last-frame.png").exists()
+
+
 def test_memory_items_endpoint_returns_recent_event_items() -> None:
     client.post("/api/watch/load-screen")
     client.post("/api/watch/run-once")
@@ -949,6 +1219,492 @@ def test_memory_items_endpoint_returns_recent_event_items() -> None:
         assert "preview_overlay" in payload["items"][0]
 
 
+def test_activity_endpoint_returns_compact_recent_activity_without_heavy_fields() -> None:
+    task_id = f"task_activity_{uuid4().hex}"
+    now = time.time()
+    event = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now - 30,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.91,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="正在查看 Codex 中 Ayes 的 activity 轻量接口实现",
+    )
+    event = event.__class__(
+        **{
+            **event.__dict__,
+            "region": Region(region_id="main", name="主内容区", x_norm=0.2, y_norm=0.2, w_norm=0.6, h_norm=0.6),
+            "text": EventText(
+                ocr_text="Codex Ayes activity memory-items compact",
+                normalized_text="codex ayes activity memory-items compact",
+                blocks=[
+                    EventTextBlock(
+                        text="activity",
+                        confidence=0.95,
+                        bbox=[1, 2, 3, 4],
+                        rect_norm={"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4},
+                    )
+                ],
+            ),
+            "visual": EventVisual(
+                summary="代码编辑器",
+                attributes={"structured_observation": {"screen": "code", "attention": {"primary": True}}},
+                provider="ollama",
+            ),
+            "evidence_refs": ["/tmp/heavy-frame.png"],
+            "tags": ["codex", "activity"],
+        }
+    )
+    state.sqlite_store.insert_event(event)
+
+    response = client.get("/api/activity", params={"task_id": task_id, "minutes": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == task_id
+    assert payload["time_scope"]["minutes"] == 5
+    assert "Codex" in payload["primary_summary"]
+    assert payload["has_screenshot_evidence"] in {True, False}
+    assert payload["needs_detail_followup"] in {True, False}
+    assert payload["timeline"]
+    assert payload["keywords"]
+    encoded = json.dumps(payload, ensure_ascii=False)
+    assert "blocks" not in encoded
+    assert "bbox" not in encoded
+    assert "evidence_refs" not in encoded
+    assert "structured_observation" not in encoded
+    assert "logs" not in encoded
+
+
+def test_activity_primary_summary_prioritizes_main_content_and_filters_noisy_ocr() -> None:
+    task_id = f"task_activity_quality_{uuid4().hex}"
+    now = time.time()
+    noisy = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.24,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="0OCg0, KIkIl\ufffd8YeSJX",
+    )
+    noisy = noisy.__class__(
+        **{
+            **noisy.__dict__,
+            "region": Region(region_id="auto_bottom_bar", name="自动底部栏"),
+            "text": EventText(ocr_text="0OCg0, KIkIl\ufffd8YeSJX", normalized_text="0ocg0 kikil\ufffd8yesjx"),
+            "visual": EventVisual(
+                summary="OCR vision | 字符 18 | 块 2 | 平均置信度 0.30",
+                attributes={"text_quality_score": 0.12, "text_quality_noisy": True, "attention": {"primary": False, "weight": 0.28}},
+            ),
+        }
+    )
+    main = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now - 1,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="Codex 正在编辑 Ayes OCR 抗噪优化",
+    )
+    main = main.__class__(
+        **{
+            **main.__dict__,
+            "region": Region(region_id="auto_center_main", name="自动主内容区"),
+            "text": EventText(ocr_text="Codex 正在编辑 Ayes OCR 抗噪优化", normalized_text="codex 正在编辑 ayes ocr 抗噪优化"),
+            "visual": EventVisual(
+                summary="OCR vision | 字符 24 | 块 3 | 平均置信度 0.91",
+                attributes={"text_quality_score": 0.88, "text_quality_noisy": False, "attention": {"primary": True, "weight": 1.0}},
+            ),
+        }
+    )
+    edge_alert = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now - 2,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.82,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="右侧栏出现错误提示",
+    )
+    edge_alert = edge_alert.__class__(
+        **{
+            **edge_alert.__dict__,
+            "region": Region(region_id="auto_right_panel", name="自动右侧栏"),
+            "text": EventText(ocr_text="错误提示", normalized_text="错误提示"),
+            "visual": EventVisual(attributes={"text_quality_score": 0.76, "text_quality_noisy": False, "attention": {"primary": False, "weight": 0.32}}),
+        }
+    )
+    state.sqlite_store.insert_event(noisy)
+    state.sqlite_store.insert_event(main)
+    state.sqlite_store.insert_event(edge_alert)
+
+    response = client.get("/api/activity", params={"task_id": task_id, "minutes": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "Codex 正在编辑 Ayes OCR 抗噪优化" in payload["primary_summary"]
+    assert "右侧栏出现错误提示" in payload["primary_summary"]
+    assert "0OCg0" not in payload["primary_summary"]
+    assert any("0OCg0" in item["summary"] for item in payload["timeline"])
+
+
+def test_activity_primary_summary_prefers_visual_summary_over_low_quality_primary_ocr() -> None:
+    task_id = f"task_activity_visual_quality_{uuid4().hex}"
+    now = time.time()
+    noisy_primary = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.49,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="KlklltsYeSJx O*¥$*¥LtM text_rwlltyJcor",
+    )
+    noisy_primary = noisy_primary.__class__(
+        **{
+            **noisy_primary.__dict__,
+            "region": Region(region_id="auto_center_main", name="自动主内容区"),
+            "text": EventText(ocr_text="KlklltsYeSJx O*¥$*¥LtM text_rwlltyJcor", normalized_text="klklltsyesjx o*¥$*¥ltm text_rwlltyjcor"),
+            "visual": EventVisual(attributes={"text_quality_score": 0.49, "text_quality_noisy": False, "attention": {"primary": True, "weight": 1.0}}),
+        }
+    )
+    vision_decision = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now + 1,
+        source="vision",
+        event_type="vision_triggered",
+        priority="medium",
+        confidence=0.82,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="视觉增强已触发: ocr_low_quality",
+    )
+    vision_decision = vision_decision.__class__(
+        **{
+            **vision_decision.__dict__,
+            "region": Region(region_id="auto_center_main", name="自动主内容区"),
+            "visual": EventVisual(attributes={"attention": {"primary": True, "weight": 1.0}}),
+        }
+    )
+    visual_summary = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now + 2,
+        source="tagger",
+        event_type="visual_summary",
+        priority="medium",
+        confidence=0.68,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="图中显示 Codex 正在编辑 Ayes OCR 抗噪优化代码",
+    )
+    visual_summary = visual_summary.__class__(
+        **{
+            **visual_summary.__dict__,
+            "region": Region(region_id="auto_center_main", name="自动主内容区"),
+            "visual": EventVisual(attributes={"attention": {"primary": True, "weight": 1.0}}),
+            "tags": ["vision", "ollama"],
+        }
+    )
+    state.sqlite_store.insert_event(noisy_primary)
+    state.sqlite_store.insert_event(vision_decision)
+    state.sqlite_store.insert_event(visual_summary)
+
+    response = client.get("/api/activity", params={"task_id": task_id, "minutes": 5})
+
+    assert response.status_code == 200
+    primary = response.json()["primary_summary"]
+    assert "图中显示 Codex 正在编辑 Ayes OCR 抗噪优化代码" in primary
+    assert "KlklltsYeSJx" not in primary
+    assert "视觉增强已触发" not in primary
+
+
+def test_activity_primary_summary_demotes_medium_quality_ocr_when_primary_visual_exists() -> None:
+    task_id = f"task_activity_visual_demote_{uuid4().hex}"
+    now = time.time()
+    medium_noise = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.58,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="Qwm*_SummaryffSf*A8 OCR vision | 字符 68 | 块 7",
+    )
+    medium_noise = medium_noise.__class__(
+        **{
+            **medium_noise.__dict__,
+            "region": Region(region_id="auto_center_main", name="自动主内容区"),
+            "text": EventText(
+                ocr_text="Qwm*_SummaryffSf*A8 OCR vision | 字符 68 | 块 7",
+                normalized_text="qwm summaryffsfa8 ocr vision 字符 68 块 7",
+            ),
+            "visual": EventVisual(
+                summary="OCR vision | 字符 68 | 块 7 | 平均置信度 0.58",
+                attributes={"text_quality_score": 0.5827, "text_quality_noisy": False, "attention": {"primary": True, "weight": 1.0}},
+            ),
+        }
+    )
+    visual_summary = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now + 1,
+        source="tagger",
+        event_type="visual_summary",
+        priority="medium",
+        confidence=0.74,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="该区域显示 Codex 正在编辑 Ayes 设置和 OCR 摘要代码。",
+    )
+    visual_summary = visual_summary.__class__(
+        **{
+            **visual_summary.__dict__,
+            "region": Region(region_id="auto_center_main", name="自动主内容区"),
+            "visual": EventVisual(attributes={"attention": {"primary": True, "weight": 1.0}, "vision_model": "qwen2.5vl:7b"}),
+            "tags": ["vision", "ollama"],
+        }
+    )
+    state.sqlite_store.insert_event(medium_noise)
+    state.sqlite_store.insert_event(visual_summary)
+
+    response = client.get("/api/activity", params={"task_id": task_id, "minutes": 5})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "该区域显示 Codex 正在编辑 Ayes 设置和 OCR 摘要代码" in payload["primary_summary"]
+    assert "Qwm*_Summary" not in payload["primary_summary"]
+    assert not any("Qwm" in keyword for keyword in payload["keywords"])
+    assert any("Qwm*_Summary" in item["summary"] for item in payload["timeline"])
+
+
+def test_activity_and_ask_do_not_query_raw_logs(monkeypatch) -> None:
+    task_id = f"task_no_log_query_{uuid4().hex}"
+    event = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=time.time(),
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="普通回忆问题只查记忆事件",
+    )
+    state.sqlite_store.insert_event(event)
+
+    def fail_list_logs(*args, **kwargs):
+        raise AssertionError("normal recall must not query raw logs")
+
+    monkeypatch.setattr(state.sqlite_store, "list_logs", fail_list_logs)
+
+    activity_response = client.get("/api/activity", params={"task_id": task_id, "minutes": 5})
+    ask_response = client.get("/api/ask", params={"task_id": task_id, "minutes": 5, "question": "最近发生了什么"})
+
+    assert activity_response.status_code == 200
+    assert ask_response.status_code == 200
+
+
+def test_status_uses_log_summary_without_loading_raw_log_payloads(monkeypatch) -> None:
+    client.post("/api/watch/load-screen")
+
+    def fail_list_logs(*args, **kwargs):
+        raise AssertionError("status must not load raw log payloads")
+
+    monkeypatch.setattr(state.sqlite_store, "list_logs", fail_list_logs)
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    recent_logs = response.json()["health_summary"]["recent_logs"]
+    assert "error_count" in recent_logs
+    assert "warn_count" in recent_logs
+
+
+def test_memory_items_compact_filters_heavy_event_fields() -> None:
+    task_id = f"task_memory_compact_{uuid4().hex}"
+    event = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=time.time(),
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.88,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="Apifox 登录页与 Chrome 标签页",
+    )
+    event = event.__class__(
+        **{
+            **event.__dict__,
+            "region": Region(region_id="main", name="主内容区"),
+            "text": EventText(
+                ocr_text="Apifox Chrome 登录",
+                normalized_text="apifox chrome login",
+                blocks=[EventTextBlock(text="Apifox", confidence=0.92, bbox=[1, 2, 3, 4])],
+            ),
+            "visual": EventVisual(attributes={"structured_observation": {"main": "Apifox"}}),
+            "evidence_refs": ["/tmp/frame.png"],
+            "tags": ["Apifox", "Chrome"],
+        }
+    )
+    state.sqlite_store.insert_event(event)
+
+    response = client.get("/api/memory/items", params={"task_id": task_id, "minutes": 5, "limit": 5, "compact": True})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["compact"] is True
+    assert payload["items"]
+    item = payload["items"][0]
+    assert item["summary"] == "Apifox 登录页与 Chrome 标签页"
+    assert item["region_name"] == "主内容区"
+    assert item["keywords"]
+    encoded = json.dumps(item, ensure_ascii=False)
+    assert "blocks" not in encoded
+    assert "bbox" not in encoded
+    assert "evidence_refs" not in encoded
+    assert "structured_observation" not in encoded
+
+
+def test_memory_items_compact_filters_keywords_from_low_quality_ocr() -> None:
+    task_id = f"task_memory_compact_noise_{uuid4().hex}"
+    event = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=time.time(),
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.38,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="OCR 低质量文本已降权 (vision)",
+    )
+    event = event.__class__(
+        **{
+            **event.__dict__,
+            "region": Region(region_id="auto_center_main", name="自动主内容区"),
+            "text": EventText(
+                ocr_text="Qwm*_SummaryffSf*A8 KIkIl\ufffd8YeSJX",
+                normalized_text="qwm summaryffsfa8 kikil\ufffd8yesjx",
+                blocks=[EventTextBlock(text="KIkIl\ufffd8YeSJX", confidence=0.2, bbox=[1, 2, 3, 4])],
+            ),
+            "visual": EventVisual(attributes={"text_quality_score": 0.31, "text_quality_noisy": True}),
+            "tags": ["ocr", "vision"],
+        }
+    )
+    state.sqlite_store.insert_event(event)
+
+    response = client.get("/api/memory/items", params={"task_id": task_id, "minutes": 5, "limit": 5, "compact": True})
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["keywords"] == ["ocr", "vision", "低质量文本已降权"]
+    assert not any("Qwm" in keyword or "KIkIl" in keyword for keyword in item["keywords"])
+
+
+def test_memory_items_compact_filters_keywords_from_medium_quality_gibberish_summary() -> None:
+    task_id = f"task_memory_compact_medium_noise_{uuid4().hex}"
+    event = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=time.time(),
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.5,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="10ffl 125 4Ert5E A*¢cRN¢\ufffdk5\ufffd\ufffd MY\ufffd",
+    )
+    event = event.__class__(
+        **{
+            **event.__dict__,
+            "region": Region(region_id="auto_center_main", name="自动主内容区"),
+            "text": EventText(ocr_text="10ffl 125 4Ert5E A*¢cRN¢\ufffdk5\ufffd\ufffd MY\ufffd", normalized_text="10ffl 125 4ert5e acrn k5 my"),
+            "visual": EventVisual(attributes={"text_quality_score": 0.5014, "text_quality_noisy": False}),
+            "tags": ["ocr", "vision"],
+        }
+    )
+    state.sqlite_store.insert_event(event)
+
+    response = client.get("/api/memory/items", params={"task_id": task_id, "minutes": 5, "limit": 5, "compact": True})
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["keywords"] == ["ocr", "vision"]
+
+
+def test_task_memory_file_store_compact_short_event_omits_redundant_task_fields() -> None:
+    task_id = f"task_memory_file_compact_{uuid4().hex}"
+    event = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=time.time(),
+        source="vision",
+        event_type="vision_skipped",
+        priority="medium",
+        confidence=0.76,
+        target=EventTarget(type="process", process_name="哔哩哔哩"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="视觉增强已跳过: non_primary_attention_region",
+    )
+    event = event.__class__(
+        **{
+            **event.__dict__,
+            "region": Region(region_id="auto_top_bar", name="自动顶部栏"),
+            "visual": EventVisual(
+                summary="视觉增强已跳过: non_primary_attention_region",
+                attributes={"attention": {"primary": False, "weight": 0.38}},
+            ),
+            "tags": ["vision", "vision_skipped"],
+        }
+    )
+
+    path = state.memory_file_store.append_short_event(event)
+
+    assert not path.exists()
+
+
 def test_targets_endpoint_exposes_preview_and_collapse_metadata() -> None:
     response = client.get("/api/targets")
     assert response.status_code == 200
@@ -962,18 +1718,23 @@ def test_targets_endpoint_exposes_preview_and_collapse_metadata() -> None:
 
 def test_vision_models_endpoint_returns_availability_shape() -> None:
     from ayes.api import server
+    state.update_vision_enhancement_settings(enabled=False, provider="ollama", model="qwen2.5vl:7b")
 
     class FakeOllamaService:
-        def status_report(self):
+        def status_report(self, *, default_model="qwen2.5vl:7b", selected_model=None):
             return {
                 "provider": "ollama",
                 "binary_available": True,
-                "service_reachable": False,
-                "available": False,
-                "default_model": "qwen2.5vl:7b",
-                "default_model_installed": False,
-                "items": [],
-                "recommended_action": "start_service",
+                "service_reachable": True,
+                "available": True,
+                "default_model": default_model,
+                "default_model_installed": True,
+                "default_selected_model": selected_model or "qwen2.5vl:7b",
+                "items": [
+                    {"name": "qwen2.5vl:7b", "is_vision_model": True},
+                    {"name": "qwen2.5:7b", "is_vision_model": False},
+                ],
+                "recommended_action": "ready",
             }
 
     original = server.ollama_service
@@ -985,13 +1746,99 @@ def test_vision_models_endpoint_returns_availability_shape() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["available"] is False
+    assert payload["available"] is True
     assert payload["binary_available"] is True
-    assert payload["service_reachable"] is False
+    assert payload["service_reachable"] is True
     assert payload["default_model"] == "qwen2.5vl:7b"
-    assert payload["default_model_installed"] is False
-    assert payload["recommended_action"] == "start_service"
+    assert payload["default_model_installed"] is True
+    assert payload["recommended_action"] == "ready"
     assert "items" in payload
+    assert payload["items"][0]["is_vision_model"] is True
+    assert payload["items"][1]["is_vision_model"] is False
+    assert payload["default_selected_model"] == "qwen2.5vl:7b"
+
+
+def test_vision_settings_disables_non_vision_model_with_warning() -> None:
+    from ayes.api import server
+
+    class FakeOllamaService:
+        def status_report(self, *, default_model="qwen2.5vl:7b", selected_model=None):
+            return {
+                "provider": "ollama",
+                "binary_available": True,
+                "service_reachable": True,
+                "available": True,
+                "default_model": default_model,
+                "default_model_installed": True,
+                "default_selected_model": "qwen2.5vl:7b",
+                "items": [
+                    {"name": "qwen2.5vl:7b", "is_vision_model": True},
+                    {"name": "qwen2.5:7b", "is_vision_model": False},
+                ],
+                "recommended_action": "ready",
+            }
+
+    original = server.ollama_service
+    server.ollama_service = FakeOllamaService()
+    try:
+        response = client.post(
+            "/api/vision/settings",
+            json={
+                "enabled": True,
+                "provider": "ollama",
+                "model": "qwen2.5:7b",
+                "auto_use_when_available": True,
+            },
+        )
+    finally:
+        server.ollama_service = original
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["vision_settings"]["enabled"] is False
+    assert payload["vision_settings"]["model"] == "qwen2.5:7b"
+    assert "非视觉模型" in payload["warning"]
+
+
+def test_vision_settings_disables_unknown_non_vision_model_with_warning() -> None:
+    from ayes.api import server
+
+    class FakeOllamaService:
+        def status_report(self, *, default_model="qwen2.5vl:7b", selected_model=None):
+            return {
+                "provider": "ollama",
+                "binary_available": True,
+                "service_reachable": True,
+                "available": True,
+                "default_model": default_model,
+                "default_model_installed": False,
+                "default_selected_model": "qwen2.5vl:7b",
+                "items": [
+                    {"name": "qwen2.5vl:7b", "is_vision_model": True},
+                ],
+                "recommended_action": "ready",
+            }
+
+    original = server.ollama_service
+    server.ollama_service = FakeOllamaService()
+    try:
+        response = client.post(
+            "/api/vision/settings",
+            json={
+                "enabled": True,
+                "provider": "ollama",
+                "model": "llama3.1:8b",
+                "auto_use_when_available": True,
+            },
+        )
+    finally:
+        server.ollama_service = original
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["vision_settings"]["enabled"] is False
+    assert payload["vision_settings"]["model"] == "llama3.1:8b"
+    assert "非视觉模型" in payload["warning"]
 
 
 def test_vision_settings_endpoint_persists_agent_visible_state() -> None:

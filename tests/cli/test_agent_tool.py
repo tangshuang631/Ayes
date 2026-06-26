@@ -1,5 +1,7 @@
 from ayes.cli import agent_tool
 import json
+import os
+from pathlib import Path
 
 
 def test_agent_tool_ensure_service_uses_local_helper(monkeypatch, capsys) -> None:
@@ -215,6 +217,27 @@ def test_agent_tool_observe_live_builds_expected_path(monkeypatch, capsys) -> No
     assert '"schema_version": "1.0"' in capsys.readouterr().out
 
 
+def test_agent_tool_activity_builds_expected_path(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["base_url"] = base_url
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"task_id": "task_demo", "primary_summary": "最近在写 activity"}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["activity", "--task-id", "task_demo", "--minutes", "7"])
+
+    assert exit_code == 0
+    assert recorded["base_url"] == "http://127.0.0.1:8770"
+    assert recorded["path"] == "/api/activity?task_id=task_demo&minutes=7"
+    assert recorded["method"] == "GET"
+    assert recorded["payload"] is None
+    assert '"primary_summary": "最近在写 activity"' in capsys.readouterr().out
+
+
 def test_agent_tool_alerts_builds_expected_path(monkeypatch, capsys) -> None:
     recorded = {}
 
@@ -233,6 +256,57 @@ def test_agent_tool_alerts_builds_expected_path(monkeypatch, capsys) -> None:
     assert recorded["method"] == "GET"
     assert recorded["payload"] is None
     assert '"count": 0' in capsys.readouterr().out
+
+
+def test_agent_tool_memory_items_compact_builds_expected_path(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["base_url"] = base_url
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"task_id": "task_demo", "compact": True, "items": []}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["memory-items", "--task-id", "task_demo", "--minutes", "5", "--limit", "5", "--compact"])
+
+    assert exit_code == 0
+    assert recorded["base_url"] == "http://127.0.0.1:8770"
+    assert recorded["path"] == "/api/memory/items?task_id=task_demo&minutes=5&limit=5&compact=True"
+    assert recorded["method"] == "GET"
+    assert recorded["payload"] is None
+    assert '"compact": true' in capsys.readouterr().out
+
+
+def test_agent_tool_memory_items_defaults_to_compact(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        return {"task_id": "task_demo", "compact": True, "items": []}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["memory-items", "--task-id", "task_demo", "--minutes", "5", "--limit", "5"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/memory/items?task_id=task_demo&minutes=5&limit=5&compact=True"
+    assert '"compact": true' in capsys.readouterr().out
+
+
+def test_agent_tool_memory_items_raw_disables_compact(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        return {"task_id": "task_demo", "compact": False, "items": []}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["memory-items", "--task-id", "task_demo", "--minutes", "5", "--limit", "5", "--raw"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/memory/items?task_id=task_demo&minutes=5&limit=5&compact=False"
+    assert '"compact": false' in capsys.readouterr().out
 
 
 def test_agent_tool_control_pause_all_posts_expected_path(monkeypatch, capsys) -> None:
@@ -464,6 +538,179 @@ def test_agent_tool_start_ensures_menubar_by_default(monkeypatch, capsys) -> Non
     ]
     payload = json.loads(capsys.readouterr().out)
     assert payload["menubar"]["status"] == "started"
+
+
+def test_build_menubar_app_bundle_uses_openable_app_layout(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    executable = app_path / "Contents" / "MacOS" / "AyesMenubar"
+    source = app_path / "Contents" / "MacOS" / "AyesMenubar.m"
+    plist = app_path / "Contents" / "Info.plist"
+    assert app_path.name == "Ayes 菜单栏.app"
+    assert executable.exists()
+    assert os.access(executable, os.X_OK)
+    assert source.exists()
+    assert "LSUIElement" in plist.read_text(encoding="utf-8")
+    assert "NSStatusBar" in source.read_text(encoding="utf-8")
+    assert "/api/control/pause-all" in source.read_text(encoding="utf-8")
+    assert "设置..." in source.read_text(encoding="utf-8")
+    assert "openSettings:" in source.read_text(encoding="utf-8")
+    assert "/api/control/sampling" in source.read_text(encoding="utf-8")
+    assert "postJsonSync" in source.read_text(encoding="utf-8")
+    assert "addTaskSubmenuWithTask:" in source.read_text(encoding="utf-8")
+    assert "/api/control/task-settings" in source.read_text(encoding="utf-8")
+
+
+def test_build_menubar_settings_uses_ollama_model_dropdown(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert "/api/vision/models" in source
+    assert "NSPopUpButton *visionPopup" in source
+    assert "is_vision_model" in source
+    assert "当前选择增强模型为非视觉模型，已关闭本地模型增强。" in source
+    assert "visionField" not in source
+
+
+def test_build_menubar_settings_does_not_overwrite_popup_model_metadata(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert "[[visionPopup lastItem] setRepresentedObject:model];" in source
+    assert "[visionPopup setRepresentedObject:visionCheckbox];" not in source
+    assert "[visionCheckbox setRepresentedObject:visionPopup];" not in source
+
+
+def test_build_menubar_settings_posts_explicit_json_booleans(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert '@"save_ocr_screenshots": saveCheckbox.state == NSControlStateValueOn ? @YES : @NO' in source
+    assert '@"save_ocr_screenshots": @(saveCheckbox.state == NSControlStateValueOn)' not in source
+
+
+def test_build_menubar_native_host_prioritizes_paused_state(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert 'BOOL paused = [self statusBoolForKey:@"is_paused"];' in source
+    assert 'paused ? @"Ayes 已暂停" : (running ? @"Ayes 监控中" : @"Ayes 未监控")' in source
+    assert 'paused ? @"继续上次的监控" : (running ? @"暂停监控" : @"继续上次的监控")' in source
+    assert 'paused ? @selector(resume:) : (running ? @selector(pause:) : @selector(resume:))' in source
+    assert 'paused ? @"◐" : (running ? @"◉" : @"○")' in source
+
+
+def test_build_menubar_native_host_formats_task_target_titles(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert "- (NSString *)titleForTask:(NSDictionary *)task" in source
+    assert "- (NSArray *)titleBitsForTarget:(NSDictionary *)target" in source
+    assert '@"全屏监控"' in source
+    assert '@"进程监控"' in source
+    assert '@"窗口监控"' in source
+    assert 'NSString *taskTitle = [self titleForTask:task];' in source
+    assert "[self addTaskSubmenuWithTask:currentTask toMenu:self.menu];" in source
+    assert "[self addTaskSubmenuWithTask:task toMenu:self.menu];" in source
+    assert "addTaskSubmenuWithTaskId:taskId" not in source
+
+
+def test_build_menubar_global_settings_does_not_target_current_task_sampling(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert 'BOOL isTaskSpecificSettings = taskId != nil && [taskId length] > 0;' in source
+    assert "当前为全局设置；不会覆盖任务专属采样和记忆配置。" in source
+    task_specific_block = source[source.index("if (isTaskSpecificSettings) {") : source.index('NSDictionary *settingsResult = [self postJsonSync:@{')]
+    assert '[next setObject:resolvedTaskId forKey:@"task_id"];' in task_specific_block
+    assert 'toPath:@"/api/control/sampling"' in task_specific_block
+
+
+def test_build_menubar_global_settings_title_never_uses_current_task_id(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert 'NSString *resolvedTaskId = isTaskSpecificSettings ? taskId : @"";' in source
+    assert 'alert.messageText = isTaskSpecificSettings ? [@"Ayes 设置 · " stringByAppendingString:resolvedTaskId] : @"Ayes 设置";' in source
+    assert 'NSString *resolvedTaskId = taskId ?: [settings objectForKey:@"task_id"] ?: [sampling objectForKey:@"task_id"];' not in source
+
+
+def test_build_menubar_pause_resume_refresh_after_sync_post(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert '- (NSDictionary *)postPathSync:(NSString *)path {' in source
+    assert '[self postPathSync:@"/api/control/pause-all"];' in source
+    assert '[self postPathSync:@"/api/control/resume-all"];' in source
+    assert '[self postPath:@"/api/control/pause-all"]; self.statusItem.button.title = @"◐"; [self refreshStatus:nil];' not in source
+    assert '[self postPath:@"/api/control/resume-all"]; self.statusItem.button.title = @"◉"; [self refreshStatus:nil];' not in source
+
+
+def test_menubar_pid_reuse_rejects_python_fallback(monkeypatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = "/usr/bin/python3 -m ayes.cli.menubar\n"
+
+    monkeypatch.setattr(agent_tool.subprocess, "run", lambda *args, **kwargs: Result())
+
+    assert agent_tool._is_native_menubar_pid(12345) is False
+
+
+def test_build_menubar_settings_activates_app_before_modal(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert "[NSApp activateIgnoringOtherApps:YES];" in source
 
 
 def test_agent_tool_load_spec_posts_minimal_payload(monkeypatch, capsys) -> None:
