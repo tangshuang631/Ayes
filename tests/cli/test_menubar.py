@@ -202,6 +202,17 @@ def test_native_menubar_source_exposes_roi_tree_and_task_start_actions() -> None
     assert "/api/tasks/\" stringByAppendingFormat:@\"%@/roi\"" in source
 
 
+def test_native_menubar_source_explicitly_pops_menu_on_click() -> None:
+    source = agent_tool._build_native_menubar_source(
+        base_url="http://127.0.0.1:8770",
+        runtime_dir=Path("/tmp/ayes-runtime"),
+    )
+
+    assert "@selector(showMenu:)" in source
+    assert "sendActionOn:" in source
+    assert "popUpStatusItemMenu:self.menu" in source
+
+
 def test_python_menubar_uses_continue_last_monitor_label() -> None:
     source = menubar_app.__file__
     assert source is not None

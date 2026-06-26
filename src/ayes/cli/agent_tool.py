@@ -92,6 +92,9 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     self.runtimeDir = @"{runtime_dir_literal}";
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+    self.statusItem.button.target = self;
+    self.statusItem.button.action = @selector(showMenu:);
+    [self.statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
     [self refreshStatus:nil];
     NSMenu *menu = [[NSMenu alloc] init];
     self.menu = menu;
@@ -220,6 +223,10 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     self.statusItem.button.title = paused ? @"◐" : (running ? @"◉" : @"○");
     self.statusItem.button.toolTip = paused ? @"Ayes 已暂停" : (running ? @"Ayes 正在监控" : @"Ayes 未在监控");
     [self rebuildMenu];
+}}
+- (void)showMenu:(id)sender {{
+    [self refreshStatus:nil];
+    [self.statusItem popUpStatusItemMenu:self.menu];
 }}
 - (void)pause:(id)sender {{ [self postPathSync:@"/api/control/pause-all"]; [self refreshStatus:nil]; }}
 - (void)resume:(id)sender {{ [self postPathSync:@"/api/control/resume-all"]; [self refreshStatus:nil]; }}
