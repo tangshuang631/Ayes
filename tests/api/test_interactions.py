@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from ayes.api.server import app, state
 from ayes.capture.models import CaptureFrame
@@ -69,13 +70,271 @@ def test_control_status_pause_and_resume_flow() -> None:
     assert resume_payload["status"]["pause_reason"] is None
 
 
-def test_control_open_data_dir_returns_runtime_paths() -> None:
+def test_control_open_data_dir_returns_current_task_paths() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-26_screen_monitor",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
     response = client.get("/api/control/open-data-dir")
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["data_dir"].endswith("/runtime")
+    assert payload["data_dir"].endswith("/runtime/tasks/2026-06-26/2026-06-26_screen_monitor")
+    assert payload["screenshots_dir"].endswith("/screenshots")
+    assert payload["memory_dir"].endswith("/memory")
+    assert payload["config_dir"].endswith("/config")
     assert payload["archive_dir"].endswith("/runtime/archive")
+
+
+def test_control_open_data_dir_accepts_task_id() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-26_screen_monitor",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-25_other_monitor",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.get("/api/control/open-data-dir", params={"task_id": "2026-06-26_screen_monitor"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == "2026-06-26_screen_monitor"
+    assert payload["task_dir"].endswith("/runtime/tasks/2026-06-26/2026-06-26_screen_monitor")
+
+
+def test_control_open_data_dir_exposes_roi_task_directory() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-26_process_monitor_Chrome__roi_price",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "roi": {"parent_task_id": "2026-06-26_process_monitor_Chrome", "roi_name": "价格监控"},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.get("/api/control/open-data-dir", params={"task_id": "2026-06-26_process_monitor_Chrome__roi_price"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_dir"].endswith("/runtime/tasks/2026-06-26/2026-06-26_process_monitor_Chrome/roi/2026-06-26_process_monitor_Chrome__roi_price")
+    assert payload["roi_dir"].endswith("/runtime/tasks/2026-06-26/2026-06-26_process_monitor_Chrome/roi/2026-06-26_process_monitor_Chrome__roi_price")
+
+
+def test_task_logs_are_written_to_task_directory() -> None:
+    task_id = "2026-06-26_task_log_files"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": task_id,
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.get("/api/control/open-data-dir", params={"task_id": task_id})
+
+    assert response.status_code == 200
+    logs_dir = response.json()["logs_dir"]
+    log_files = list(Path(logs_dir).glob("*.log.jsonl"))
+    assert log_files
+    assert "监控任务已装载" in log_files[-1].read_text(encoding="utf-8")
+
+
+def test_task_list_includes_roi_child_tasks_when_present() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-26_process_monitor_Chrome",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-26_process_monitor_Chrome__roi_price",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "roi": {
+                "parent_task_id": "2026-06-26_process_monitor_Chrome",
+                "roi_name": "价格监控",
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.get("/api/tasks")
+
+    assert response.status_code == 200
+    payload = response.json()
+    roi_task = next(item for item in payload["items"] if item["task_id"] == "2026-06-26_process_monitor_Chrome__roi_price")
+    assert roi_task["spec"]["roi"]["parent_task_id"] == "2026-06-26_process_monitor_Chrome"
+    assert roi_task["spec"]["roi"]["roi_name"] == "价格监控"
+
+
+def test_status_exposes_task_tree_with_roi_children() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-26_process_monitor_Chrome",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "2026-06-26_process_monitor_Chrome__roi_price",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "roi": {
+                "parent_task_id": "2026-06-26_process_monitor_Chrome",
+                "roi_name": "价格监控",
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.get("/api/status")
+
+    assert response.status_code == 200
+    tree = response.json()["task_context"]["task_tree"]
+    parent = next(item for item in tree if item["task_id"] == "2026-06-26_process_monitor_Chrome")
+    assert any(child["task_id"] == "2026-06-26_process_monitor_Chrome__roi_price" for child in parent["children"])
+
+
+def test_task_roi_api_creates_named_roi_child_task_with_independent_directory() -> None:
+    parent_task_id = "2026-06-26_process_monitor_Chrome_roi_api"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": parent_task_id,
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.post(
+        f"/api/tasks/{parent_task_id}/roi",
+        json={
+            "roi_name": "价格监控",
+            "region": {
+                "region_id": "roi_price",
+                "name": "价格监控",
+                "x": 10,
+                "y": 20,
+                "w": 300,
+                "h": 120,
+                "coordinate_space": "target",
+            },
+            "enabled": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["roi"]["parent_task_id"] == parent_task_id
+    assert payload["roi"]["roi_name"] == "价格监控"
+    assert payload["roi"]["enabled"] is True
+    assert payload["task"]["task_id"].startswith(f"{parent_task_id}__roi_")
+    assert payload["task_paths"]["task_dir"].endswith(f"/runtime/tasks/2026-06-26/{parent_task_id}/roi/{payload['task']['task_id']}")
+
+    list_response = client.get(f"/api/tasks/{parent_task_id}/roi")
+    assert list_response.status_code == 200
+    assert any(item["roi_task_id"] == payload["task"]["task_id"] for item in list_response.json()["items"])
+
+
+def test_task_roi_api_patches_enabled_and_name_without_losing_task_spec() -> None:
+    parent_task_id = "2026-06-26_process_monitor_Chrome_roi_patch"
+    create_response = client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": parent_task_id,
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    assert create_response.status_code == 200
+    roi_response = client.post(
+        f"/api/tasks/{parent_task_id}/roi",
+        json={
+            "roi_name": "价格监控",
+            "region": {"region_id": "roi_price", "name": "价格监控", "x": 1, "y": 2, "w": 30, "h": 40},
+        },
+    )
+    roi_task_id = roi_response.json()["task"]["task_id"]
+
+    patch_response = client.patch(
+        f"/api/tasks/{parent_task_id}/roi/{roi_task_id}",
+        json={"roi_name": "主价格区", "enabled": False},
+    )
+
+    assert patch_response.status_code == 200
+    payload = patch_response.json()
+    assert payload["roi"]["roi_name"] == "主价格区"
+    assert payload["roi"]["enabled"] is False
+    task_response = client.get(f"/api/watch/task/{roi_task_id}")
+    assert task_response.json()["spec"]["roi"]["roi_name"] == "主价格区"
+    assert task_response.json()["spec"]["roi"]["enabled"] is False
+
+
+def test_task_alert_api_updates_task_webhook_settings() -> None:
+    task_id = "2026-06-26_alert_task"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": task_id,
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+
+    response = client.post(
+        f"/api/tasks/{task_id}/alert",
+        json={
+            "enabled": True,
+            "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
+            "message_title": "价格提醒",
+            "message_template": "任务 {task_id} 命中：{summary}",
+            "cooldown_sec": 30,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["alert"]["enabled"] is True
+    assert payload["alert"]["webhook_url"].endswith("key=test")
+    assert payload["alert"]["message_title"] == "价格提醒"
+    task_response = client.get(f"/api/watch/task/{task_id}")
+    assert task_response.json()["spec"]["alert"]["enabled"] is True
+    assert task_response.json()["spec"]["alert"]["cooldown_sec"] == 30
 
 
 def test_control_status_exposes_cleanup_reminder_state() -> None:
@@ -103,6 +362,33 @@ def test_control_settings_round_trip_virtual_display_capture_preference() -> Non
     assert payload["settings"]["capture_screen_when_display_sleep"] is True
     assert payload["settings"]["cleanup_reminder_days"] == 5
     assert payload["settings"]["capture_sleep_note"]
+
+
+def test_control_settings_round_trip_latest_frame_hotkey() -> None:
+    response = client.post(
+        "/api/control/settings",
+        json={"latest_frame_hotkey": "cmd+shift+9"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["settings"]["latest_frame_hotkey"] == "cmd+shift+9"
+
+    disabled = client.post(
+        "/api/control/settings",
+        json={"latest_frame_hotkey": ""},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["settings"]["latest_frame_hotkey"] == ""
+
+
+def test_control_settings_rejects_dangerous_latest_frame_hotkey() -> None:
+    response = client.post(
+        "/api/control/settings",
+        json={"latest_frame_hotkey": "cmd+v"},
+    )
+
+    assert response.status_code == 400
 
 
 def test_current_task_regions_can_be_added_and_deleted_interactively() -> None:
@@ -209,6 +495,36 @@ def test_background_watch_persists_latest_captured_frame_to_fresh_screenshot() -
     assert payload["image_height"] == 2
     assert "latest-frame-" in payload["path"]
     assert not payload["path"].endswith("runtime/web-last-frame.png")
+
+
+def test_background_watch_skips_evidence_screenshot_when_persistence_disabled() -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_no_screenshot_persistence",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {"save_ocr_screenshots": False},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    assert state.current_runner is not None
+    state.remember_screenshot(path="runtime/previous.png", width=1, height=1)
+    state.current_runner._last_captured_frame = CaptureFrame(
+        frame_id="frame_background_no_persist",
+        timestamp=time.time(),
+        target_type="screen",
+        target_id="main",
+        width=3,
+        height=2,
+        image_bytes=b"fresh-png-bytes",
+    )
+
+    payload = state.persist_latest_screenshot()
+
+    assert payload is not None
+    assert state.last_screenshot_path is not None
+    assert "latest-frame-" in payload["path"]
 
 
 def test_status_endpoint_marks_when_frontend_exit_can_stop_service() -> None:
@@ -370,7 +686,7 @@ def test_task_lifecycle_list_switch_and_delete_flow() -> None:
     )
     client.post("/api/watch/run-once")
 
-    list_response = client.get("/api/tasks")
+    list_response = client.get("/api/tasks", params={"limit": 500})
     assert list_response.status_code == 200
     tasks_payload = list_response.json()
     assert tasks_payload["count"] >= 2

@@ -251,7 +251,7 @@ v1 正式支持：
 
 - 一秒两张：`screenshot_interval_ms = 500`
 - 一秒五张：`screenshot_interval_ms = 200`
-- 三秒一张：`screenshot_interval_ms = 3000`
+- 六秒一张：`screenshot_interval_ms = 6000`
 
 OCR 频率由 `ocr_interval_ms` 控制。
 

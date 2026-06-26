@@ -101,7 +101,7 @@ def test_collect_smoke_summary_includes_screenshot_and_ask_evidence_fields() -> 
             "lead_evidence": {"event_id": "evt_1", "timestamp": 123.0, "summary": "证据摘要", "location_summary": "左上"},
             "evidence_previews": [{"src": "/runtime/evidence/demo.png"}],
         },
-        "/api/memory/items?task_id=task_demo&minutes=5&limit=20": {
+        "/api/memory/items?task_id=task_demo&minutes=5&limit=20&compact=true": {
             "items": [{"preview_overlay": {"kind": "region"}}]
         },
         "/api/screenshot?task_id=task_demo": {

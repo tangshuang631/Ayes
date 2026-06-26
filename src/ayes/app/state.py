@@ -5,13 +5,23 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import asdict, replace
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ayes.app.runner import WatchRunner
 from ayes.app.paths import runtime_root
+from ayes.app.task_paths import roi_runtime_paths, roi_task_segment, task_runtime_paths
 from ayes.api.contracts import _describe_direction, build_task_payload, describe_location_summary
-from ayes.config.models import TargetRegion, WatchSpec
+from ayes.app.hotkeys import parse_hotkey
+from ayes.config.models import (
+    DEFAULT_SAMPLING_INTERVAL_MS,
+    MAX_SAMPLING_INTERVAL_MS,
+    MIN_SAMPLING_INTERVAL_MS,
+    SAMPLING_QUALITY_MAX_DIMENSIONS,
+    TargetRegion,
+    WatchSpec,
+)
 from ayes.logs.store import LogStore
 from ayes.memory.file_store import TaskMemoryFileStore
 from ayes.memory.long_term import build_long_term_summary
@@ -24,13 +34,14 @@ class AppState:
         self.runtime_dir = runtime_root()
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.sqlite_store = SQLiteStore()
-        self.memory_file_store = TaskMemoryFileStore(runtime_dir=self.runtime_dir)
-        self.log_store = LogStore(sink=self.sqlite_store.insert_log)
+        self.memory_file_store = TaskMemoryFileStore(runtime_dir=self.runtime_dir, task_path_resolver=self._task_paths)
+        self.log_store = LogStore(sink=self._log_sink)
         self.window_discovery = MacOSWindowDiscovery()
         self.current_runner: Optional[WatchRunner] = None
         self.current_spec: Optional[WatchSpec] = None
         self.current_task_id: Optional[str] = None
         self.last_task_id: Optional[str] = None
+        self._task_rois: dict[str, dict[str, Any]] = {}
         self.last_screenshot_path: Optional[str] = None
         self.last_screenshot_width: Optional[int] = None
         self.last_screenshot_height: Optional[int] = None
@@ -51,6 +62,45 @@ class AppState:
         self._ensure_app_settings_defaults()
         self.log_store.write(category="system", level="info", message="Ayes AppState 初始化完成")
 
+    def _normalize_roi(self, roi: Any) -> dict[str, Any]:
+        if not isinstance(roi, dict):
+            return {}
+        normalized = {
+            "parent_task_id": str(roi.get("parent_task_id") or "").strip(),
+            "roi_name": str(roi.get("roi_name") or "").strip(),
+            "enabled": bool(roi.get("enabled", True)),
+        }
+        return {key: value for key, value in normalized.items() if value not in {"", None}}
+
+    def _load_task_spec(self, task_id: str) -> WatchSpec:
+        task = self.sqlite_store.get_task(task_id)
+        if task is None:
+            raise ValueError("任务不存在")
+        return WatchSpec.from_dict(task["spec"])
+
+    def _upsert_task_spec(self, *, task_id: str, spec: WatchSpec, created_at: Optional[float] = None) -> dict:
+        existing = self.sqlite_store.get_task(task_id)
+        task_payload = build_task_payload(task_id=task_id, spec=spec)
+        self.sqlite_store.upsert_task(
+            task_id=task_id,
+            mode=task_payload["mode"],
+            target=task_payload["target"],
+            spec=task_payload["spec"],
+            created_at=float(created_at if created_at is not None else ((existing or {}).get("created_at") or task_payload["created_at"])),
+        )
+        self._persist_task_config_snapshot(task_id=task_id, spec=spec)
+        if task_id == self.current_task_id:
+            was_running = self.is_background_running()
+            was_paused = self.is_paused()
+            if was_running:
+                self.stop_background_watch()
+            self.set_runner(spec, task_id=task_id)
+            if was_paused:
+                self.pause_all_watches(reason="task_spec_update_restore_pause")
+            if was_running:
+                self.start_background_watch()
+        return self.sqlite_store.get_task(task_id) or task_payload
+
     def _build_task_snapshot(self) -> Optional[dict]:
         if self.current_spec is None:
             return None
@@ -66,6 +116,9 @@ class AppState:
                 "ocr_interval_ms": self.current_spec.sampling.ocr_interval_ms,
                 "change_detection_interval_ms": self.current_spec.sampling.change_detection_interval_ms,
                 "skip_ocr_when_no_change": self.current_spec.sampling.skip_ocr_when_no_change,
+                "quality": self.current_spec.sampling.quality,
+                "quality_max_dimension": self.current_spec.sampling.quality_max_dimension,
+                "save_ocr_screenshots": self.current_spec.sampling.save_ocr_screenshots,
             },
             "vision_enabled": self.current_spec.vision.enabled,
             "vision_model": self.current_spec.vision.model if self.current_spec.vision.enabled else "",
@@ -76,7 +129,154 @@ class AppState:
             "long_term_hours": self.current_spec.memory.long_term.retain_hours,
             "long_term_days": self.current_spec.memory.long_term.retain_days,
             "disable_auto_cleanup": self.current_spec.memory.disable_auto_cleanup,
+            "roi": dict(self.current_spec.roi) if hasattr(self.current_spec, "roi") and isinstance(self.current_spec.roi, dict) else {},
         }
+
+    def _sampling_policy_from_spec(self, *, spec: Optional[WatchSpec], task_id: Optional[str] = None) -> dict:
+        if spec is None:
+            interval_ms = DEFAULT_SAMPLING_INTERVAL_MS
+            return {
+                "has_task": False,
+                "task_id": task_id,
+                "interval_ms": interval_ms,
+                "interval_sec": interval_ms / 1000.0,
+                "screenshot_interval_ms": interval_ms,
+                "ocr_interval_ms": interval_ms,
+                "change_detection_interval_ms": interval_ms,
+                "quality": "standard",
+                "quality_max_dimension": SAMPLING_QUALITY_MAX_DIMENSIONS["standard"],
+                "save_ocr_screenshots": False,
+            }
+        sampling = spec.sampling
+        interval_ms = int(sampling.screenshot_interval_ms)
+        return {
+            "has_task": True,
+            "task_id": task_id,
+            "interval_ms": interval_ms,
+            "interval_sec": interval_ms / 1000.0,
+            "screenshot_interval_ms": int(sampling.screenshot_interval_ms),
+            "ocr_interval_ms": int(sampling.ocr_interval_ms),
+            "change_detection_interval_ms": int(sampling.change_detection_interval_ms),
+            "skip_ocr_when_no_change": bool(sampling.skip_ocr_when_no_change),
+            "quality": sampling.quality,
+            "quality_max_dimension": sampling.quality_max_dimension,
+            "save_ocr_screenshots": bool(sampling.save_ocr_screenshots),
+        }
+
+    def get_current_sampling_policy(self) -> dict:
+        return self.get_sampling_policy(task_id=None)
+
+    def get_sampling_policy(self, *, task_id: Optional[str] = None) -> dict:
+        resolved_task_id = task_id or self.current_task_id
+        if resolved_task_id and resolved_task_id != self.current_task_id:
+            task = self.sqlite_store.get_task(resolved_task_id)
+            if task is None:
+                raise ValueError("任务不存在")
+            return self._sampling_policy_from_spec(spec=WatchSpec.from_dict(task["spec"]), task_id=resolved_task_id)
+        return self._sampling_policy_from_spec(spec=self.current_spec, task_id=self.current_task_id or resolved_task_id)
+
+    def update_sampling_policy(
+        self,
+        *,
+        task_id: Optional[str] = None,
+        interval_ms: object = None,
+        quality: Optional[str] = None,
+        save_ocr_screenshots: Optional[bool] = None,
+    ) -> dict:
+        resolved_task_id = task_id or self.current_task_id
+        if not resolved_task_id:
+            raise ValueError("当前没有已装载监控任务")
+        normalized_interval_ms = None
+        if interval_ms is not None:
+            if isinstance(interval_ms, bool):
+                raise ValueError("采样间隔必须是数字")
+            try:
+                normalized_interval_ms = int(round(float(interval_ms)))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("采样间隔必须是数字") from exc
+            if normalized_interval_ms < MIN_SAMPLING_INTERVAL_MS or normalized_interval_ms > MAX_SAMPLING_INTERVAL_MS:
+                raise ValueError("采样间隔必须在 0.5 秒到 1 小时之间")
+        normalized_quality = None
+        if quality is not None:
+            normalized_quality = str(quality or "").strip()
+            if normalized_quality not in SAMPLING_QUALITY_MAX_DIMENSIONS:
+                raise ValueError("采样质量必须是 original、standard、space_saver 或 ultra_saver")
+        if save_ocr_screenshots is not None and not isinstance(save_ocr_screenshots, bool):
+            raise ValueError("save_ocr_screenshots 必须是布尔值")
+
+        task = self.sqlite_store.get_task(resolved_task_id)
+        target_spec = self.current_spec if resolved_task_id == self.current_task_id else None
+        if target_spec is None and task is not None:
+            target_spec = WatchSpec.from_dict(task["spec"])
+        if target_spec is None:
+            raise ValueError("任务不存在")
+        previous_sampling = self._sampling_policy_from_spec(spec=target_spec, task_id=resolved_task_id)
+
+        update_payload = {}
+        if normalized_interval_ms is not None:
+            update_payload.update(
+                {
+                    "screenshot_interval_ms": normalized_interval_ms,
+                    "ocr_interval_ms": normalized_interval_ms,
+                    "change_detection_interval_ms": normalized_interval_ms,
+                }
+            )
+        if normalized_quality is not None:
+            update_payload["quality"] = normalized_quality
+        if save_ocr_screenshots is not None:
+            update_payload["save_ocr_screenshots"] = save_ocr_screenshots
+        updated_sampling = replace(
+            target_spec.sampling,
+            **update_payload,
+        )
+        updated_spec = replace(target_spec, sampling=updated_sampling)
+        if resolved_task_id == self.current_task_id:
+            was_running = self.is_background_running()
+            was_paused = self.is_paused()
+            if was_running:
+                self.stop_background_watch()
+            self.set_runner(updated_spec, task_id=resolved_task_id)
+            if was_paused:
+                self.pause_all_watches(reason="sampling_update_restore_pause")
+            if was_running:
+                self.start_background_watch()
+        else:
+            task_payload = build_task_payload(task_id=resolved_task_id, spec=updated_spec)
+            self.sqlite_store.upsert_task(
+                task_id=task_payload["task_id"],
+                mode=task_payload["mode"],
+                target=task_payload["target"],
+                spec=task_payload["spec"],
+                created_at=float((task or {}).get("created_at") or task_payload["created_at"]),
+            )
+        self._persist_task_config_snapshot(task_id=resolved_task_id)
+        sampling = self.get_sampling_policy(task_id=resolved_task_id)
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="任务采样策略已更新",
+            task_id=resolved_task_id,
+                metadata=self._build_policy_change_metadata(
+                before=previous_sampling,
+                after=sampling,
+                keys=["interval_ms", "quality", "save_ocr_screenshots"],
+                config_path=self._task_paths(resolved_task_id)["config_dir"] / "task-settings.json",
+            ),
+        )
+        return sampling
+
+    def update_current_sampling_interval(
+        self,
+        *,
+        interval_ms: object = None,
+        quality: Optional[str] = None,
+        save_ocr_screenshots: Optional[bool] = None,
+    ) -> dict:
+        return self.update_sampling_policy(
+            interval_ms=interval_ms,
+            quality=quality,
+            save_ocr_screenshots=save_ocr_screenshots,
+        )
 
     def _prune_expired_long_term_summaries(self, *, task_id: str, now: Optional[float] = None) -> int:
         if self.current_spec is None or not self.current_spec.memory.long_term.enabled:
@@ -104,6 +304,12 @@ class AppState:
         self.sqlite_store.insert_event(event)
         self.memory_file_store.append_short_event(event)
 
+    def _task_paths(self, task_id: str, *, timestamp: Optional[float] = None) -> dict[str, Path]:
+        roi_meta = self.sqlite_store.get_task_roi(task_id)
+        if roi_meta is not None:
+            return roi_runtime_paths(self.runtime_dir, roi_meta["parent_task_id"], task_id, timestamp=timestamp)
+        return task_runtime_paths(self.runtime_dir, task_id, timestamp=timestamp)
+
     def get_task_memory_policy(self, task_id: str) -> dict:
         return self.sqlite_store.get_task_memory_policy(task_id)
 
@@ -127,17 +333,45 @@ class AppState:
             level="info",
             message="任务记忆策略已更新",
             task_id=task_id,
-            metadata={"memory_policy": policy},
+            metadata=self._build_policy_change_metadata(
+                before=current,
+                after=policy,
+                keys=["short_term_retain_days", "long_term_retain_days", "disable_auto_cleanup"],
+                config_path=self._task_paths(task_id)["config_dir"] / "task-settings.json",
+            ),
         )
+        self._persist_task_config_snapshot(task_id=task_id)
         return policy
 
+    def _build_policy_change_metadata(self, *, before: dict, after: dict, keys: list[str], config_path: Path) -> dict:
+        changes = {}
+        for key in keys:
+            before_value = before.get(key)
+            after_value = after.get(key)
+            if before_value != after_value:
+                changes[key] = {"from": before_value, "to": after_value}
+        return {
+            "changed_keys": list(changes.keys()),
+            "changes": changes,
+            "config_path": str(config_path),
+        }
+
+    def _memory_policy_summary(self, policy: dict) -> dict:
+        return {
+            "short_term_retain_days": policy.get("short_term_retain_days"),
+            "long_term_retain_days": policy.get("long_term_retain_days"),
+            "disable_auto_cleanup": policy.get("disable_auto_cleanup"),
+        }
+
     def _ensure_task_memory_policy(self, *, task_id: str, spec: WatchSpec) -> dict:
-        return self.sqlite_store.upsert_task_memory_policy(
+        policy = self.sqlite_store.upsert_task_memory_policy(
             task_id=task_id,
             short_term_retain_days=spec.memory.short_term.retain_days,
             long_term_retain_days=spec.memory.long_term.retain_days,
             disable_auto_cleanup=spec.memory.disable_auto_cleanup,
         )
+        self._persist_task_config_snapshot(task_id=task_id, spec=spec, memory_policy=policy)
+        return policy
 
     def apply_memory_cleanup(self, *, task_id: str, now: Optional[float] = None) -> dict:
         policy = self.get_task_memory_policy(task_id)
@@ -149,13 +383,16 @@ class AppState:
                 "memory_policy": policy,
                 "deleted_events": 0,
                 "deleted_long_term_summaries": 0,
+                "deleted_short_files": 0,
+                "deleted_long_files": 0,
             }
         current_now = now if now is not None else time.time()
         short_cutoff = current_now - (int(policy.get("short_term_retain_days") or 7) * 24 * 60 * 60)
         long_cutoff = current_now - (int(policy.get("long_term_retain_days") or 14) * 24 * 60 * 60)
         deleted_events = self.sqlite_store.delete_events_before(task_id=task_id, cutoff_timestamp=short_cutoff)
         deleted_long = self.sqlite_store.delete_long_term_summaries_before(task_id=task_id, cutoff_timestamp=long_cutoff)
-        if deleted_events or deleted_long:
+        deleted_files = self.memory_file_store.delete_expired_files(task_id=task_id, short_cutoff=short_cutoff, long_cutoff=long_cutoff)
+        if deleted_events or deleted_long or deleted_files["deleted_short_files"] or deleted_files["deleted_long_files"]:
             self.log_store.write(
                 category="control",
                 level="info",
@@ -164,9 +401,11 @@ class AppState:
                 metadata={
                     "deleted_events": deleted_events,
                     "deleted_long_term_summaries": deleted_long,
+                    "deleted_short_files": deleted_files["deleted_short_files"],
+                    "deleted_long_files": deleted_files["deleted_long_files"],
                     "short_cutoff": short_cutoff,
                     "long_cutoff": long_cutoff,
-                    "memory_policy": policy,
+                    "memory_policy_summary": self._memory_policy_summary(policy),
                 },
             )
         return {
@@ -175,6 +414,8 @@ class AppState:
             "memory_policy": policy,
             "deleted_events": deleted_events,
             "deleted_long_term_summaries": deleted_long,
+            "deleted_short_files": deleted_files["deleted_short_files"],
+            "deleted_long_files": deleted_files["deleted_long_files"],
             "short_cutoff": short_cutoff,
             "long_cutoff": long_cutoff,
         }
@@ -189,6 +430,21 @@ class AppState:
             timestamp=payload.get("timestamp"),
         )
 
+    def _log_sink(self, entry) -> None:
+        self.sqlite_store.insert_log(entry)
+        if not entry.task_id:
+            return
+        try:
+            paths = self._task_paths(entry.task_id, timestamp=entry.timestamp)
+            logs_dir = paths["logs_dir"]
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            date_text = time.strftime("%Y-%m-%d", time.localtime(entry.timestamp))
+            log_path = logs_dir / f"{date_text}.log.jsonl"
+            with log_path.open("a", encoding="utf-8") as file:
+                file.write(json.dumps(asdict(entry), ensure_ascii=False, sort_keys=True) + "\n")
+        except OSError:
+            return
+
     def set_runner(self, spec: WatchSpec, task_id: str = "task_web") -> WatchRunner:
         self.current_spec = spec
         self.current_task_id = task_id
@@ -201,7 +457,8 @@ class AppState:
             runtime_dir=self.runtime_dir,
         )
         memory_policy = self._ensure_task_memory_policy(task_id=task_id, spec=spec)
-        task_payload = build_task_payload(task_id=task_id, spec=spec)
+        roi_payload = self._normalize_roi(getattr(spec, "roi", {}))
+        task_payload = build_task_payload(task_id=task_id, spec=spec, extra={"roi": roi_payload} if roi_payload else None)
         self.sqlite_store.upsert_task(
             task_id=task_payload["task_id"],
             mode=task_payload["mode"],
@@ -209,10 +466,208 @@ class AppState:
             spec=task_payload["spec"],
             created_at=task_payload["created_at"],
         )
+        self._persist_task_config_snapshot(task_id=task_id, spec=spec, memory_policy=memory_policy)
+        if roi_payload.get("parent_task_id") and roi_payload.get("roi_name"):
+            self.sqlite_store.upsert_task_roi(
+                roi_task_id=task_id,
+                parent_task_id=str(roi_payload.get("parent_task_id")),
+                roi_name=str(roi_payload.get("roi_name")),
+                enabled=bool(roi_payload.get("enabled", True)),
+                created_at=task_payload["created_at"],
+            )
+        else:
+            existing_roi = self.sqlite_store.get_task_roi(task_id)
+            if existing_roi is not None:
+                self.sqlite_store.upsert_task_roi(
+                    roi_task_id=task_id,
+                    parent_task_id=str(existing_roi["parent_task_id"]),
+                    roi_name=str(existing_roi["roi_name"]),
+                    enabled=bool(existing_roi["enabled"]),
+                    created_at=float(existing_roi["created_at"]),
+                    updated_at=float(existing_roi["updated_at"]),
+                )
         self._last_long_term_summary_at = None
         self._last_long_term_event_index = 0
-        self.log_store.write(category="watch", level="info", message="监控任务已装载", task_id=task_id, metadata={"memory_policy": memory_policy})
+        self.log_store.write(
+            category="watch",
+            level="info",
+            message="监控任务已装载",
+            task_id=task_id,
+            metadata={
+                "mode": spec.mode,
+                "target_type": spec.target.type,
+                "memory_policy_summary": self._memory_policy_summary(memory_policy),
+                "config_path": str(self._task_paths(task_id)["config_dir"] / "task-settings.json"),
+            },
+        )
         return self.current_runner
+
+    def list_task_rois(self, *, parent_task_id: str) -> list[dict]:
+        if self.sqlite_store.get_task(parent_task_id) is None:
+            raise ValueError("任务不存在")
+        items = []
+        for roi in self.sqlite_store.list_task_rois(parent_task_id):
+            payload = dict(roi)
+            task = self.sqlite_store.get_task(str(roi["roi_task_id"]))
+            if task is not None:
+                payload["task"] = task
+                payload["task_paths"] = self.current_task_paths(task_id=str(roi["roi_task_id"]))
+            items.append(payload)
+        return items
+
+    def create_roi_task(
+        self,
+        *,
+        parent_task_id: str,
+        roi_name: str,
+        region_payload: dict,
+        enabled: bool = True,
+        roi_task_id: Optional[str] = None,
+    ) -> dict:
+        parent_task = self.sqlite_store.get_task(parent_task_id)
+        if parent_task is None:
+            raise ValueError("任务不存在")
+        parent_spec = WatchSpec.from_dict(parent_task["spec"])
+        region = TargetRegion.from_dict({**region_payload, "enabled": bool(enabled)})
+        normalized_roi_name = str(roi_name or region.name or "").strip()
+        if not normalized_roi_name:
+            raise ValueError("roi_name 不能为空")
+        child_task_id = str(roi_task_id or roi_task_segment(parent_task_id, normalized_roi_name)).strip()
+        child_target = replace(parent_spec.target, regions=[region])
+        child_spec = replace(
+            parent_spec,
+            target=child_target,
+            roi={
+                "parent_task_id": parent_task_id,
+                "roi_name": normalized_roi_name,
+                "enabled": bool(enabled),
+            },
+        )
+        created_at = time.time()
+        self.sqlite_store.upsert_task_roi(
+            roi_task_id=child_task_id,
+            parent_task_id=parent_task_id,
+            roi_name=normalized_roi_name,
+            enabled=bool(enabled),
+            created_at=created_at,
+        )
+        task = self._upsert_task_spec(task_id=child_task_id, spec=child_spec, created_at=created_at)
+        roi = self.sqlite_store.get_task_roi(child_task_id) or {}
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="ROI 子任务已创建",
+            task_id=child_task_id,
+            metadata={
+                "parent_task_id": parent_task_id,
+                "roi_name": normalized_roi_name,
+                "region_id": region.region_id,
+                "enabled": bool(enabled),
+                "config_path": str(self._task_paths(child_task_id)["config_dir"] / "task-settings.json"),
+            },
+        )
+        return {
+            "roi": roi,
+            "task": task,
+            "task_paths": self.current_task_paths(task_id=child_task_id),
+        }
+
+    def update_roi_task(
+        self,
+        *,
+        parent_task_id: str,
+        roi_task_id: str,
+        roi_name: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        region_payload: Optional[dict] = None,
+    ) -> dict:
+        roi = self.sqlite_store.get_task_roi(roi_task_id)
+        if roi is None or roi.get("parent_task_id") != parent_task_id:
+            raise ValueError("ROI 子任务不存在")
+        task = self.sqlite_store.get_task(roi_task_id)
+        if task is None:
+            raise ValueError("ROI 子任务不存在")
+        spec = WatchSpec.from_dict(task["spec"])
+        next_name = str(roi_name if roi_name is not None else roi.get("roi_name") or "").strip()
+        if not next_name:
+            raise ValueError("roi_name 不能为空")
+        next_enabled = bool(enabled) if enabled is not None else bool(roi.get("enabled", True))
+        regions = list(spec.target.regions)
+        if region_payload is not None:
+            regions = [TargetRegion.from_dict({**region_payload, "enabled": next_enabled})]
+        else:
+            regions = [replace(region, name=next_name, enabled=next_enabled) for region in regions]
+        updated_spec = replace(
+            spec,
+            target=replace(spec.target, regions=regions),
+            roi={
+                "parent_task_id": parent_task_id,
+                "roi_name": next_name,
+                "enabled": next_enabled,
+            },
+        )
+        self.sqlite_store.upsert_task_roi(
+            roi_task_id=roi_task_id,
+            parent_task_id=parent_task_id,
+            roi_name=next_name,
+            enabled=next_enabled,
+            created_at=float(roi.get("created_at") or task.get("created_at") or time.time()),
+        )
+        updated_task = self._upsert_task_spec(task_id=roi_task_id, spec=updated_spec, created_at=float(task.get("created_at") or time.time()))
+        updated_roi = self.sqlite_store.get_task_roi(roi_task_id) or {}
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="ROI 子任务已更新",
+            task_id=roi_task_id,
+            metadata={
+                "parent_task_id": parent_task_id,
+                "changed_keys": [key for key, value in {"roi_name": roi_name, "enabled": enabled, "region": region_payload}.items() if value is not None],
+                "config_path": str(self._task_paths(roi_task_id)["config_dir"] / "task-settings.json"),
+            },
+        )
+        return {
+            "roi": updated_roi,
+            "task": updated_task,
+            "task_paths": self.current_task_paths(task_id=roi_task_id),
+        }
+
+    def update_task_alert(self, *, task_id: str, alert_payload: dict) -> dict:
+        task = self.sqlite_store.get_task(task_id)
+        if task is None:
+            raise ValueError("任务不存在")
+        spec = WatchSpec.from_dict(task["spec"])
+        current = asdict(spec.alert)
+        next_alert_payload = {**current}
+        for key in [
+            "enabled",
+            "channel",
+            "webhook_url_env",
+            "webhook_url",
+            "message_title",
+            "message_template",
+            "priority_threshold",
+            "cooldown_sec",
+            "dedupe_window_sec",
+        ]:
+            if key in alert_payload and alert_payload.get(key) is not None:
+                next_alert_payload[key] = alert_payload.get(key)
+        updated_spec = replace(spec, alert=type(spec.alert).from_dict(next_alert_payload))
+        updated_task = self._upsert_task_spec(task_id=task_id, spec=updated_spec, created_at=float(task.get("created_at") or time.time()))
+        updated_alert = asdict(updated_spec.alert)
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="任务通知配置已更新",
+            task_id=task_id,
+            metadata=self._build_policy_change_metadata(
+                before=current,
+                after=updated_alert,
+                keys=["enabled", "webhook_url", "message_title", "message_template", "cooldown_sec", "dedupe_window_sec"],
+                config_path=self._task_paths(task_id)["config_dir"] / "task-settings.json",
+            ),
+        )
+        return {"alert": updated_alert, "task": updated_task, "task_paths": self.current_task_paths(task_id=task_id)}
 
     def set_region_binding_context(self, context: Optional[dict]) -> None:
         self._last_region_binding_context = context
@@ -295,8 +750,33 @@ class AppState:
             payload["is_current"] = payload["task_id"] == current_task_id
             payload["is_last_active"] = payload["task_id"] == last_task_id
             payload["memory_policy"] = self.get_task_memory_policy(payload["task_id"])
+            roi_meta = self.sqlite_store.get_task_roi(payload["task_id"])
+            if roi_meta is not None:
+                payload["roi"] = roi_meta
+                payload["parent_task_id"] = roi_meta["parent_task_id"]
             normalized.append(payload)
         return normalized
+
+    def _build_task_tree(self, *, limit: int = 100) -> list[dict]:
+        tasks = self.list_tasks(limit=limit)
+        tree: list[dict] = []
+        node_by_id: dict[str, dict] = {}
+        for item in tasks:
+            if item.get("parent_task_id"):
+                continue
+            node = dict(item)
+            node["children"] = []
+            tree.append(node)
+            node_by_id[node["task_id"]] = node
+        for item in tasks:
+            parent_id = item.get("parent_task_id")
+            if not parent_id:
+                continue
+            parent = node_by_id.get(parent_id)
+            if parent is None:
+                continue
+            parent["children"].append(dict(item))
+        return tree
 
     def delete_task(self, task_id: str) -> dict:
         if task_id == self.current_task_id:
@@ -368,20 +848,76 @@ class AppState:
         self.last_screenshot_width = width
         self.last_screenshot_height = height
 
+    def current_task_paths(self, *, task_id: Optional[str] = None) -> dict:
+        task_id = task_id or self.current_task_id or self.last_task_id or "unknown"
+        paths = self._task_paths(task_id)
+        for path in paths.values():
+            path.mkdir(parents=True, exist_ok=True)
+        return {key: str(value) for key, value in paths.items()}
+
+    def task_settings_snapshot(self, *, task_id: Optional[str] = None) -> dict:
+        resolved_task_id = task_id or self.current_task_id or self.last_task_id
+        memory_policy = self.get_task_memory_policy(resolved_task_id) if resolved_task_id else None
+        return {
+            "task_id": resolved_task_id,
+            "is_current": bool(resolved_task_id and resolved_task_id == self.current_task_id),
+            "task_paths": self.current_task_paths(task_id=resolved_task_id) if resolved_task_id else None,
+            "sampling": self.get_sampling_policy(task_id=resolved_task_id) if resolved_task_id else self.get_sampling_policy(),
+            "memory_policy": memory_policy,
+            "app_settings": self.get_app_settings(),
+            "vision_settings": self.get_vision_enhancement_settings(),
+            "tasks": self.list_tasks(limit=10),
+        }
+
+    def _persist_task_config_snapshot(
+        self,
+        *,
+        task_id: str,
+        spec: Optional[WatchSpec] = None,
+        memory_policy: Optional[dict] = None,
+    ) -> Optional[Path]:
+        if not task_id:
+            return None
+        task = self.sqlite_store.get_task(task_id)
+        target_spec = spec
+        if target_spec is None and task is not None:
+            target_spec = WatchSpec.from_dict(task["spec"])
+        if target_spec is None:
+            return None
+        paths = self._task_paths(task_id)
+        config_dir = paths["config_dir"]
+        config_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "task_id": task_id,
+            "updated_at": time.time(),
+            "sampling": asdict(target_spec.sampling),
+            "memory_policy": memory_policy or self.get_task_memory_policy(task_id),
+            "vision": asdict(target_spec.vision),
+            "target": asdict(target_spec.target),
+            "spec": asdict(target_spec),
+        }
+        path = config_dir / "task-settings.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        return path
+
     def persist_latest_screenshot(self) -> Optional[dict]:
         if self.current_runner is None or self.current_runner.last_captured_frame is None:
             return None
         frame = self.current_runner.last_captured_frame
-        latest_dir = self.runtime_dir / "latest"
+        task_id = self.current_task_id or self.last_task_id or "unknown"
+        task_paths = self._task_paths(task_id, timestamp=frame.timestamp)
+        latest_dir = task_paths["latest_dir"]
         latest_dir.mkdir(parents=True, exist_ok=True)
         safe_frame_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(frame.frame_id or "frame"))
         timestamp_ms = int(float(frame.timestamp or time.time()) * 1000)
         screenshot_name = f"latest-frame-{timestamp_ms}-{safe_frame_id}.png"
         screenshot_path = latest_dir / screenshot_name
         screenshot_path.write_bytes(frame.image_bytes)
-        compatibility_path = self.runtime_dir / "web-last-frame.png"
+        compatibility_path = latest_dir / "web-last-frame.png"
         compatibility_path.write_bytes(frame.image_bytes)
-        self.remember_screenshot(path=f"runtime/latest/{screenshot_name}", width=frame.width, height=frame.height)
+        self._cleanup_latest_screenshots(latest_dir=latest_dir, keep_latest_files=5)
+        relative_path = screenshot_path.relative_to(self.runtime_dir).as_posix()
+        self.remember_screenshot(path=f"runtime/{relative_path}", width=frame.width, height=frame.height)
         return {
             "path": str(screenshot_path),
             "compatibility_path": str(compatibility_path),
@@ -389,6 +925,18 @@ class AppState:
             "image_height": frame.height,
             "timestamp": frame.timestamp,
         }
+
+    def _cleanup_latest_screenshots(self, *, latest_dir: Path, keep_latest_files: int) -> None:
+        candidates = sorted(
+            [path for path in latest_dir.glob("latest-frame-*.png") if path.is_file()],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for path in candidates[max(int(keep_latest_files), 1) :]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
     def _prune_frontend_sessions(self) -> None:
         now = time.time()
@@ -535,6 +1083,7 @@ class AppState:
         return {
             "capture_screen_when_display_sleep": False,
             "cleanup_reminder_days": 7,
+            "latest_frame_hotkey": "",
             "capture_sleep_note": "进程或窗口监控优先使用窗口捕获；整屏熄屏监控依赖 macOS 是否仍提供可读显示帧，不可用时会建议切换到进程监控。",
         }
 
@@ -557,6 +1106,7 @@ class AppState:
         *,
         capture_screen_when_display_sleep: Optional[bool] = None,
         cleanup_reminder_days: Optional[int] = None,
+        latest_frame_hotkey: Optional[str] = None,
     ) -> dict:
         current = self.get_app_settings()
         next_payload = dict(current)
@@ -565,13 +1115,18 @@ class AppState:
         if cleanup_reminder_days is not None:
             next_payload["cleanup_reminder_days"] = max(int(cleanup_reminder_days), 1)
             self.update_cleanup_reminder(next_check_after_days=next_payload["cleanup_reminder_days"])
+        if latest_frame_hotkey is not None:
+            parsed_hotkey = parse_hotkey(latest_frame_hotkey)
+            next_payload["latest_frame_hotkey"] = parsed_hotkey.canonical if parsed_hotkey is not None else ""
         self.sqlite_store.upsert_app_settings(next_payload)
+        changed_keys = [key for key in sorted(next_payload.keys()) if current.get(key) != next_payload.get(key)]
+        changes = {key: {"from": current.get(key), "to": next_payload.get(key)} for key in changed_keys}
         self.log_store.write(
             category="control",
             level="info",
             message="应用设置已更新",
             task_id=self.current_task_id or self.last_task_id,
-            metadata={"settings": next_payload},
+            metadata={"changed_keys": changed_keys, "changes": changes},
         )
         return self.get_app_settings()
 
@@ -677,7 +1232,7 @@ class AppState:
                 "recent_logs": {"count": 0, "error_count": 0, "warn_count": 0, "latest_timestamp": None},
             }
         recent_events = self.sqlite_store.query_events(task_id=task_id, minutes=15, limit=200)
-        recent_logs = self.sqlite_store.list_logs(task_id=task_id, since_timestamp=time.time() - (15 * 60), limit=200)
+        recent_logs = self.sqlite_store.summarize_logs(task_id=task_id, since_timestamp=time.time() - (15 * 60))
         last_match = None
         last_alert = None
         for item in recent_events:
@@ -694,18 +1249,6 @@ class AppState:
                     "event_type": item.get("event_type") or "",
                     "timestamp": item.get("timestamp"),
                 }
-        error_count = 0
-        warn_count = 0
-        latest_log_timestamp = None
-        for entry in recent_logs:
-            level = str(entry.get("level") or "").lower()
-            if level == "error":
-                error_count += 1
-            elif level in {"warn", "warning"}:
-                warn_count += 1
-            entry_timestamp = entry.get("timestamp")
-            if entry_timestamp is not None:
-                latest_log_timestamp = entry_timestamp
         latest_memory_timestamp = recent_events[-1].get("timestamp") if recent_events else None
         return {
             "last_match": last_match,
@@ -715,10 +1258,10 @@ class AppState:
                 "latest_timestamp": latest_memory_timestamp,
             },
             "recent_logs": {
-                "count": len(recent_logs),
-                "error_count": error_count,
-                "warn_count": warn_count,
-                "latest_timestamp": latest_log_timestamp,
+                "count": recent_logs["count"],
+                "error_count": recent_logs["error_count"],
+                "warn_count": recent_logs["warn_count"],
+                "latest_timestamp": recent_logs["latest_timestamp"],
             },
         }
 
@@ -793,7 +1336,10 @@ class AppState:
         last_event_at = self.current_runner.last_event_at
         seconds_since_run = round(now - last_run_at, 2) if last_run_at is not None else None
         seconds_since_event = round(now - last_event_at, 2) if last_event_at is not None else None
-        run_interval_sec = max(float(self.current_spec.sampling.screenshot_interval_ms if self.current_spec else 1000) / 1000.0, 0.2)
+        run_interval_sec = max(
+            float(self.current_spec.sampling.screenshot_interval_ms if self.current_spec else DEFAULT_SAMPLING_INTERVAL_MS) / 1000.0,
+            0.2,
+        )
         fresh_threshold = max(run_interval_sec * 3.0, 3.0)
         stale_threshold = max(run_interval_sec * 10.0, 10.0)
         if seconds_since_run is None:
@@ -912,6 +1458,7 @@ class AppState:
                 }
                 for item in self.list_tasks(limit=5)
             ],
+            "task_tree": self._build_task_tree(limit=50),
         }
         return {
             "has_runner": self.current_runner is not None,

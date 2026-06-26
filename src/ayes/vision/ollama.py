@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ayes.vision.models import VisionResult
 
@@ -56,15 +56,24 @@ class OllamaService:
             model_id = parts[1] if len(parts) > 1 else ""
             size = parts[2] if len(parts) > 2 else ""
             modified = " ".join(parts[3:]) if len(parts) > 3 else ""
-            models.append({"name": name, "id": model_id, "size": size, "modified": modified})
+            models.append({"name": name, "id": model_id, "size": size, "modified": modified, "is_vision_model": self.is_vision_model_name(name)})
         return models
 
-    def status_report(self, *, default_model: str = "qwen2.5vl:7b") -> Dict[str, Any]:
+    def status_report(self, *, default_model: str = "qwen2.5vl:7b", selected_model: Optional[str] = None) -> Dict[str, Any]:
         binary_available = self.is_available()
         service_reachable = self.is_service_reachable() if binary_available else False
         items = self.list_models() if service_reachable else []
         installed_names = {str(item.get("name") or "") for item in items}
         default_model_installed = default_model in installed_names
+        selected_model_installed = bool(selected_model and selected_model in installed_names)
+        default_selected_model = ""
+        if selected_model_installed:
+            default_selected_model = str(selected_model)
+        else:
+            for item in items:
+                if item.get("is_vision_model"):
+                    default_selected_model = str(item.get("name") or "")
+                    break
         available = binary_available and service_reachable
         if not binary_available:
             recommended_action = "install_ollama"
@@ -81,9 +90,18 @@ class OllamaService:
             "service_reachable": service_reachable,
             "default_model": default_model,
             "default_model_installed": default_model_installed,
+            "selected_model": selected_model or "",
+            "selected_model_installed": selected_model_installed,
+            "default_selected_model": default_selected_model,
             "items": items,
             "recommended_action": recommended_action,
         }
+
+    @staticmethod
+    def is_vision_model_name(name: str) -> bool:
+        normalized = str(name or "").lower()
+        markers = ["qwen2.5vl", "minicpm-v", "llava", "vision"]
+        return "vl" in normalized or any(marker in normalized for marker in markers)
 
     def generate_vision_summary(
         self,

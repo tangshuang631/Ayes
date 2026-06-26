@@ -139,6 +139,146 @@ def test_agent_tool_memory_cleanup_posts_task_cleanup(monkeypatch, capsys) -> No
     assert '"deleted_events": 2' in capsys.readouterr().out
 
 
+def test_agent_tool_roi_list_reads_parent_roi_endpoint(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"items": [{"roi_task_id": "task_parent__roi_price", "roi_name": "价格监控"}]}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["roi", "list", "--task-id", "task_parent"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/tasks/task_parent/roi"
+    assert recorded["method"] == "GET"
+    assert recorded["payload"] is None
+    assert '"价格监控"' in capsys.readouterr().out
+
+
+def test_agent_tool_roi_paths_url_encode_non_ascii_task_ids(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        return {"items": []}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["roi", "list", "--task-id", "2026-06-26_process_monitor_哔哩哔哩"])
+
+    assert exit_code == 0
+    assert "%E5%93%94%E5%93%A9%E5%93%94%E5%93%A9" in recorded["path"]
+    assert recorded["path"].startswith("/api/tasks/2026-06-26_process_monitor_")
+    assert '"items": []' in capsys.readouterr().out
+
+
+def test_agent_tool_roi_create_posts_named_region_payload(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "ok", "roi": {"roi_name": "价格监控"}}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "roi",
+            "create",
+            "--task-id",
+            "task_parent",
+            "--roi-name",
+            "价格监控",
+            "--region",
+            "roi_price|价格监控|10|20|300|120|target",
+            "--enabled",
+            "true",
+        ]
+    )
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/tasks/task_parent/roi"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"]["roi_name"] == "价格监控"
+    assert recorded["payload"]["enabled"] is True
+    assert recorded["payload"]["region"]["region_id"] == "roi_price"
+    assert recorded["payload"]["region"]["w"] == 300
+    assert '"status": "ok"' in capsys.readouterr().out
+
+
+def test_agent_tool_roi_update_patches_child_roi(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "ok", "roi": payload}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "roi",
+            "update",
+            "--task-id",
+            "task_parent",
+            "--roi-task-id",
+            "task_parent__roi_price",
+            "--roi-name",
+            "主价格区",
+            "--enabled",
+            "false",
+        ]
+    )
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/tasks/task_parent/roi/task_parent__roi_price"
+    assert recorded["method"] == "PATCH"
+    assert recorded["payload"] == {"roi_name": "主价格区", "enabled": False}
+    assert '"enabled": false' in capsys.readouterr().out
+
+
+def test_agent_tool_task_alert_posts_webhook_settings(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "ok", "alert": payload}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "task-alert",
+            "--task-id",
+            "task_parent__roi_price",
+            "--enabled",
+            "true",
+            "--webhook-url",
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
+            "--message-title",
+            "价格提醒",
+            "--message-template",
+            "任务 {task_id} 命中：{summary}",
+            "--cooldown-sec",
+            "30",
+        ]
+    )
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/tasks/task_parent__roi_price/alert"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"]["enabled"] is True
+    assert recorded["payload"]["message_title"] == "价格提醒"
+    assert recorded["payload"]["cooldown_sec"] == 30
+    assert '"价格提醒"' in capsys.readouterr().out
+
+
 def test_agent_tool_switch_task_posts_expected_payload(monkeypatch, capsys) -> None:
     recorded = {}
 
@@ -640,8 +780,8 @@ def test_build_menubar_native_host_formats_task_target_titles(tmp_path: Path) ->
     assert '@"进程监控"' in source
     assert '@"窗口监控"' in source
     assert 'NSString *taskTitle = [self titleForTask:task];' in source
-    assert "[self addTaskSubmenuWithTask:currentTask toMenu:self.menu];" in source
-    assert "[self addTaskSubmenuWithTask:task toMenu:self.menu];" in source
+    assert "[self addTaskSubmenuWithTask:currentTask toMenu:self.menu allTasks:tasks];" in source
+    assert "[self addTaskSubmenuWithTask:task toMenu:self.menu allTasks:tasks];" in source
     assert "addTaskSubmenuWithTaskId:taskId" not in source
 
 

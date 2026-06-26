@@ -14,6 +14,7 @@ from io import BytesIO
 from uuid import uuid4
 
 from ayes.app.paths import runtime_root
+from ayes.app.task_paths import task_runtime_paths
 from ayes.alerting.notifier import WebhookNotifier
 from ayes.capture.models import CaptureFrame, CaptureResult
 from ayes.capture.screen import MacOSScreenCapture
@@ -25,6 +26,7 @@ from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisu
 from ayes.memory.short_term import QueryResult, ShortTermMemoryStore
 from ayes.observation.attention import AttentionRegion, build_default_attention_regions
 from ayes.observation.fusion import build_structured_observation, merge_vision_observation
+from ayes.observation.text_quality import score_ocr_text
 from ayes.ocr.models import ImageInput
 from ayes.ocr.service import OCRService
 from ayes.targets.discovery.macos import MacOSWindowDiscovery
@@ -70,7 +72,7 @@ class WatchRunner:
         self._vision_run_counter: int = 0
         self._last_vision_run_at: Optional[float] = None
         self.runtime_dir = (runtime_dir or runtime_root()).resolve()
-        self._evidence_dir = self.runtime_dir / "evidence"
+        self._evidence_dir = task_runtime_paths(self.runtime_dir, self.task_id)["evidence_dir"]
         self._last_evidence_cleanup_at: Optional[float] = None
         self._last_process_window_signature: Optional[tuple[int, str]] = None
         self._alert_notifier = WebhookNotifier()
@@ -122,6 +124,7 @@ class WatchRunner:
             self._record_event(event)
             return [event]
         frame = capture_result.frame
+        frame = self._apply_sampling_quality(frame)
         self._last_captured_frame = frame
         target_switched_event = self._maybe_build_target_switched_event(now, frame)
         if target_switched_event is not None:
@@ -169,6 +172,10 @@ class WatchRunner:
                 should_run_vision, vision_reasons, vision_blocked_reason = self._evaluate_vision_enhancement(
                     region=region,
                     ocr_char_count=ocr_result.char_count,
+                    ocr_text=ocr_result.full_text,
+                    ocr_avg_confidence=event.visual.attributes.get("ocr_avg_confidence", 0.0),
+                    text_quality_score=event.visual.attributes.get("text_quality_score", 0.0),
+                    text_quality_noisy=event.visual.attributes.get("text_quality_noisy", False),
                     attention=attention,
                 )
                 if vision_reasons or (vision_blocked_reason and vision_blocked_reason != "vision_disabled"):
@@ -420,6 +427,13 @@ class WatchRunner:
         target_frame: Optional[CaptureFrame] = None,
         attention: Optional[AttentionRegion] = None,
     ):
+        block_items = list(blocks or [])
+        avg_confidence = 0.0
+        if block_items:
+            avg_confidence = sum(float(item.confidence) for item in block_items) / len(block_items)
+        elif text:
+            avg_confidence = 0.78
+        text_quality = score_ocr_text(text, avg_confidence=avg_confidence, block_confidences=[item.confidence for item in block_items])
         event = build_event(
             task_id=self.task_id,
             spec_version=self.spec.spec_version,
@@ -428,7 +442,7 @@ class WatchRunner:
             source="ocr",
             event_type="text_change",
             priority="medium",
-            confidence=0.88 if text else 0.55,
+            confidence=round(max(0.2, min(0.95, text_quality.score)), 4) if text else 0.35,
             target=self._event_target_from_frame(target_frame or frame),
             observability=Observability(
                 has_metadata=True,
@@ -437,7 +451,7 @@ class WatchRunner:
                 is_observable_candidate=True,
                 capture_status="ok",
             ),
-            summary=text[:120] if text else f"OCR 未识别到文本 ({provider})",
+            summary=text[:120] if text and not text_quality.is_noisy else (f"OCR 低质量文本已降权 ({provider})" if text else f"OCR 未识别到文本 ({provider})"),
         )
         event_region = self._event_region_from_target_region(region, target_frame or frame)
         evidence_refs = self._write_event_evidence(
@@ -446,7 +460,6 @@ class WatchRunner:
             region_frame=frame,
             region=region,
         )
-        block_items = list(blocks or [])
         event_text_blocks = [
             EventTextBlock(
                 text=item.text,
@@ -460,9 +473,6 @@ class WatchRunner:
             )
             for item in block_items
         ]
-        avg_confidence = 0.0
-        if block_items:
-            avg_confidence = sum(float(item.confidence) for item in block_items) / len(block_items)
         char_count = len((text or "").strip())
         sparse_text = char_count < int(self.spec.vision.ocr_sparse_min_chars or 12)
         event_region = self._event_region_from_target_region(region, target_frame or frame)
@@ -494,6 +504,11 @@ class WatchRunner:
                     "ocr_block_count": len(block_items),
                     "ocr_avg_confidence": round(avg_confidence, 4),
                     "ocr_sparse": sparse_text,
+                    "text_quality_score": text_quality.score,
+                    "text_quality_readable_ratio": text_quality.readable_ratio,
+                    "text_quality_gibberish_ratio": text_quality.gibberish_ratio,
+                    "text_quality_repeated_symbol_ratio": text_quality.repeated_symbol_ratio,
+                    "text_quality_noisy": text_quality.is_noisy,
                     "attention": self._attention_payload(attention) if attention is not None else {},
                     "structured_observation": structured_observation,
                 },
@@ -552,6 +567,33 @@ class WatchRunner:
             height=bottom - top,
             image_bytes=buffer.getvalue(),
             metadata={**frame.metadata, "region_id": region.region_id, "region_name": region.name},
+        )
+
+    def _apply_sampling_quality(self, frame: CaptureFrame) -> CaptureFrame:
+        max_dimension = int(self.spec.sampling.quality_max_dimension)
+        if max_dimension <= 0:
+            return frame
+        longest = max(int(frame.width), int(frame.height))
+        if longest <= max_dimension:
+            return frame
+        image = Image.open(BytesIO(frame.image_bytes))
+        ratio = max_dimension / float(longest)
+        next_width = max(1, int(round(frame.width * ratio)))
+        next_height = max(1, int(round(frame.height * ratio)))
+        resized = image.resize((next_width, next_height), Image.Resampling.LANCZOS)
+        buffer = BytesIO()
+        resized.save(buffer, format="PNG")
+        return replace(
+            frame,
+            width=next_width,
+            height=next_height,
+            image_bytes=buffer.getvalue(),
+            metadata={
+                **(frame.metadata or {}),
+                "sampling_quality": self.spec.sampling.quality,
+                "original_width": frame.width,
+                "original_height": frame.height,
+            },
         )
 
     def _event_region_from_target_region(self, region: Optional[TargetRegion], frame: CaptureFrame) -> Region:
@@ -621,6 +663,10 @@ class WatchRunner:
         *,
         region: Optional[TargetRegion],
         ocr_char_count: int,
+        ocr_text: str = "",
+        ocr_avg_confidence: float = 0.0,
+        text_quality_score: float = 0.0,
+        text_quality_noisy: bool = False,
         attention: Optional[AttentionRegion] = None,
     ):
         if not self.spec.vision.enabled:
@@ -645,10 +691,16 @@ class WatchRunner:
         reasons = []
         if self.spec.vision.trigger_when_ocr_sparse and ocr_char_count < self.spec.vision.ocr_sparse_min_chars:
             reasons.append("ocr_sparse")
+        if self.spec.vision.trigger_when_ocr_sparse and (
+            bool(text_quality_noisy) or float(text_quality_score or 0.0) < 0.42 or float(ocr_avg_confidence or 0.0) < 0.45
+        ):
+            reasons.append("ocr_low_quality")
         if self.spec.vision.trigger_on_visual_regions and region is not None:
             region_name = (region.name or "").lower()
             visual_keywords = ["图", "图表", "图片", "chart", "image", "icon", "按钮"]
-            if any(keyword in region_name for keyword in visual_keywords):
+            if any(keyword in region_name for keyword in visual_keywords) or any(
+                keyword in str(ocr_text or "") for keyword in ["错误", "异常", "弹窗", "登录", "价格", "按钮", "告警"]
+            ):
                 reasons.append("visual_region")
         if self.spec.vision.trigger_on_watch_intent and self.spec.watch_intent.enabled:
             haystack = " ".join(self.spec.watch_intent.queries).lower()
@@ -835,19 +887,27 @@ class WatchRunner:
         region_frame: CaptureFrame,
         region: Optional[TargetRegion],
     ) -> List[str]:
+        if not self.spec.sampling.save_ocr_screenshots:
+            return []
         self._evidence_dir.mkdir(parents=True, exist_ok=True)
         refs: List[str] = []
         stamp = f"{int(target_frame.timestamp * 1000)}_{uuid4().hex[:8]}"
         full_name = f"{event_id}_{stamp}_full.png"
         full_path = self._evidence_dir / full_name
         full_path.write_bytes(target_frame.image_bytes)
-        refs.append(f"runtime/evidence/{full_name}")
+        refs.append(self._evidence_ref_for_path(full_path))
         if region is not None:
             roi_name = f"{event_id}_{stamp}_roi_{region.region_id}.png"
             roi_path = self._evidence_dir / roi_name
             roi_path.write_bytes(region_frame.image_bytes)
-            refs.append(f"runtime/evidence/{roi_name}")
+            refs.append(self._evidence_ref_for_path(roi_path))
         return refs
+
+    def _evidence_ref_for_path(self, path: Path) -> str:
+        try:
+            return f"runtime/{path.relative_to(self.runtime_dir).as_posix()}"
+        except ValueError:
+            return str(path)
 
     def _is_vision_rate_limited(self) -> bool:
         cutoff = (self._last_run_at or time.time()) - 60

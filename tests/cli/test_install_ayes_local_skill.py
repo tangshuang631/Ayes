@@ -32,6 +32,23 @@ def test_build_install_paths_targets_skill_root(tmp_path: Path) -> None:
     assert paths.menubar_wrapper_path == skill_root / "ayes-local" / "scripts" / "ayes-menubar-local"
 
 
+def test_install_skill_preserves_existing_runtime_directory(tmp_path: Path) -> None:
+    repo_root = tmp_path / "Ayes"
+    source_dir = repo_root / "skills" / "final" / "ayes-local"
+    (source_dir / "references").mkdir(parents=True)
+    (source_dir / "SKILL.md").write_text("skill", encoding="utf-8")
+    (source_dir / "references" / "commands.md").write_text("commands", encoding="utf-8")
+    skill_root = tmp_path / ".codex" / "skills"
+    installed_runtime = skill_root / "ayes-local" / "runtime"
+    installed_runtime.mkdir(parents=True)
+    (installed_runtime / "state.db").write_text("keep", encoding="utf-8")
+
+    paths = install_ayes_local_skill.install_skill(repo_root=repo_root, skill_root=skill_root)
+
+    assert (paths.target_skill_dir / "runtime" / "state.db").read_text(encoding="utf-8") == "keep"
+    assert (paths.target_skill_dir / "SKILL.md").read_text(encoding="utf-8") == "skill"
+
+
 def test_final_skill_source_dir_is_stateless_template() -> None:
     source_dir = Path("/Users/apple/Desktop/2026/Ayes/skills/final/ayes-local")
     files = sorted(path.relative_to(source_dir).as_posix() for path in source_dir.rglob("*") if path.is_file())

@@ -35,7 +35,7 @@ def test_load_configured_persists_task_memory_policy_and_exposes_directory() -> 
     assert payload["memory_policy"]["short_term_retain_days"] == 8
     assert payload["memory_policy"]["long_term_retain_days"] == 22
     assert payload["memory_policy"]["disable_auto_cleanup"] is True
-    assert payload["memory_policy"]["memory_dir"].endswith(f"/memory/{task_id}")
+    assert payload["memory_policy"]["memory_dir"].endswith(f"/{task_id}/memory")
 
 
 def test_task_memory_policy_endpoint_updates_per_task_policy() -> None:
@@ -112,12 +112,21 @@ def test_apply_memory_cleanup_deletes_expired_short_and_long_memory() -> None:
         summary="旧长期摘要",
         payload={"summary_id": "lts_old_cleanup", "task_id": task_id, "window_start": 100.0, "window_end": 100.0, "summary": "旧长期摘要", "event_count": 1, "event_ids": ["evt_old"]},
     )
+    old_short_file = state.memory_file_store.short_event_path(task_id=task_id, timestamp=100.0)
+    old_long_file = state.memory_file_store.long_summary_path(task_id=task_id, timestamp=100.0)
+    for path in [old_short_file, old_long_file]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
 
     result = state.apply_memory_cleanup(task_id=task_id, now=31 * 24 * 60 * 60)
 
     assert result["skipped"] is False
     assert result["deleted_events"] >= 1
     assert result["deleted_long_term_summaries"] >= 1
+    assert result["deleted_short_files"] >= 1
+    assert result["deleted_long_files"] >= 1
+    assert not old_short_file.exists()
+    assert not old_long_file.exists()
     assert all(item["summary"] != "旧短期记忆" for item in state.sqlite_store.list_events(task_id=task_id, limit=20))
 
 

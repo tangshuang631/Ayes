@@ -118,7 +118,7 @@ def collect_smoke_summary(
     snippets = request_json_fn(base_url, f"/api/ocr/snippets?task_id={urllib.parse.quote(task_id)}&minutes=5&limit=20")
     logs = request_json_fn(base_url, f"/api/logs?task_id={urllib.parse.quote(task_id)}&minutes=15")
     ask = request_json_fn(base_url, f"/api/ask?task_id={urllib.parse.quote(task_id)}&question={urllib.parse.quote('最近发生了什么')}&minutes=5")
-    memory_items = request_json_fn(base_url, f"/api/memory/items?task_id={urllib.parse.quote(task_id)}&minutes=5&limit=20")
+    memory_items = request_json_fn(base_url, f"/api/memory/items?task_id={urllib.parse.quote(task_id)}&minutes=5&limit=20&compact=true")
     screenshot = request_json_fn(base_url, f"/api/screenshot?task_id={urllib.parse.quote(task_id)}")
 
     timeline_items = timeline.get("items") or []

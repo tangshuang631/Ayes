@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ayes.config.models import DEFAULT_SAMPLING_INTERVAL_MS
+
 
 def build_window_observe_spec(*, window_id: int, output_path: str) -> str:
     payload = {
@@ -15,9 +17,9 @@ def build_window_observe_spec(*, window_id: int, output_path: str) -> str:
             "window_id": window_id,
         },
         "sampling": {
-            "screenshot_interval_ms": 500,
-            "ocr_interval_ms": 500,
-            "change_detection_interval_ms": 500,
+            "screenshot_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+            "ocr_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+            "change_detection_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
             "max_fps": 2,
             "skip_ocr_when_no_change": False,
         },

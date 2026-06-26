@@ -12,10 +12,14 @@ from ayes.app.task_paths import date_from_timestamp, safe_task_segment, task_run
 
 
 class TaskMemoryFileStore:
-    def __init__(self, *, runtime_dir: Path) -> None:
+    def __init__(self, *, runtime_dir: Path, task_path_resolver=None) -> None:
         self.runtime_dir = Path(runtime_dir).resolve()
+        self.task_path_resolver = task_path_resolver
 
     def task_dir(self, task_id: str, *, timestamp: float | None = None) -> Path:
+        if self.task_path_resolver is not None:
+            paths = self.task_path_resolver(task_id, timestamp=timestamp)
+            return Path(paths["memory_dir"])
         return task_runtime_paths(self.runtime_dir, task_id, timestamp=timestamp)["memory_dir"]
 
     def short_event_path(self, *, task_id: str, timestamp: float) -> Path:
@@ -69,7 +73,7 @@ class TaskMemoryFileStore:
 
     def _delete_expired_paths(self, *, root: Path, safe_task_id: str, memory_kind: str, suffix: str, cutoff_timestamp: float) -> int:
         deleted = 0
-        for path in root.glob(f"*/{safe_task_id}/memory/{memory_kind}/*{suffix}"):
+        for path in root.glob(f"**/{safe_task_id}/memory/{memory_kind}/*{suffix}"):
             if not path.is_file():
                 continue
             date_text = path.name.split("-", 3)

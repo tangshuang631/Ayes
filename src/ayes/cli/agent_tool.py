@@ -12,7 +12,7 @@ import subprocess
 import sys
 from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from ayes.app.service_control import default_service_config, ensure_service_started
@@ -498,12 +498,17 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     NSString *mode = [self safeText:[task objectForKey:@"mode"] fallback:@""];
     return [mode length] > 0 ? [NSString stringWithFormat:@"%@ · %@", taskId, mode] : taskId;
 }}
-- (void)addTaskSubmenuWithTask:(NSDictionary *)task toMenu:(NSMenu *)menu {{
+- (void)addTaskSubmenuWithTask:(NSDictionary *)task toMenu:(NSMenu *)menu allTasks:(NSArray *)allTasks {{
     NSString *taskId = [self safeText:[task objectForKey:@"task_id"] fallback:@""];
     if (taskId == nil || [taskId length] == 0) {{ return; }}
     NSString *taskTitle = [self titleForTask:task];
     NSMenuItem *taskItem = [[NSMenuItem alloc] initWithTitle:taskTitle action:nil keyEquivalent:@""];
     NSMenu *submenu = [[NSMenu alloc] init];
+    NSMenuItem *startItem = [[NSMenuItem alloc] initWithTitle:@"启动 / 继续此任务" action:@selector(startTask:) keyEquivalent:@""];
+    [startItem setTarget:self];
+    [startItem setRepresentedObject:taskId];
+    [submenu addItem:startItem];
+    [submenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *openItem = [[NSMenuItem alloc] initWithTitle:@"打开任务目录" action:@selector(openTaskDir:) keyEquivalent:@""];
     [openItem setTarget:self];
     [openItem setRepresentedObject:taskId];
@@ -512,6 +517,50 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [settingsItem setTarget:self];
     [settingsItem setRepresentedObject:taskId];
     [submenu addItem:settingsItem];
+    BOOL isRoiTask = [[self safeText:[task objectForKey:@"parent_task_id"] fallback:@""] length] > 0;
+    if (!isRoiTask) {{
+        NSMenuItem *roiEditorItem = [[NSMenuItem alloc] initWithTitle:@"设定 ROI..." action:@selector(openRoiEditor:) keyEquivalent:@""];
+        [roiEditorItem setTarget:self];
+        [roiEditorItem setRepresentedObject:taskId];
+        [submenu addItem:roiEditorItem];
+        NSMutableArray *children = [NSMutableArray array];
+        if ([allTasks isKindOfClass:[NSArray class]]) {{
+            for (NSDictionary *candidate in allTasks) {{
+                if (![candidate isKindOfClass:[NSDictionary class]]) {{ continue; }}
+                NSString *parentId = [self safeText:[candidate objectForKey:@"parent_task_id"] fallback:@""];
+                if ([parentId isEqualToString:taskId]) {{ [children addObject:candidate]; }}
+            }}
+        }}
+        if ([children count] > 0) {{
+            NSMenuItem *roiRootItem = [[NSMenuItem alloc] initWithTitle:@"ROI 子任务" action:nil keyEquivalent:@""];
+            NSMenu *roiMenu = [[NSMenu alloc] init];
+            for (NSDictionary *child in children) {{
+                NSString *childId = [self safeText:[child objectForKey:@"task_id"] fallback:@""];
+                if ([childId length] == 0) {{ continue; }}
+                NSDictionary *roi = [[child objectForKey:@"roi"] isKindOfClass:[NSDictionary class]] ? [child objectForKey:@"roi"] : @{{}};
+                BOOL enabled = ![[roi objectForKey:@"enabled"] respondsToSelector:@selector(boolValue)] || [[roi objectForKey:@"enabled"] boolValue];
+                NSString *childTitle = [NSString stringWithFormat:@"%@ %@", enabled ? @"✓" : @"○", [self titleForTask:child]];
+                NSMenuItem *childItem = [[NSMenuItem alloc] initWithTitle:childTitle action:nil keyEquivalent:@""];
+                NSMenu *childMenu = [[NSMenu alloc] init];
+                NSMenuItem *childStart = [[NSMenuItem alloc] initWithTitle:@"启动 / 继续此 ROI" action:@selector(startTask:) keyEquivalent:@""];
+                [childStart setTarget:self];
+                [childStart setRepresentedObject:childId];
+                [childMenu addItem:childStart];
+                NSMenuItem *childOpen = [[NSMenuItem alloc] initWithTitle:@"打开 ROI 目录" action:@selector(openTaskDir:) keyEquivalent:@""];
+                [childOpen setTarget:self];
+                [childOpen setRepresentedObject:childId];
+                [childMenu addItem:childOpen];
+                NSMenuItem *childSettings = [[NSMenuItem alloc] initWithTitle:@"专属设置..." action:@selector(openTaskSettings:) keyEquivalent:@""];
+                [childSettings setTarget:self];
+                [childSettings setRepresentedObject:childId];
+                [childMenu addItem:childSettings];
+                [childItem setSubmenu:childMenu];
+                [roiMenu addItem:childItem];
+            }}
+            [roiRootItem setSubmenu:roiMenu];
+            [submenu addItem:roiRootItem];
+        }}
+    }}
     [taskItem setSubmenu:submenu];
     [menu addItem:taskItem];
 }}
@@ -541,7 +590,7 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [title setEnabled:NO];
     [self.menu addItem:title];
     if ((running || paused) && currentTask != nil) {{
-        [self addTaskSubmenuWithTask:currentTask toMenu:self.menu];
+        [self addTaskSubmenuWithTask:currentTask toMenu:self.menu allTasks:tasks];
     }}
     [self.menu addItem:[NSMenuItem separatorItem]];
     [self addItem:@"刷新状态" action:@selector(refreshStatus:) toMenu:self.menu];
@@ -554,7 +603,9 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
         [self.menu addItem:tasksTitle];
         for (NSDictionary *task in tasks) {{
             if (![task isKindOfClass:[NSDictionary class]]) {{ continue; }}
-            [self addTaskSubmenuWithTask:task toMenu:self.menu];
+            NSString *parentId = [self safeText:[task objectForKey:@"parent_task_id"] fallback:@""];
+            if ([parentId length] > 0) {{ continue; }}
+            [self addTaskSubmenuWithTask:task toMenu:self.menu allTasks:tasks];
         }}
         [self.menu addItem:[NSMenuItem separatorItem]];
     }}
@@ -568,6 +619,30 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     NSDictionary *payload = [self jsonForPath:[@"/api/control/open-data-dir?task_id=" stringByAppendingString:encoded]];
     NSString *path = [payload objectForKey:@"task_dir"] ?: [payload objectForKey:@"data_dir"] ?: self.runtimeDir;
     [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path isDirectory:YES]];
+}}
+- (void)startTask:(NSMenuItem *)sender {{
+    NSString *taskId = [sender representedObject];
+    if (taskId == nil || [taskId length] == 0) {{ return; }}
+    NSDictionary *switchResult = [self postJsonSync:@{{@"task_id": taskId}} toPath:@"/api/watch/switch-task"];
+    if ([switchResult objectForKey:@"error"] != nil) {{
+        [self showError:[switchResult objectForKey:@"error"]];
+        return;
+    }}
+    NSDictionary *startResult = [self postPathSync:@"/api/watch/start"];
+    if ([startResult objectForKey:@"error"] != nil) {{
+        [self showError:[startResult objectForKey:@"error"]];
+        return;
+    }}
+    [self refreshStatus:nil];
+}}
+- (void)openRoiEditor:(NSMenuItem *)sender {{
+    NSString *taskId = [sender representedObject];
+    NSString *encoded = [taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+    NSString *roiPath = [@"/api/tasks/" stringByAppendingFormat:@"%@/roi", encoded ?: @""];
+    NSDictionary *payload = [self jsonForPath:roiPath];
+    NSNumber *count = [payload objectForKey:@"count"];
+    NSString *message = [NSString stringWithFormat:@"当前任务 ROI 子任务数：%@\\n可通过 agent 命令创建或修改：ayes-agent-local roi create --task-id %@ --roi-name 名称 --region region_id|名称|x|y|w|h|target", count ?: @0, taskId ?: @""];
+    [self showInfo:message];
 }}
 - (void)openTaskSettings:(NSMenuItem *)sender {{
     NSString *taskId = [sender representedObject];
@@ -616,6 +691,10 @@ def _build_query_path(path: str, **query: Any) -> str:
     if not filtered:
         return path
     return f"{path}?{urlencode(filtered, doseq=True)}"
+
+
+def _path_segment(value: Any) -> str:
+    return quote(str(value or "").strip(), safe="")
 
 
 def _request_json(base_url: str, path: str, *, method: str = "GET", payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -923,6 +1002,28 @@ def _parse_region_binding(raw: str) -> Dict[str, Any]:
     }
 
 
+def _parse_roi_region(raw: str) -> Dict[str, Any]:
+    text = str(raw or "").strip()
+    parts = [item.strip() for item in text.split("|")]
+    if len(parts) != 7:
+        raise RuntimeError("region 必须是 region_id|name|x|y|w|h|coordinate_space")
+    region_id, name, x, y, w, h, coordinate_space = parts
+    if not region_id or not name:
+        raise RuntimeError("region_id 和 name 不能为空")
+    try:
+        return {
+            "region_id": region_id,
+            "name": name,
+            "x": int(x),
+            "y": int(y),
+            "w": int(w),
+            "h": int(h),
+            "coordinate_space": coordinate_space or "target",
+        }
+    except ValueError as exc:
+        raise RuntimeError("region 坐标必须是整数") from exc
+
+
 def _parse_point(raw: str, *, field_name: str) -> Dict[str, int]:
     text = str(raw or "").strip()
     parts = [item.strip() for item in text.split(",")]
@@ -947,6 +1048,31 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("targets", help="读取目标候选摘要")
     tasks_parser = subparsers.add_parser("tasks", help="读取已持久化任务列表")
     tasks_parser.add_argument("--limit", type=int, default=100)
+    roi_parser = subparsers.add_parser("roi", help="读取或修改任务 ROI 子任务")
+    roi_subparsers = roi_parser.add_subparsers(dest="roi_command", required=True)
+    roi_list_parser = roi_subparsers.add_parser("list", help="列出某个主任务下的 ROI 子任务")
+    roi_list_parser.add_argument("--task-id", required=True)
+    roi_create_parser = roi_subparsers.add_parser("create", help="创建命名 ROI 子任务")
+    roi_create_parser.add_argument("--task-id", required=True)
+    roi_create_parser.add_argument("--roi-task-id", default=None)
+    roi_create_parser.add_argument("--roi-name", required=True)
+    roi_create_parser.add_argument("--region", required=True, help="region_id|name|x|y|w|h|coordinate_space")
+    roi_create_parser.add_argument("--enabled", default="true")
+    roi_update_parser = roi_subparsers.add_parser("update", help="更新 ROI 子任务名称、启用状态或区域")
+    roi_update_parser.add_argument("--task-id", required=True)
+    roi_update_parser.add_argument("--roi-task-id", required=True)
+    roi_update_parser.add_argument("--roi-name", default=None)
+    roi_update_parser.add_argument("--region", default=None, help="region_id|name|x|y|w|h|coordinate_space")
+    roi_update_parser.add_argument("--enabled", default=None)
+    task_alert_parser = subparsers.add_parser("task-alert", help="读取或更新任务/ROI 的企业微信 webhook 通知配置")
+    task_alert_parser.add_argument("--task-id", required=True)
+    task_alert_parser.add_argument("--enabled", default=None)
+    task_alert_parser.add_argument("--webhook-url", default=None)
+    task_alert_parser.add_argument("--message-title", default=None)
+    task_alert_parser.add_argument("--message-template", default=None)
+    task_alert_parser.add_argument("--priority-threshold", choices=["low", "medium", "high"], default=None)
+    task_alert_parser.add_argument("--cooldown-sec", type=int, default=None)
+    task_alert_parser.add_argument("--dedupe-window-sec", type=int, default=None)
     memory_policy_parser = subparsers.add_parser("memory-policy", help="读取或更新指定任务的记忆保留策略")
     memory_policy_parser.add_argument("--task-id", required=True)
     memory_policy_parser.add_argument("--short-term-days", type=int, default=None)
@@ -955,6 +1081,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory_cleanup_parser = subparsers.add_parser("memory-cleanup", help="按指定任务策略执行一次记忆清理")
     memory_cleanup_parser.add_argument("--task-id", required=True)
     sampling_parser = subparsers.add_parser("sampling", help="读取或更新当前任务采样策略")
+    sampling_parser.add_argument("--task-id", default=None)
     sampling_parser.add_argument("--interval-sec", type=float, default=None)
     sampling_parser.add_argument("--interval-ms", type=float, default=None)
     sampling_parser.add_argument("--quality", choices=["original", "standard", "space_saver", "ultra_saver"], default=None)
@@ -1120,8 +1247,44 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
     if args.command == "tasks":
         path = _build_query_path("/api/tasks", limit=args.limit)
         return _request_json(base_url, path)
+    if args.command == "roi":
+        encoded_task_id = _path_segment(args.task_id)
+        if args.roi_command == "list":
+            return _request_json(base_url, f"/api/tasks/{encoded_task_id}/roi")
+        if args.roi_command == "create":
+            payload = {
+                "roi_task_id": args.roi_task_id,
+                "roi_name": args.roi_name,
+                "region": _parse_roi_region(args.region),
+                "enabled": _parse_optional_bool(args.enabled),
+            }
+            payload = {key: value for key, value in payload.items() if value is not None}
+            return _request_json(base_url, f"/api/tasks/{encoded_task_id}/roi", method="POST", payload=payload)
+        if args.roi_command == "update":
+            payload = {
+                "roi_name": args.roi_name,
+                "region": _parse_roi_region(args.region) if args.region else None,
+                "enabled": _parse_optional_bool(args.enabled),
+            }
+            payload = {key: value for key, value in payload.items() if value is not None}
+            return _request_json(base_url, f"/api/tasks/{encoded_task_id}/roi/{_path_segment(args.roi_task_id)}", method="PATCH", payload=payload)
+        raise RuntimeError(f"未知 roi 命令: {args.roi_command}")
+    if args.command == "task-alert":
+        payload = {
+            "enabled": _parse_optional_bool(args.enabled),
+            "webhook_url": args.webhook_url,
+            "message_title": args.message_title,
+            "message_template": args.message_template,
+            "priority_threshold": args.priority_threshold,
+            "cooldown_sec": args.cooldown_sec,
+            "dedupe_window_sec": args.dedupe_window_sec,
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        if payload:
+            return _request_json(base_url, f"/api/tasks/{_path_segment(args.task_id)}/alert", method="POST", payload=payload)
+        return _request_json(base_url, f"/api/tasks/{_path_segment(args.task_id)}/alert")
     if args.command == "memory-policy":
-        path = f"/api/tasks/{args.task_id}/memory-policy"
+        path = f"/api/tasks/{_path_segment(args.task_id)}/memory-policy"
         payload = {
             "short_term_retain_days": args.short_term_days,
             "long_term_retain_days": args.long_term_days,
@@ -1132,7 +1295,7 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
             return _request_json(base_url, path, method="POST", payload=payload)
         return _request_json(base_url, path)
     if args.command == "memory-cleanup":
-        return _request_json(base_url, f"/api/tasks/{args.task_id}/memory-cleanup", method="POST", payload={})
+        return _request_json(base_url, f"/api/tasks/{_path_segment(args.task_id)}/memory-cleanup", method="POST", payload={})
     if args.command == "sampling":
         if args.interval_sec is not None and args.interval_ms is not None:
             raise RuntimeError("--interval-sec 和 --interval-ms 只能选择一个")
@@ -1141,6 +1304,8 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
             payload["interval_ms"] = args.interval_sec * 1000
         if args.interval_ms is not None:
             payload["interval_ms"] = args.interval_ms
+        if args.task_id is not None:
+            payload["task_id"] = args.task_id
         if args.quality is not None:
             payload["quality"] = args.quality
         save_ocr_screenshots = _parse_optional_bool(args.save_ocr_screenshots)
@@ -1148,7 +1313,7 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
             payload["save_ocr_screenshots"] = save_ocr_screenshots
         if payload:
             return _request_json(base_url, "/api/control/sampling", method="POST", payload=payload)
-        return _request_json(base_url, "/api/control/sampling")
+        return _request_json(base_url, _build_query_path("/api/control/sampling", task_id=args.task_id))
     if args.command == "plan-spec":
         return _request_json(base_url, "/api/agent/plan-watch-spec", method="POST", payload=_build_plan_spec_payload(args))
     if args.command == "confirm-plan":
@@ -1156,7 +1321,7 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
     if args.command == "switch-task":
         return _request_json(base_url, "/api/watch/switch-task", method="POST", payload={"task_id": args.task_id})
     if args.command == "delete-task":
-        return _request_json(base_url, f"/api/watch/task/{args.task_id}", method="DELETE")
+        return _request_json(base_url, f"/api/watch/task/{_path_segment(args.task_id)}", method="DELETE")
     if args.command == "start":
         result = _request_json(base_url, "/api/watch/start", method="POST", payload={})
         if base_url == DEFAULT_BASE_URL:
@@ -1168,7 +1333,7 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
     if args.command == "stop":
         return _request_json(base_url, "/api/watch/stop", method="POST", payload={})
     if args.command == "task":
-        return _request_json(base_url, f"/api/watch/task/{args.task_id}")
+        return _request_json(base_url, f"/api/watch/task/{_path_segment(args.task_id)}")
     if args.command == "recent":
         path = _build_query_path("/api/timeline/recent", task_id=args.task_id, minutes=args.minutes, limit=args.limit)
         return _request_json(base_url, path)

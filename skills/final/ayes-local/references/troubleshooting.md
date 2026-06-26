@@ -108,7 +108,7 @@ python3 scripts/smoke_ayes_local_skill.py \
 
 修正方式：
 
-- 最近几分钟问题，优先调用 `recent`、`memory-items`、`ask --minutes`
+- 最近几分钟问题，优先调用 `activity`；需要细节时再调用默认紧凑输出的 `memory-items --limit 5`，不要直接读取原始 JSONL
 - 最近几小时问题，优先调用 `ask --hours` 或 `long-term --hours`
 - 回答中必须明确任务、时间范围、关键证据和结论
 
@@ -149,3 +149,38 @@ python3 scripts/smoke_ayes_local_skill.py \
 - 长期摘要保留时长是否覆盖当前问题时间范围
 
 如果只是服务重启，但持久化文件仍在，长期摘要不应默认清零。
+
+## 8. 截图快捷键没有反应
+
+先确认菜单栏控制面正在运行，并检查：
+
+```bash
+tail -n 80 ~/.codex/skills/ayes-local/runtime/ayes-menubar.log
+```
+
+判断方式：
+
+- 看到 `hotkey_registered`：说明快捷键配置已被菜单栏进程读取
+- 按下快捷键后没有 `hotkey_matched`：通常是 macOS 没把全局键盘事件交给菜单栏进程；优先在“系统设置 -> 隐私与安全性 -> 辅助功能”里允许当前 Python / Ayes 菜单栏进程
+- 看到 `hotkey_matched` 但随后 `paste_latest_failed`：说明快捷键进入了 Ayes，但复制或模拟粘贴失败；优先看同一行的 `result` 和 `error`
+- 看到 `paste_latest_completed` 但对话框没有图片：说明图片已进剪贴板并发出了 Cmd+V，焦点可能不在当前对话输入框，或目标应用不接受图片粘贴
+
+菜单栏里“复制并粘贴最新采样图”使用同一条动作链路，适合用来区分快捷键监听失败和复制/粘贴动作失败。
+
+## 9. 长时间监控占用空间或担心 SSD 写入
+
+先查看当前采样策略：
+
+```bash
+ayes-agent-local sampling
+```
+
+长期监控建议：
+
+- 默认采样间隔是 6 秒，已经比高频监控更保守
+- 默认不保存逐事件证据截图；如果之前开启过并且磁盘增长过快，执行 `ayes-agent-local sampling --save-ocr-screenshots false`
+- 关闭后仍会保留少量 `screenshots/latest/` 临时最新帧，截图快捷键和 `/api/screenshot` 不受影响
+- 如果只需要主要语义，执行 `ayes-agent-local sampling --quality space_saver`
+- 如果仍需要逐事件原图证据，才开启 `save_ocr_screenshots=true`，并确认磁盘占用和清理策略可接受
+
+持续写入 PNG 会增加 SSD 写入量。现代 SSD 通常可以承受普通日常写入，但 24 小时高分辨率、高频、多 ROI 监控会明显增加 TBW 消耗和磁盘占用。产品默认应优先使用 `standard` 质量和 6 秒间隔；用户确认需要高精度证据时再使用 `original` 或更短间隔。

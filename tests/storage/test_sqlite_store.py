@@ -182,8 +182,33 @@ def test_sqlite_store_persists_task_memory_policy(tmp_path) -> None:
     assert payload["short_term_retain_days"] == 9
     assert payload["long_term_retain_days"] == 21
     assert payload["disable_auto_cleanup"] is True
-    assert payload["memory_dir"].endswith("/memory/task_policy")
+    assert payload["memory_dir"].endswith("/runtime/tasks/2026-06-26/task_policy/memory")
     assert store.get_task_memory_policy("task_policy") == payload
+
+
+def test_sqlite_store_persists_roi_task_metadata(tmp_path) -> None:
+    store = SQLiteStore(db_path=str(tmp_path / "ayes.db"))
+
+    store.upsert_task(
+        task_id="2026-06-26_process_monitor_Chrome",
+        mode="observe",
+        target={"type": "process", "process_name": "Chrome"},
+        spec={
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "roi": {
+                "parent_task_id": "2026-06-26_process_monitor_Chrome",
+                "roi_name": "价格监控",
+            },
+        },
+        created_at=100.0,
+    )
+
+    task = store.get_task("2026-06-26_process_monitor_Chrome")
+    assert task is not None
+    assert task["spec"]["roi"]["parent_task_id"] == "2026-06-26_process_monitor_Chrome"
+    assert task["spec"]["roi"]["roi_name"] == "价格监控"
 
 
 def test_sqlite_store_rejects_task_memory_policy_over_caps(tmp_path) -> None:

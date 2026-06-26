@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from ayes.app.state import AppState
 from ayes.app.paths import repo_root, runtime_root
 from ayes.api.contracts import (
+    build_activity_payload,
     build_agent_contract_payload,
     build_memory_items_payload,
     build_observe_live_payload,
@@ -24,7 +25,12 @@ from ayes.api.contracts import (
     extract_structured_observation,
 )
 from ayes.cli.spec_builder import build_window_observe_spec
-from ayes.config.models import WatchSpec
+from ayes.config.models import (
+    DEFAULT_SAMPLING_INTERVAL_MS,
+    MAX_SAMPLING_INTERVAL_MS,
+    MIN_SAMPLING_INTERVAL_MS,
+    WatchSpec,
+)
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, TimelineEvent, WatchMatch
 from ayes.memory.short_term import QueryResult
 from ayes.planner.service import WatchSpecPlanner
@@ -112,8 +118,11 @@ def _build_screenshot_payload() -> dict:
 
 
 def _build_ollama_status_payload(*, default_model: str) -> dict:
+    settings = state.get_vision_enhancement_settings()
+    selected_model = str(settings.get("model") or "").strip() or None
+    recommended_default_model = "qwen2.5vl:7b"
     try:
-        return ollama_service.status_report(default_model=default_model)
+        return ollama_service.status_report(default_model=recommended_default_model, selected_model=selected_model or default_model)
     except TypeError:
         return ollama_service.status_report()
 
@@ -344,9 +353,34 @@ def resume_all_watches() -> JSONResponse:
 
 
 @app.get("/api/control/open-data-dir")
-def open_data_dir() -> JSONResponse:
+def open_data_dir(task_id: Optional[str] = None) -> JSONResponse:
     payload = state.control_status()
-    return JSONResponse({"status": "ok", "data_dir": payload["data_dir"], "archive_dir": payload["archive_dir"]})
+    resolved_task_id = task_id or state.current_task_id or state.last_task_id
+    task_paths = state.current_task_paths(task_id=resolved_task_id)
+    return JSONResponse(
+        {
+            "status": "ok",
+            "task_id": resolved_task_id,
+            "data_dir": task_paths["task_dir"],
+            "task_dir": task_paths["task_dir"],
+            "roi_dir": task_paths.get("roi_dir"),
+            "screenshots_dir": task_paths["screenshots_dir"],
+            "evidence_dir": task_paths["evidence_dir"],
+            "memory_dir": task_paths["memory_dir"],
+            "config_dir": task_paths["config_dir"],
+            "logs_dir": task_paths["logs_dir"],
+            "runtime_dir": payload["data_dir"],
+            "archive_dir": payload["archive_dir"],
+        }
+    )
+
+
+@app.get("/api/control/task-settings")
+def get_task_settings(task_id: Optional[str] = None) -> JSONResponse:
+    try:
+        return JSONResponse({"settings": state.task_settings_snapshot(task_id=task_id)})
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
 
 
 @app.post("/api/control/cleanup-reminder")
@@ -373,11 +407,47 @@ def get_control_settings() -> JSONResponse:
 
 @app.post("/api/control/settings")
 def update_control_settings(payload: dict = Body(...)) -> JSONResponse:
-    settings = state.update_app_settings(
-        capture_screen_when_display_sleep=payload.get("capture_screen_when_display_sleep"),
-        cleanup_reminder_days=payload.get("cleanup_reminder_days"),
-    )
+    try:
+        settings = state.update_app_settings(
+            capture_screen_when_display_sleep=payload.get("capture_screen_when_display_sleep"),
+            cleanup_reminder_days=payload.get("cleanup_reminder_days"),
+            latest_frame_hotkey=payload.get("latest_frame_hotkey"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse({"status": "ok", "settings": settings})
+
+
+@app.get("/api/control/sampling")
+def get_control_sampling(task_id: Optional[str] = None) -> JSONResponse:
+    try:
+        sampling = state.get_sampling_policy(task_id=task_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    return JSONResponse(
+        {
+            "sampling": sampling,
+            "limits": {
+                "min_interval_ms": MIN_SAMPLING_INTERVAL_MS,
+                "max_interval_ms": MAX_SAMPLING_INTERVAL_MS,
+                "default_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+            },
+        }
+    )
+
+
+@app.post("/api/control/sampling")
+def update_control_sampling(payload: dict = Body(...)) -> JSONResponse:
+    try:
+        sampling = state.update_sampling_policy(
+            task_id=payload.get("task_id"),
+            interval_ms=payload.get("interval_ms"),
+            quality=payload.get("quality"),
+            save_ocr_screenshots=payload.get("save_ocr_screenshots"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"status": "ok", "sampling": sampling})
 
 
 @app.get("/api/windows")
@@ -410,13 +480,28 @@ def get_vision_settings() -> JSONResponse:
 
 @app.post("/api/vision/settings")
 def update_vision_settings(payload: dict = Body(...)) -> JSONResponse:
+    requested_enabled = bool(payload.get("enabled")) if payload.get("enabled") is not None else None
+    requested_model = str(payload.get("model") or "").strip()
+    warning = None
+    if requested_enabled is True and requested_model:
+        status_payload = _build_ollama_status_payload(default_model=requested_model)
+        matched = next((item for item in status_payload.get("items", []) if str(item.get("name") or "") == requested_model), None)
+        is_known_non_vision_model = matched is not None and not bool(matched.get("is_vision_model"))
+        is_unknown_non_vision_model = matched is None and not OllamaService.is_vision_model_name(requested_model)
+        if is_known_non_vision_model or is_unknown_non_vision_model:
+            payload = dict(payload)
+            payload["enabled"] = False
+            warning = "当前选择增强模型为非视觉模型，已关闭本地模型增强。"
     settings = state.update_vision_enhancement_settings(
         enabled=payload.get("enabled"),
         provider=payload.get("provider"),
         model=payload.get("model"),
         auto_use_when_available=payload.get("auto_use_when_available"),
     )
-    return JSONResponse({"status": "ok", "vision_settings": settings})
+    response_payload = {"status": "ok", "vision_settings": settings}
+    if warning:
+        response_payload["warning"] = warning
+    return JSONResponse(response_payload)
 
 
 @app.post("/api/vision/prepare")
@@ -440,9 +525,9 @@ def load_screen_watch() -> JSONResponse:
             "mode": "observe",
             "target": {"type": "screen", "screen_id": 1},
             "sampling": {
-                "screenshot_interval_ms": 500,
-                "ocr_interval_ms": 500,
-                "change_detection_interval_ms": 500,
+                "screenshot_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+                "ocr_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+                "change_detection_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
                 "max_fps": 2,
                 "skip_ocr_when_no_change": False,
             },
@@ -462,9 +547,9 @@ def load_window_watch(window_id: int) -> JSONResponse:
             "mode": "observe",
             "target": {"type": "window", "window_id": window_id},
             "sampling": {
-                "screenshot_interval_ms": 500,
-                "ocr_interval_ms": 500,
-                "change_detection_interval_ms": 500,
+                "screenshot_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+                "ocr_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+                "change_detection_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
                 "max_fps": 2,
                 "skip_ocr_when_no_change": False,
             },
@@ -490,6 +575,7 @@ def load_configured_watch(payload: dict = Body(...)) -> JSONResponse:
             "watch_intent": payload.get("watch_intent", {}),
             "alert": payload.get("alert", {}),
             "actions": payload.get("actions", {}),
+            "roi": payload.get("roi", {}),
         }
     )
     state.set_runner(spec, task_id=task_id)
@@ -701,17 +787,53 @@ def get_memory_items(
     limit: int = Query(20, ge=1, le=100),
     keyword: Optional[str] = None,
     task_id: Optional[str] = None,
+    compact: bool = False,
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
-        return JSONResponse({"task_id": None, "minutes": minutes, "limit": limit, "count": 0, "items": []})
+        return JSONResponse({"task_id": None, "minutes": minutes, "limit": limit, "compact": compact, "count": 0, "items": []})
     items = state.sqlite_store.query_events(
         task_id=resolved_task_id,
         minutes=minutes,
         keyword=keyword,
         limit=limit,
     )
-    return JSONResponse(build_memory_items_payload(items=items, task_id=resolved_task_id, minutes=minutes, limit=limit))
+    return JSONResponse(build_memory_items_payload(items=items, task_id=resolved_task_id, minutes=minutes, limit=limit, compact=compact))
+
+
+@app.get("/api/activity")
+def get_activity_summary(
+    task_id: Optional[str] = None,
+    minutes: int = Query(5, ge=1, le=14 * 24 * 60),
+) -> JSONResponse:
+    resolved_task_id = _resolve_task_id(task_id)
+    observed_at = time.time()
+    if not resolved_task_id:
+        return JSONResponse(
+            build_activity_payload(
+                items=[],
+                task_id="",
+                minutes=minutes,
+                observed_at=observed_at,
+                has_screenshot_evidence=False,
+            )
+        )
+    items = state.sqlite_store.query_events(
+        task_id=resolved_task_id,
+        minutes=minutes,
+        limit=20,
+        now=observed_at,
+    )
+    has_screenshot_evidence = bool(state.last_screenshot_path)
+    return JSONResponse(
+        build_activity_payload(
+            items=items,
+            task_id=resolved_task_id,
+            minutes=minutes,
+            observed_at=observed_at,
+            has_screenshot_evidence=has_screenshot_evidence,
+        )
+    )
 
 
 @app.get("/api/ask")
@@ -926,6 +1048,69 @@ def get_watch_task(task_id: str) -> JSONResponse:
 def list_watch_tasks(limit: int = Query(100, ge=1, le=500)) -> JSONResponse:
     items = state.list_tasks(limit=limit)
     return JSONResponse({"items": items, "count": len(items)})
+
+
+@app.get("/api/tasks/{task_id}/roi")
+def list_task_roi_children(task_id: str) -> JSONResponse:
+    try:
+        items = state.list_task_rois(parent_task_id=task_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    return JSONResponse({"task_id": task_id, "items": items, "count": len(items)})
+
+
+@app.post("/api/tasks/{task_id}/roi")
+def create_task_roi_child(task_id: str, payload: dict = Body(...)) -> JSONResponse:
+    try:
+        result = state.create_roi_task(
+            parent_task_id=task_id,
+            roi_task_id=payload.get("roi_task_id"),
+            roi_name=str(payload.get("roi_name") or "").strip(),
+            region_payload=payload.get("region") or {},
+            enabled=bool(payload.get("enabled", True)),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400 if "不能为空" in str(exc) else 404)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"status": "ok", **result})
+
+
+@app.patch("/api/tasks/{task_id}/roi/{roi_task_id}")
+def update_task_roi_child(task_id: str, roi_task_id: str, payload: dict = Body(...)) -> JSONResponse:
+    try:
+        result = state.update_roi_task(
+            parent_task_id=task_id,
+            roi_task_id=roi_task_id,
+            roi_name=payload.get("roi_name"),
+            enabled=payload.get("enabled"),
+            region_payload=payload.get("region"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400 if "不能为空" in str(exc) else 404)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"status": "ok", **result})
+
+
+@app.get("/api/tasks/{task_id}/alert")
+def get_task_alert_settings(task_id: str) -> JSONResponse:
+    task = state.sqlite_store.get_task(task_id)
+    if task is None:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+    spec = WatchSpec.from_dict(task["spec"])
+    return JSONResponse({"task_id": task_id, "alert": asdict(spec.alert), "task_paths": state.current_task_paths(task_id=task_id)})
+
+
+@app.post("/api/tasks/{task_id}/alert")
+def update_task_alert_settings(task_id: str, payload: dict = Body(...)) -> JSONResponse:
+    try:
+        result = state.update_task_alert(task_id=task_id, alert_payload=payload)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"status": "ok", **result})
 
 
 @app.get("/api/tasks/{task_id}/memory-policy")

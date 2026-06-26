@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from ayes.events.models import TimelineEvent
 from ayes.logs.models import LogEntry
 from ayes.app.paths import runtime_root
+from ayes.app.task_paths import task_runtime_paths
 
 
 class SQLiteStore:
@@ -109,10 +110,22 @@ class SQLiteStore:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS task_roi_metadata (
+                    roi_task_id TEXT PRIMARY KEY,
+                    parent_task_id TEXT NOT NULL,
+                    roi_name TEXT NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
             connection.commit()
 
     def _memory_dir_for_task(self, task_id: str) -> str:
-        return str(runtime_root() / "memory" / task_id)
+        return str(task_runtime_paths(runtime_root(), task_id)["memory_dir"])
 
     def _default_task_memory_policy(self, task_id: str) -> Dict[str, Any]:
         return {
@@ -186,12 +199,22 @@ class SQLiteStore:
             ).fetchone()
         if row is None:
             return self._default_task_memory_policy(normalized_task_id)
+        expected_memory_dir = self._memory_dir_for_task(normalized_task_id)
+        stored_memory_dir = str(row[4] or "")
+        if stored_memory_dir != expected_memory_dir:
+            return self.upsert_task_memory_policy(
+                task_id=normalized_task_id,
+                short_term_retain_days=int(row[1]),
+                long_term_retain_days=int(row[2]),
+                disable_auto_cleanup=bool(row[3]),
+                updated_at=row[5],
+            )
         return {
             "task_id": row[0],
             "short_term_retain_days": int(row[1]),
             "long_term_retain_days": int(row[2]),
             "disable_auto_cleanup": bool(row[3]),
-            "memory_dir": row[4],
+            "memory_dir": stored_memory_dir,
             "updated_at": row[5],
         }
 
@@ -230,6 +253,101 @@ class SQLiteStore:
                 (task_id, mode, json.dumps(target, ensure_ascii=False), json.dumps(spec, ensure_ascii=False), created_at),
             )
             connection.commit()
+
+    def upsert_task_roi(
+        self,
+        *,
+        roi_task_id: str,
+        parent_task_id: str,
+        roi_name: str,
+        enabled: bool,
+        created_at: float,
+        updated_at: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        import time
+
+        payload = {
+            "roi_task_id": str(roi_task_id or "").strip(),
+            "parent_task_id": str(parent_task_id or "").strip(),
+            "roi_name": str(roi_name or "").strip(),
+            "enabled": bool(enabled),
+            "created_at": float(created_at),
+            "updated_at": float(updated_at if updated_at is not None else time.time()),
+        }
+        if not payload["roi_task_id"] or not payload["parent_task_id"] or not payload["roi_name"]:
+            raise ValueError("roi_task_id、parent_task_id、roi_name 不能为空")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO task_roi_metadata
+                (roi_task_id, parent_task_id, roi_name, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["roi_task_id"],
+                    payload["parent_task_id"],
+                    payload["roi_name"],
+                    1 if payload["enabled"] else 0,
+                    payload["created_at"],
+                    payload["updated_at"],
+                ),
+            )
+            connection.commit()
+        return payload
+
+    def get_task_roi(self, roi_task_id: str) -> Optional[Dict[str, Any]]:
+        normalized = str(roi_task_id or "").strip()
+        if not normalized:
+            raise ValueError("roi_task_id 不能为空")
+        if "__roi_" not in normalized:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT roi_task_id, parent_task_id, roi_name, enabled, created_at, updated_at
+                FROM task_roi_metadata
+                WHERE roi_task_id = ?
+                """,
+                (normalized,),
+            ).fetchone()
+        if row is None:
+            return None
+        if str(row[1] or "").strip() == normalized:
+            return None
+        return {
+            "roi_task_id": row[0],
+            "parent_task_id": row[1],
+            "roi_name": row[2],
+            "enabled": bool(row[3]),
+            "created_at": row[4],
+            "updated_at": row[5],
+        }
+
+    def list_task_rois(self, parent_task_id: str) -> List[Dict[str, Any]]:
+        normalized = str(parent_task_id or "").strip()
+        if not normalized:
+            raise ValueError("parent_task_id 不能为空")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT roi_task_id, parent_task_id, roi_name, enabled, created_at, updated_at
+                FROM task_roi_metadata
+                WHERE parent_task_id = ?
+                ORDER BY created_at ASC
+                """,
+                (normalized,),
+            ).fetchall()
+        return [
+            {
+                "roi_task_id": row[0],
+                "parent_task_id": row[1],
+                "roi_name": row[2],
+                "enabled": bool(row[3]),
+                "created_at": row[4],
+                "updated_at": row[5],
+            }
+            for row in rows
+        ]
 
     def insert_event(self, event: TimelineEvent) -> None:
         payload = asdict(event)
@@ -327,6 +445,43 @@ class SQLiteStore:
             rows = connection.execute(query, params).fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def summarize_logs(
+        self,
+        *,
+        task_id: Optional[str] = None,
+        category: Optional[str] = None,
+        since_timestamp: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        query = """
+            SELECT
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN lower(level) = 'error' THEN 1 ELSE 0 END) AS error_count,
+                SUM(CASE WHEN lower(level) IN ('warn', 'warning') THEN 1 ELSE 0 END) AS warn_count,
+                MAX(timestamp) AS latest_timestamp
+            FROM logs
+        """
+        params: list[Any] = []
+        conditions: list[str] = []
+        if task_id:
+            conditions.append("task_id = ?")
+            params.append(task_id)
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+        if since_timestamp is not None:
+            conditions.append("timestamp >= ?")
+            params.append(since_timestamp)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        with self._connect() as connection:
+            row = connection.execute(query, params).fetchone()
+        return {
+            "count": int(row[0] or 0),
+            "error_count": int(row[1] or 0),
+            "warn_count": int(row[2] or 0),
+            "latest_timestamp": row[3],
+        }
+
     def query_events(
         self,
         *,
@@ -396,7 +551,7 @@ class SQLiteStore:
         ]
 
     def delete_task_data(self, task_id: str) -> Dict[str, int]:
-        deleted = {"tasks": 0, "events": 0, "logs": 0, "long_term_summaries": 0, "task_memory_policies": 0}
+        deleted = {"tasks": 0, "events": 0, "logs": 0, "long_term_summaries": 0, "task_memory_policies": 0, "task_roi_metadata": 0}
         with self._connect() as connection:
             deleted["events"] = int(
                 (connection.execute("DELETE FROM events WHERE task_id = ?", (task_id,)).rowcount or 0)
@@ -412,6 +567,9 @@ class SQLiteStore:
             )
             deleted["task_memory_policies"] = int(
                 (connection.execute("DELETE FROM task_memory_policies WHERE task_id = ?", (task_id,)).rowcount or 0)
+            )
+            deleted["task_roi_metadata"] = int(
+                (connection.execute("DELETE FROM task_roi_metadata WHERE roi_task_id = ? OR parent_task_id = ?", (task_id, task_id)).rowcount or 0)
             )
             connection.commit()
         return deleted

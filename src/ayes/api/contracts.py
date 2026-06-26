@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 
 from ayes.config.models import WatchSpec
 from ayes.memory.short_term import QueryResult
+from ayes.observation.text_quality import score_ocr_text
 
 
 def extract_structured_observation(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -62,14 +63,20 @@ def build_preview_overlay(event: Dict[str, Any]) -> Dict[str, Any]:
     return {"kind": "none", "label": "", "rect_norm": {}}
 
 
-def build_task_payload(*, task_id: str, spec: WatchSpec) -> Dict[str, Any]:
-    return {
+def build_task_payload(*, task_id: str, spec: WatchSpec, extra: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    payload = {
         "task_id": task_id,
         "mode": spec.mode,
         "target": asdict(spec.target),
         "spec": asdict(spec),
         "created_at": time.time(),
     }
+    roi = getattr(spec, "roi", None)
+    if isinstance(roi, dict) and roi:
+        payload["roi"] = dict(roi)
+    if extra:
+        payload.update(extra)
+    return payload
 
 
 def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: str, question: str) -> Dict[str, Any]:
@@ -183,7 +190,17 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
     }
 
 
-def build_memory_items_payload(*, items: List[Dict[str, Any]], task_id: str, minutes: int, limit: int) -> Dict[str, Any]:
+def build_memory_items_payload(*, items: List[Dict[str, Any]], task_id: str, minutes: int, limit: int, compact: bool = False) -> Dict[str, Any]:
+    if compact:
+        normalized = [_compact_event_payload(item) for item in items]
+        return {
+            "task_id": task_id,
+            "minutes": minutes,
+            "limit": limit,
+            "compact": True,
+            "count": len(normalized),
+            "items": normalized,
+        }
     normalized: List[Dict[str, Any]] = []
     for item in items:
         event = dict(item)
@@ -195,9 +212,235 @@ def build_memory_items_payload(*, items: List[Dict[str, Any]], task_id: str, min
         "task_id": task_id,
         "minutes": minutes,
         "limit": limit,
+        "compact": False,
         "count": len(normalized),
         "items": normalized,
     }
+
+
+def build_activity_payload(
+    *,
+    items: List[Dict[str, Any]],
+    task_id: str,
+    minutes: int,
+    observed_at: float,
+    has_screenshot_evidence: bool,
+) -> Dict[str, Any]:
+    compact_items = [_compact_event_payload(item) for item in items]
+    timestamps = [item.get("timestamp") for item in compact_items if item.get("timestamp") is not None]
+    keyword_items = [item for item in compact_items if not _is_activity_audit_summary(item) and not _is_low_quality_ocr_summary(item)]
+    keywords = _dedupe_keywords(keyword for item in keyword_items for keyword in item.get("keywords", []))[:12]
+    primary_summary = _build_primary_activity_summary(compact_items)
+    confidence = _average_confidence(compact_items)
+    return {
+        "schema_version": "1.0",
+        "task_id": task_id,
+        "observed_at": observed_at,
+        "time_scope": {
+            "minutes": minutes,
+            "from": observed_at - (minutes * 60),
+            "to": observed_at,
+            "evidence_from": min(timestamps) if timestamps else None,
+            "evidence_to": max(timestamps) if timestamps else None,
+        },
+        "primary_summary": primary_summary,
+        "timeline": compact_items[:8],
+        "keywords": keywords,
+        "confidence": confidence,
+        "has_screenshot_evidence": has_screenshot_evidence,
+        "needs_detail_followup": len(compact_items) > 8 or confidence < 0.65,
+    }
+
+
+def _compact_event_payload(event: Dict[str, Any]) -> Dict[str, Any]:
+    region = event.get("region") or {}
+    summary = str(event.get("summary") or event.get("event_type") or "").strip()
+    visual = event.get("visual") or {}
+    visual_summary = str(visual.get("summary") or "").strip()
+    if visual_summary and visual_summary not in summary and not _is_internal_visual_diagnostic(visual_summary):
+        summary = f"{summary}；{visual_summary}" if summary else visual_summary
+    text_payload = event.get("text") or {}
+    text = str(text_payload.get("normalized_text") or text_payload.get("ocr_text") or "").strip()
+    attributes = visual.get("attributes") or {}
+    attention = attributes.get("attention") or (attributes.get("structured_observation") or {}).get("attention") or {}
+    text_quality = None
+    if event.get("source") == "ocr" and attributes.get("text_quality_score") is None:
+        block_confidences = [block.get("confidence") for block in (text_payload.get("blocks") or []) if isinstance(block, dict)]
+        text_quality = score_ocr_text(text or summary, avg_confidence=float(attributes.get("ocr_avg_confidence") or event.get("confidence") or 0.0), block_confidences=block_confidences)
+    text_quality_score = attributes.get("text_quality_score") if text_quality is None else text_quality.score
+    text_quality_noisy = attributes.get("text_quality_noisy") if text_quality is None else text_quality.is_noisy
+    quality_probe = None
+    if event.get("source") == "ocr":
+        try:
+            quality_probe = score_ocr_text(f"{summary} {text}", avg_confidence=float(event.get("confidence") or 0.0))
+        except (TypeError, ValueError):
+            quality_probe = None
+    low_quality_ocr = (
+        event.get("source") == "ocr"
+        and (
+            bool(text_quality_noisy)
+            or (text_quality_score is not None and float(text_quality_score or 0.0) < 0.55)
+            or (quality_probe is not None and (quality_probe.is_noisy or quality_probe.score < 0.62))
+        )
+    )
+    keyword_source = list(event.get("tags") or [])
+    if not low_quality_ocr:
+        keyword_source += _extract_keywords(summary)
+        keyword_source += _extract_keywords(text)
+    elif any(keyword in summary for keyword in ["错误", "异常", "弹窗", "登录", "价格", "按钮", "告警", "低质量文本已降权"]):
+        keyword_source += _extract_keywords(summary)
+    keywords = _dedupe_keywords(keyword_source)
+    return {
+        "event_id": event.get("event_id"),
+        "timestamp": event.get("timestamp"),
+        "time_text": _format_time_text(event.get("timestamp")),
+        "source": event.get("source"),
+        "event_type": event.get("event_type"),
+        "summary": summary,
+        "region_name": region.get("name") or region.get("region_id") or "",
+        "location_summary": describe_location_summary(event),
+        "keywords": keywords[:8],
+        "confidence": event.get("confidence"),
+        "text_quality_score": text_quality_score,
+        "text_quality_noisy": text_quality_noisy,
+        "attention_primary": attention.get("primary"),
+        "attention_weight": attention.get("weight"),
+        "priority": event.get("priority"),
+    }
+
+
+def _build_primary_activity_summary(items: List[Dict[str, Any]]) -> str:
+    if not items:
+        return "最近时间窗内未发现可摘要的监控事件。"
+    has_primary_visual = any(_is_primary_visual_summary(item) for item in items)
+    ranked_items = sorted(items, key=_activity_summary_rank, reverse=True)
+    summaries = [
+        summary
+        for item in ranked_items
+        for summary in [str(item.get("summary") or "").strip()]
+        if summary and not _is_low_quality_ocr_summary(item, has_primary_visual=has_primary_visual) and not _is_activity_audit_summary(item)
+    ]
+    if not summaries:
+        return "最近有监控事件，但摘要信息较少。"
+    return "；".join(summaries[:3])
+
+
+def _activity_summary_rank(item: Dict[str, Any]) -> float:
+    score = 0.0
+    region = str(item.get("region_name") or item.get("location_summary") or "")
+    event_type = str(item.get("event_type") or "")
+    summary = str(item.get("summary") or "")
+    if "主内容" in region:
+        score += 5.0
+    elif "全目标" in region:
+        score += 3.0
+    elif any(label in region for label in ["顶部", "底部", "侧栏"]):
+        score += 1.0
+    if event_type == "vision_skipped" or "已跳过" in summary:
+        score -= 4.0
+    if _is_activity_audit_summary(item):
+        score -= 6.0
+    if _is_low_quality_ocr_summary(item):
+        score -= 8.0
+    if _is_primary_visual_summary(item):
+        score += 5.5
+    if item.get("attention_primary") is True:
+        score += 3.0
+    try:
+        score += float(item.get("attention_weight") or 0.0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        score += float(item.get("text_quality_score") or 0.0) * 3.0
+    except (TypeError, ValueError):
+        pass
+    if any(keyword in summary for keyword in ["错误", "异常", "弹窗", "登录", "价格", "按钮", "告警"]):
+        score += 2.0
+    try:
+        score += float(item.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        score += float(item.get("timestamp") or 0.0) / 1_000_000_000
+    except (TypeError, ValueError):
+        pass
+    return score
+
+
+def _is_low_quality_ocr_summary(item: Dict[str, Any], *, has_primary_visual: bool = False) -> bool:
+    if item.get("source") != "ocr":
+        return False
+    summary = str(item.get("summary") or "")
+    if _is_internal_visual_diagnostic(summary):
+        return True
+    if bool(item.get("text_quality_noisy")):
+        return True
+    if item.get("text_quality_score") is None:
+        return False
+    try:
+        threshold = 0.62 if has_primary_visual else 0.55
+        return float(item.get("text_quality_score") or 0.0) < threshold
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_primary_visual_summary(item: Dict[str, Any]) -> bool:
+    event_type = str(item.get("event_type") or "")
+    if event_type != "visual_summary":
+        return False
+    if _is_activity_audit_summary(item):
+        return False
+    if item.get("attention_primary") is True:
+        return True
+    region = str(item.get("region_name") or item.get("location_summary") or "")
+    return "主内容" in region
+
+
+def _is_activity_audit_summary(item: Dict[str, Any]) -> bool:
+    event_type = str(item.get("event_type") or "")
+    summary = str(item.get("summary") or "")
+    return event_type in {"vision_triggered", "vision_skipped"} or "视觉增强已触发" in summary or "视觉增强已跳过" in summary
+
+
+def _is_internal_visual_diagnostic(summary: str) -> bool:
+    value = str(summary or "").strip()
+    return value.startswith("OCR vision |") or "OCR vision | 字符" in value
+
+
+def _average_confidence(items: List[Dict[str, Any]]) -> float:
+    values = []
+    for item in items:
+        try:
+            values.append(float(item.get("confidence")))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return 0.0 if not items else 0.6
+    return round(sum(values) / len(values), 3)
+
+
+def _extract_keywords(text: str) -> List[str]:
+    tokens: List[str] = []
+    for raw in str(text or "").replace("，", " ").replace("。", " ").replace("；", " ").replace("/", " ").split():
+        token = raw.strip(" ,.;:!?()[]{}<>\"'`")
+        if len(token) >= 2:
+            tokens.append(token[:32])
+    return tokens
+
+
+def _dedupe_keywords(values) -> List[str]:
+    seen: set[str] = set()
+    result: List[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
 
 
 def build_observe_live_payload(
@@ -648,11 +891,52 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "request": {"now": "可选"},
             "response_keys": ["status", "cleanup"],
         },
+        "tasks.roi.list": {
+            "method": "GET",
+            "path": "/api/tasks/{task_id}/roi",
+            "response_keys": ["task_id", "items", "count"],
+        },
+        "tasks.roi.create": {
+            "method": "POST",
+            "path": "/api/tasks/{task_id}/roi",
+            "request": {
+                "roi_name": "必填，用户可用自然语言命名，例如 价格监控",
+                "region": "必填，region_id/name/x/y/w/h/coordinate_space",
+                "enabled": "可选，默认 true",
+                "roi_task_id": "可选，不传则按父任务和 ROI 名称生成",
+            },
+            "response_keys": ["status", "roi", "task", "task_paths"],
+        },
+        "tasks.roi.update": {
+            "method": "PATCH",
+            "path": "/api/tasks/{task_id}/roi/{roi_task_id}",
+            "request": {"roi_name": "可选", "region": "可选", "enabled": "可选"},
+            "response_keys": ["status", "roi", "task", "task_paths"],
+        },
+        "tasks.alert": {
+            "method": "GET/POST",
+            "path": "/api/tasks/{task_id}/alert",
+            "request": {
+                "enabled": "可选",
+                "webhook_url": "可选，企业微信机器人 webhook",
+                "message_title": "可选",
+                "message_template": "可选，可用 {task_id}/{summary}",
+                "cooldown_sec": "可选",
+                "dedupe_window_sec": "可选",
+            },
+            "response_keys": ["status", "alert", "task", "task_paths"],
+        },
         "agent.observe_live": {
             "method": "GET",
             "path": "/api/agent/observe-live",
             "query": {"task_id": "可选", "minutes": "1-20160", "limit": "1-100"},
             "response_keys": ["schema_version", "task_id", "observed_at", "time_scope", "status", "screenshot", "recent_events", "memory_items", "alerts", "logs", "cleanup_reminder", "region_binding_context", "vision_status", "evidence_status", "agent_hints"],
+        },
+        "agent.activity": {
+            "method": "GET",
+            "path": "/api/activity",
+            "query": {"task_id": "可选", "minutes": "1-20160"},
+            "response_keys": ["schema_version", "task_id", "observed_at", "time_scope", "primary_summary", "timeline", "keywords", "confidence", "has_screenshot_evidence", "needs_detail_followup"],
         },
         "control.status": {
             "method": "GET",
@@ -734,8 +1018,8 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
         "memory.items": {
             "method": "GET",
             "path": "/api/memory/items",
-            "query": {"task_id": "可选", "minutes": "1-20160", "limit": "1-100", "keyword": "可选"},
-            "response_keys": ["task_id", "minutes", "limit", "count", "items"],
+            "query": {"task_id": "可选", "minutes": "1-20160", "limit": "1-100", "keyword": "可选", "compact": "可选，true 时过滤 OCR blocks/bbox/evidence_refs 等重字段"},
+            "response_keys": ["task_id", "minutes", "limit", "compact", "count", "items"],
         },
         "logs.recent": {
             "method": "GET",
@@ -749,10 +1033,26 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "query": {"task_id": "可选", "minutes": "1-60", "limit": "1-100"},
             "response_keys": ["task_id", "minutes", "limit", "count", "items"],
         },
+        "control.sampling": {
+            "method": "POST",
+            "path": "/api/control/sampling",
+            "request": {"task_id": "可选；不传则当前任务", "interval_ms": "500-3600000，任务截图/OCR/变化检测统一采样间隔", "quality": "可选", "save_ocr_screenshots": "可选"},
+            "response_keys": ["status", "sampling"],
+        },
+        "control.settings": {
+            "method": "POST",
+            "path": "/api/control/settings",
+            "request": {
+                "capture_screen_when_display_sleep": "可选",
+                "cleanup_reminder_days": "可选",
+                "latest_frame_hotkey": "可选，例如 cmd+shift+9；留空关闭",
+            },
+            "response_keys": ["status", "settings"],
+        },
         "vision.models": {
             "method": "GET",
             "path": "/api/vision/models",
-            "response_keys": ["available", "binary_available", "service_reachable", "default_model", "default_model_installed", "items", "recommended_action"],
+            "response_keys": ["available", "binary_available", "service_reachable", "default_model", "default_model_installed", "default_selected_model", "items[].is_vision_model", "recommended_action"],
         },
         "vision.prepare": {
             "method": "POST",

@@ -17,6 +17,13 @@ def make_png_bytes(color: str) -> bytes:
     return buffer.getvalue()
 
 
+def make_sized_png_bytes(width: int, height: int, color: str = "white") -> bytes:
+    image = Image.new("RGB", (width, height), color=color)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 class FakeCapture:
     def __init__(self) -> None:
         self.calls = 0
@@ -72,6 +79,23 @@ class LargeFakeCapture:
                 width=100,
                 height=80,
                 image_bytes=make_png_bytes("white"),
+            ),
+        )
+
+
+class HugeFakeCapture:
+    def capture_main_display(self, *, timestamp: float) -> CaptureResult:
+        return CaptureResult(
+            ok=True,
+            status="ok",
+            frame=CaptureFrame(
+                frame_id="huge_frame_1",
+                timestamp=timestamp,
+                target_type="screen",
+                target_id="main",
+                width=3840,
+                height=2160,
+                image_bytes=make_sized_png_bytes(3840, 2160),
             ),
         )
 
@@ -186,6 +210,20 @@ class FakeLayoutAwareOCR:
                 )
             ],
         )
+
+
+class NoisyMainOCR:
+    def recognize(self, image, options=None) -> OCRResult:
+        region_id = getattr(image, "region_id", "") or ""
+        if region_id == "auto_center_main":
+            return OCRResult(
+                provider="fake",
+                elapsed_ms=1,
+                full_text="KIkIl\ufffd8YeSJX 0OCg0,",
+                char_count=len("KIkIl\ufffd8YeSJX 0OCg0,"),
+                blocks=[OCRTextBlock(text="KIkIl\ufffd8YeSJX", confidence=0.28, bbox=[0.2, 0.2, 0.8, 0.2, 0.8, 0.4, 0.2, 0.4])],
+            )
+        return OCRResult(provider="fake", elapsed_ms=1, full_text="边缘状态", char_count=len("边缘状态"))
 
 
 class FailingVision:
@@ -542,6 +580,50 @@ def test_runner_without_roi_triggers_vision_on_primary_attention_region_only() -
     assert vision_events[0].region.region_id == "auto_center_main"
 
 
+def test_runner_triggers_vision_when_primary_ocr_quality_is_low() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "vision": {
+                "enabled": True,
+                "provider": "ollama",
+                "model": "qwen2.5vl:7b",
+                "trigger_when_ocr_sparse": True,
+                "ocr_sparse_min_chars": 8,
+                "trigger_on_visual_regions": False,
+                "trigger_on_watch_intent": False,
+                "trigger_on_question_semantics": False,
+                "max_calls_per_minute": 6,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = LargeFakeCapture()
+    runner.ocr = NoisyMainOCR()
+    runner.vision = FakeVision()
+
+    events = runner.run_once(now=100.0)
+
+    main_ocr = next(event for event in events if event.event_type == "text_change" and event.region.region_id == "auto_center_main")
+    assert main_ocr.visual.attributes["text_quality_noisy"] is True
+    assert main_ocr.visual.attributes["text_quality_gibberish_ratio"] > 0.38
+    vision_events = [event for event in events if event.event_type == "visual_summary"]
+    assert len(vision_events) == 1
+    assert vision_events[0].region.region_id == "auto_center_main"
+    decision = next(event for event in events if event.event_type == "vision_triggered")
+    assert "ocr_low_quality" in decision.visual.attributes["vision_reasons"]
+
+
 def test_runner_process_target_emits_target_switched_event_when_representative_window_changes() -> None:
     spec = WatchSpec.from_dict(
         {
@@ -741,11 +823,59 @@ def test_runner_preserves_ocr_blocks_and_region_coordinates_in_event() -> None:
     assert text_event.text.blocks[0].rect == {"x": 10.0, "y": 20.0, "w": 100.0, "h": 28.0}
     assert text_event.text.blocks[0].rect_norm == {"x": 10.0, "y": 20.0, "w": 100.0, "h": 28.0}
     assert text_event.text.blocks[0].coordinate_space == "image_pixels"
-    assert any(ref.startswith("runtime/evidence/") for ref in text_event.evidence_refs)
-    assert any("full" in ref for ref in text_event.evidence_refs)
-    assert any("roi" in ref for ref in text_event.evidence_refs)
-    for ref in text_event.evidence_refs:
-        assert Path(ref).exists()
+
+
+def test_runner_does_not_write_event_evidence_by_default(tmp_path) -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec, runtime_dir=tmp_path)
+    runner.capture = FakeCapture()
+    runner.ocr = FakeOCRWithBlocks()
+
+    events = runner.run_once(now=100.0)
+
+    text_event = next(event for event in events if event.event_type == "text_change")
+    assert text_event.evidence_refs == []
+    assert not any((tmp_path / "tasks").glob("**/screenshots/evidence/*.png"))
+
+
+def test_runner_writes_event_evidence_when_enabled(tmp_path) -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "save_ocr_screenshots": True,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec, runtime_dir=tmp_path)
+    runner.capture = FakeCapture()
+    runner.ocr = FakeOCRWithBlocks()
+
+    events = runner.run_once(now=100.0)
+
+    text_event = next(event for event in events if event.event_type == "text_change")
+    assert any(ref.startswith("runtime/tasks/") and "/screenshots/evidence/" in ref for ref in text_event.evidence_refs)
+    assert any((tmp_path / "tasks").glob("**/screenshots/evidence/*.png"))
 
 
 def test_runner_normalizes_vision_ocr_rectangles_to_pixels_and_ratios() -> None:
@@ -994,3 +1124,33 @@ def test_runner_cleans_expired_evidence_files_but_keeps_recent_ones(tmp_path) ->
     assert not old_file.exists()
     assert preserved_file.exists()
     assert any(item["category"] == "system" and "已清理过期证据文件" in item["message"] for item in logs)
+
+
+def test_runner_applies_standard_sampling_quality_to_large_frames() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "quality": "standard",
+                "save_ocr_screenshots": False,
+                "skip_ocr_when_no_change": False,
+            },
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = HugeFakeCapture()
+    runner.ocr = FakeOCR()
+
+    runner.run_once(now=100.0)
+
+    assert runner.last_captured_frame is not None
+    assert runner.last_captured_frame.width == 1920
+    assert runner.last_captured_frame.height == 1080
+    assert runner.last_captured_frame.metadata["original_width"] == 3840
+    assert runner.last_captured_frame.metadata["original_height"] == 2160

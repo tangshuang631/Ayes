@@ -10,6 +10,17 @@ class ConfigError(ValueError):
     """Raised when watch spec validation fails."""
 
 
+DEFAULT_SAMPLING_INTERVAL_MS = 6000
+MIN_SAMPLING_INTERVAL_MS = 500
+MAX_SAMPLING_INTERVAL_MS = 60 * 60 * 1000
+SAMPLING_QUALITY_MAX_DIMENSIONS = {
+    "original": 0,
+    "standard": 1920,
+    "space_saver": 1280,
+    "ultra_saver": 960,
+}
+
+
 def _require_bool(value: Any, field_name: str) -> bool:
     if isinstance(value, bool):
         return value
@@ -111,19 +122,32 @@ class TargetRegion:
 
 @dataclass(frozen=True)
 class SamplingConfig:
-    screenshot_interval_ms: int = 1000
-    ocr_interval_ms: int = 1000
-    change_detection_interval_ms: int = 1000
+    screenshot_interval_ms: int = DEFAULT_SAMPLING_INTERVAL_MS
+    ocr_interval_ms: int = DEFAULT_SAMPLING_INTERVAL_MS
+    change_detection_interval_ms: int = DEFAULT_SAMPLING_INTERVAL_MS
     max_fps: int = 2
     skip_ocr_when_no_change: bool = True
+    quality: str = "standard"
+    save_ocr_screenshots: bool = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SamplingConfig":
+        quality = str(data.get("quality", "standard") or "standard").strip()
+        if quality not in SAMPLING_QUALITY_MAX_DIMENSIONS:
+            raise ConfigError("sampling.quality 必须是 original、standard、space_saver 或 ultra_saver")
         return cls(
-            screenshot_interval_ms=_require_int(data.get("screenshot_interval_ms", 1000), "sampling.screenshot_interval_ms", 1),
-            ocr_interval_ms=_require_int(data.get("ocr_interval_ms", 1000), "sampling.ocr_interval_ms", 1),
+            screenshot_interval_ms=_require_int(
+                data.get("screenshot_interval_ms", DEFAULT_SAMPLING_INTERVAL_MS),
+                "sampling.screenshot_interval_ms",
+                1,
+            ),
+            ocr_interval_ms=_require_int(
+                data.get("ocr_interval_ms", DEFAULT_SAMPLING_INTERVAL_MS),
+                "sampling.ocr_interval_ms",
+                1,
+            ),
             change_detection_interval_ms=_require_int(
-                data.get("change_detection_interval_ms", 1000),
+                data.get("change_detection_interval_ms", DEFAULT_SAMPLING_INTERVAL_MS),
                 "sampling.change_detection_interval_ms",
                 1,
             ),
@@ -132,7 +156,16 @@ class SamplingConfig:
                 data.get("skip_ocr_when_no_change", True),
                 "sampling.skip_ocr_when_no_change",
             ),
+            quality=quality,
+            save_ocr_screenshots=_require_bool(
+                data.get("save_ocr_screenshots", False),
+                "sampling.save_ocr_screenshots",
+            ),
         )
+
+    @property
+    def quality_max_dimension(self) -> int:
+        return SAMPLING_QUALITY_MAX_DIMENSIONS[self.quality]
 
 
 @dataclass(frozen=True)
@@ -476,6 +509,7 @@ class WatchSpec:
     watch_intent: WatchIntentConfig
     alert: AlertConfig
     actions: ActionsConfig
+    roi: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WatchSpec":
@@ -493,4 +527,5 @@ class WatchSpec:
             watch_intent=WatchIntentConfig.from_dict(data.get("watch_intent", {}), mode=mode),
             alert=AlertConfig.from_dict(data.get("alert", {})),
             actions=ActionsConfig.from_dict(data.get("actions", {})),
+            roi=dict(data.get("roi", {})) if isinstance(data.get("roi", {}), dict) else {},
         )

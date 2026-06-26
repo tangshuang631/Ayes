@@ -7,7 +7,7 @@ import re
 from uuid import uuid4
 from typing import Any, Dict, List, Optional, Tuple
 
-from ayes.config.models import WatchSpec
+from ayes.config.models import DEFAULT_SAMPLING_INTERVAL_MS, WatchSpec
 from ayes.planner.models import ActionIntent, PlanIssue, PlanQuestion, RegionIntent, SetupGuidance, WatchPlanDraft
 
 
@@ -359,9 +359,9 @@ class WatchSpecPlanner:
             "mode": mode,
             "target": {},
             "sampling": {
-                "screenshot_interval_ms": 1000,
-                "ocr_interval_ms": 1000,
-                "change_detection_interval_ms": 1000,
+                "screenshot_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+                "ocr_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+                "change_detection_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
                 "max_fps": 2,
                 "skip_ocr_when_no_change": True,
             },
@@ -519,13 +519,13 @@ class WatchSpecPlanner:
 
     def _build_sampling(self, prompt: str) -> Tuple[Dict[str, Any], List[str]]:
         sampling = {
-            "screenshot_interval_ms": 1000,
-            "ocr_interval_ms": 1000,
-            "change_detection_interval_ms": 1000,
+            "screenshot_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+            "ocr_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
+            "change_detection_interval_ms": DEFAULT_SAMPLING_INTERVAL_MS,
             "max_fps": 2,
             "skip_ocr_when_no_change": True,
         }
-        assumptions: List[str] = ["未显式指定采样频率时默认按 1 秒 1 次 OCR / 变化检测执行"]
+        assumptions: List[str] = ["未显式指定采样频率时默认按 6 秒 1 次截图 / OCR / 变化检测执行"]
         if "一秒两张" in prompt or "1秒2张" in prompt or "每秒2张" in prompt:
             sampling["screenshot_interval_ms"] = 500
             sampling["max_fps"] = 2

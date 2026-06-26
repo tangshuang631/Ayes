@@ -174,6 +174,34 @@ def test_recent_task_title_includes_process_monitor_name_and_summary() -> None:
     )
 
 
+def test_recent_task_title_includes_roi_child_task_name() -> None:
+    assert (
+        menubar_app._recent_task_title(
+            {
+                "task_id": "2026-06-26_process_monitor_Chrome__roi_price",
+                "mode": "observe",
+                "target": {"type": "process", "process_name": "Chrome"},
+                "roi": {"roi_name": "价格监控"},
+            }
+        )
+        == "2026-06-26_process_monitor_Chrome__roi_price · ROI · 价格监控"
+    )
+
+
+def test_native_menubar_source_exposes_roi_tree_and_task_start_actions() -> None:
+    source = agent_tool._build_native_menubar_source(
+        base_url="http://127.0.0.1:8770",
+        runtime_dir=Path("/tmp/ayes-runtime"),
+    )
+
+    assert "启动 / 继续此任务" in source
+    assert "设定 ROI..." in source
+    assert "ROI 子任务" in source
+    assert "openRoiEditor:" in source
+    assert "startTask:" in source
+    assert "/api/tasks/\" stringByAppendingFormat:@\"%@/roi\"" in source
+
+
 def test_python_menubar_uses_continue_last_monitor_label() -> None:
     source = menubar_app.__file__
     assert source is not None
