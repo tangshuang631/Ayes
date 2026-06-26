@@ -52,6 +52,7 @@ ayes-agent-local sampling
 ayes-agent-local sampling --interval-sec 6
 ayes-agent-local sampling --task-id 2026-06-25__price_watch --interval-sec 6
 ayes-agent-local sampling --quality space_saver --save-ocr-screenshots false
+ayes-agent-local screenshot --task-id 2026-06-25__price_watch --fresh
 ayes-agent-local roi list --task-id 2026-06-25__price_watch
 ayes-agent-local roi create --task-id 2026-06-25__price_watch --roi-name 价格监控 --region "roi_price|价格监控|120|240|360|160|target"
 ayes-agent-local roi update --task-id 2026-06-25__price_watch --roi-task-id 2026-06-25__price_watch__roi_价格监控 --enabled false
@@ -165,7 +166,7 @@ ayes-agent-local run-once
 用途：
 
 - `activity`：轻量近期活动摘要，只返回时间范围、主要内容、短时间线、关键词、置信度和是否有截图证据；不返回 OCR blocks、bbox、evidence_refs、完整结构化观察或日志
-- `screenshot`：读取最近截图路径与 ROI 覆盖信息
+- `screenshot`：读取最近截图路径与 ROI 覆盖信息；加 `--fresh --task-id ...` 时会按指定任务目标即时采一张最新截图，不要求任务正在运行，也不会切换当前任务
 - `recent`：读取最近时间线事件
 - `alerts`：读取最近告警审计结果
 - `memory-items`：读取短期记忆明细；CLI 默认返回紧凑结构，过滤 OCR blocks、bbox、evidence_refs 等重字段，默认短期保留 7 天、最高 14 天
@@ -188,7 +189,7 @@ ayes-agent-local run-once
 `observe-live` 聚合返回：
 
 - `status`：当前任务、目标、运行状态、健康摘要
-- `screenshot`：最近截图、ROI、捕获状态
+- `screenshot`：最近截图、ROI、捕获状态；ROI 标注前优先用 `--fresh --task-id ...` 生成当前目标预览图
 - `recent_events`：最近时间线事件
 - `memory_items`：短期记忆明细
 - `alerts`：告警审计事件
@@ -297,7 +298,7 @@ ayes-agent-local stop
 
 macOS 菜单栏图标点击或右键后，用户可进入：
 
-- ROI 管理：基于当前任务目标/最近截图打开工作台标注器，框选多个 ROI、命名、启用/禁用或删除
+- ROI 管理：基于当前任务目标即时采样的预览图打开标注器，不要求任务正在运行；框选多个 ROI、命名、启用/禁用或删除
 - 运行中任务：显示当前正在执行的任务列表，每个任务可打开该任务专属目录或进入专属设置
 - 最近任务：显示最近任务列表，每个任务可打开该任务专属目录或进入专属设置
 - 打开数据目录：有监控任务时进入 `runtime/tasks/<date>/<task_id>/`，不再进入统一 runtime 根目录

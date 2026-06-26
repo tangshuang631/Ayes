@@ -684,6 +684,25 @@ def test_agent_tool_run_once_posts_to_watch_run_once(monkeypatch, capsys) -> Non
     assert '"has_runner": true' in capsys.readouterr().out
 
 
+def test_agent_tool_screenshot_fresh_posts_to_task_capture_endpoint(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"task_id": "task_roi", "path": "/runtime/tasks/2026-06-26/task_roi/screenshots/latest/latest-frame.png"}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["screenshot", "--task-id", "task_roi", "--fresh"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/tasks/task_roi/screenshot/fresh"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"] is None
+    assert '"task_id": "task_roi"' in capsys.readouterr().out
+
+
 def test_agent_tool_start_ensures_menubar_by_default(monkeypatch, capsys) -> None:
     calls = []
 
@@ -824,10 +843,15 @@ def test_build_menubar_roi_editor_uses_screenshot_selection_and_preview(tmp_path
     source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
     assert "RoiSelectionView" in source
     assert "RoiPreviewView" in source
-    assert "/api/screenshot" in source
+    assert "/api/tasks/\" stringByAppendingFormat:@\"%@/screenshot/fresh\"" in source
+    assert "/api/screenshot?task_id=" not in source
     assert "imagePixelRectFromDisplayedSelection" in source
     assert "displayScaleX" in source
     assert "displayScaleY" in source
+    assert "- (BOOL)isFlipped { return YES; }" not in source
+    assert "NSMaxY(drawRect) - NSMaxY(selected)" in source
+    assert "NSRect sourceRect = NSMakeRect(self.pixelRect.origin.x, self.image.size.height - NSMaxY(self.pixelRect)" in source
+    assert "fromRect:sourceRect" in source
     assert '"coordinate_space": @"target"' in source
     assert "ROI 预览确认" in source
     assert "请拖拽框选 ROI 区域" in source

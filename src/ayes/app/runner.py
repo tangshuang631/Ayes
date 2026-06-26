@@ -93,6 +93,15 @@ class WatchRunner:
     def last_captured_frame(self) -> Optional[CaptureFrame]:
         return self._last_captured_frame
 
+    def capture_latest_frame(self, *, now: Optional[float] = None) -> CaptureResult:
+        """Capture the task target without OCR, alerts, memory, or runner state side effects."""
+        current_time = now or time.time()
+        result = self._capture_target(current_time)
+        if not result.ok or result.frame is None:
+            return result
+        frame = self._apply_sampling_quality(result.frame)
+        return replace(result, frame=frame)
+
     def run_once(self, *, now: Optional[float] = None) -> List[object]:
         now = now or time.time()
         self._last_run_at = now

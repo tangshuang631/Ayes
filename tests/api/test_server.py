@@ -57,6 +57,26 @@ class FakeCaptureLarge:
         )
 
 
+class FakeCaptureBlue:
+    def capture_main_display(self, *, timestamp: float) -> CaptureResult:
+        image = Image.new("RGB", (4, 3), color="blue")
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        return CaptureResult(
+            ok=True,
+            status="ok",
+            frame=CaptureFrame(
+                frame_id="frame_blue",
+                timestamp=timestamp,
+                target_type="screen",
+                target_id="main",
+                width=4,
+                height=3,
+                image_bytes=buffer.getvalue(),
+            ),
+        )
+
+
 class FakeNumericOCR:
     def recognize(self, image, options=None) -> OCRResult:
         return OCRResult(provider="fake", elapsed_ms=1, full_text="当前价格 ¥199，立即购买")
@@ -1201,6 +1221,44 @@ def test_screenshot_endpoint_prunes_latest_frames_to_small_cache() -> None:
 
     assert len(list(latest_dir.glob("latest-frame-*.png"))) <= 5
     assert (latest_dir / "web-last-frame.png").exists()
+
+
+def test_task_fresh_screenshot_captures_without_switching_current_task(monkeypatch) -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_roi_current_runner",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_roi_inactive_target",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post("/api/watch/switch-task", json={"task_id": "task_roi_current_runner"})
+    assert state.current_task_id == "task_roi_current_runner"
+
+    monkeypatch.setattr("ayes.app.runner.MacOSScreenCapture", lambda: FakeCaptureBlue())
+
+    response = client.post("/api/tasks/task_roi_inactive_target/screenshot/fresh")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == "task_roi_inactive_target"
+    assert payload["capture_status"] == "ok"
+    assert payload["image_width"] == 4
+    assert payload["image_height"] == 3
+    assert "/runtime/tasks/" in payload["path"]
+    assert "/task_roi_inactive_target/screenshots/latest/" in payload["path"]
+    assert state.current_task_id == "task_roi_current_runner"
+    assert state.last_screenshot_path is None or "task_roi_inactive_target" not in state.last_screenshot_path
 
 
 def test_memory_items_endpoint_returns_recent_event_items() -> None:

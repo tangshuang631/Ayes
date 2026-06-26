@@ -135,6 +135,7 @@ ayes-agent-local observe-live --task-id task_web --minutes 5 --limit 20
 ayes-agent-local recent --task-id task_web --minutes 5 --limit 20
 ayes-agent-local alerts --task-id task_web --minutes 15 --limit 20
 ayes-agent-local screenshot --task-id task_web
+ayes-agent-local screenshot --task-id task_web --fresh
 ayes-agent-local ask --task-id task_web --minutes 5 --question "最近几分钟发生了什么"
 ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 20
 ayes-agent-local memory-policy --task-id task_web
@@ -165,7 +166,7 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 ayes-menubar
 ```
 
-注意：`ayes-agent-local start` 在默认本地地址下会尽力自动拉起 macOS 菜单栏控制入口；失败不会阻断监控。`screenshot` 返回的 `path` 应是最近真实采样帧的唯一文件名，不要把固定兼容文件当作最新证据。
+注意：`ayes-agent-local start` 在默认本地地址下会尽力自动拉起 macOS 菜单栏控制入口；失败不会阻断监控。`screenshot` 返回的 `path` 应是最近真实采样帧的唯一文件名，不要把固定兼容文件当作最新证据。`screenshot --fresh --task-id ...` 会按该任务目标即时采一张最新截图，不要求任务正在运行，也不会切换当前任务。
 
 如果没有安装 `ayes-agent-local`，可暂时回退到仓库内命令：
 

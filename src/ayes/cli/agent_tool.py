@@ -98,7 +98,6 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     }}
     return self;
 }}
-- (BOOL)isFlipped {{ return YES; }}
 - (NSRect)imageDrawRect {{
     if (self.image == nil || self.image.size.width <= 0 || self.image.size.height <= 0) {{ return NSZeroRect; }}
     CGFloat padding = 12.0;
@@ -158,7 +157,7 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     CGFloat displayScaleX = self.image.size.width / drawRect.size.width;
     CGFloat displayScaleY = self.image.size.height / drawRect.size.height;
     CGFloat x = (selected.origin.x - drawRect.origin.x) * displayScaleX;
-    CGFloat y = (selected.origin.y - drawRect.origin.y) * displayScaleY;
+    CGFloat y = (NSMaxY(drawRect) - NSMaxY(selected)) * displayScaleY;
     CGFloat w = selected.size.width * displayScaleX;
     CGFloat h = selected.size.height * displayScaleY;
     return NSMakeRect(MAX(0, floor(x)), MAX(0, floor(y)), MAX(1, round(w)), MAX(1, round(h)));
@@ -177,7 +176,6 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     if (self) {{ self.image = image; self.pixelRect = pixelRect; self.wantsLayer = YES; }}
     return self;
 }}
-- (BOOL)isFlipped {{ return YES; }}
 - (void)drawRect:(NSRect)dirtyRect {{
     [[NSColor colorWithWhite:0.96 alpha:1.0] setFill];
     NSRectFill(self.bounds);
@@ -187,7 +185,8 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     CGFloat drawWidth = self.pixelRect.size.width * scale;
     CGFloat drawHeight = self.pixelRect.size.height * scale;
     NSRect drawRect = NSMakeRect((self.bounds.size.width - drawWidth) / 2.0, (self.bounds.size.height - drawHeight) / 2.0, drawWidth, drawHeight);
-    [self.image drawInRect:drawRect fromRect:self.pixelRect operation:NSCompositingOperationSourceOver fraction:1.0];
+    NSRect sourceRect = NSMakeRect(self.pixelRect.origin.x, self.image.size.height - NSMaxY(self.pixelRect), self.pixelRect.size.width, self.pixelRect.size.height);
+    [self.image drawInRect:drawRect fromRect:sourceRect operation:NSCompositingOperationSourceOver fraction:1.0];
     [[NSColor systemBlueColor] setStroke];
     NSBezierPath *stroke = [NSBezierPath bezierPathWithRect:drawRect];
     [stroke setLineWidth:2.0];
@@ -786,14 +785,16 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
 - (void)openRoiEditor:(NSMenuItem *)sender {{
     NSString *taskId = [sender representedObject];
     if (taskId == nil || [taskId length] == 0) {{ return; }}
-    NSString *queryTaskId = [taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-    NSDictionary *screenshotPayload = [self jsonForPath:[@"/api/screenshot?task_id=" stringByAppendingString:queryTaskId ?: @""]];
+    NSString *encodedPathTaskId = [taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+    NSString *freshScreenshotPath = [@"/api/tasks/" stringByAppendingFormat:@"%@/screenshot/fresh", encodedPathTaskId ?: @""];
+    NSDictionary *screenshotPayload = [self postPathSync:freshScreenshotPath];
     NSString *rawPath = [self safeText:[screenshotPayload objectForKey:@"path"] fallback:@""];
     NSString *imagePath = [self absolutePathForRuntimePath:rawPath];
     NSImage *image = [[NSImage alloc] initWithContentsOfFile:imagePath];
     if (image == nil) {{
         [NSApp activateIgnoringOtherApps:YES];
-        [self showError:@"无法读取当前任务最新截图，不能创建 ROI。请先启动或运行一次该任务。"];
+        NSString *message = [self safeText:[screenshotPayload objectForKey:@"capture_message"] fallback:@"无法读取当前任务最新截图，不能创建 ROI。请确认目标窗口或进程当前可见。"];
+        [self showError:message];
         return;
     }}
     CGFloat maxWidth = 760.0;
@@ -848,7 +849,6 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     NSString *regionIdBase = [roiName stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet alphanumericCharacterSet]];
     if ([regionIdBase length] == 0) {{ regionIdBase = @"custom"; }}
     NSString *regionId = [@"roi_" stringByAppendingString:regionIdBase];
-    NSString *encodedPathTaskId = [taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
     NSString *roiPath = [@"/api/tasks/" stringByAppendingFormat:@"%@/roi", encodedPathTaskId ?: @""];
     NSDictionary *payload = @{{
         @"roi_name": roiName,
@@ -1418,6 +1418,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     screenshot_parser = subparsers.add_parser("screenshot", help="读取最近截图与 ROI 覆盖信息")
     screenshot_parser.add_argument("--task-id", default=None)
+    screenshot_parser.add_argument("--fresh", action="store_true", help="按指定任务目标即时采一张最新截图，不要求任务正在运行")
 
     ask_parser = subparsers.add_parser("ask", help="对近期或长期记忆发起提问")
     ask_parser.add_argument("--task-id", default=None)
@@ -1644,6 +1645,11 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
         path = _build_query_path("/api/timeline/long-term", task_id=args.task_id, hours=args.hours, limit=args.limit)
         return _request_json(base_url, path)
     if args.command == "screenshot":
+        if args.fresh:
+            if not args.task_id:
+                raise RuntimeError("screenshot --fresh 必须提供 --task-id")
+            path = f"/api/tasks/{_path_segment(args.task_id)}/screenshot/fresh"
+            return _request_json(base_url, path, method="POST")
         path = _build_query_path("/api/screenshot", task_id=args.task_id)
         return _request_json(base_url, path)
     if args.command == "ask":

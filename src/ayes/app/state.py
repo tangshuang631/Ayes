@@ -925,6 +925,12 @@ class AppState:
             return None
         frame = self.current_runner.last_captured_frame
         task_id = self.current_task_id or self.last_task_id or "unknown"
+        payload = self._persist_frame_as_latest_screenshot(task_id=task_id, frame=frame)
+        if payload is not None:
+            self.remember_screenshot(path=f"runtime/{payload['relative_path']}", width=frame.width, height=frame.height)
+        return payload
+
+    def _persist_frame_as_latest_screenshot(self, *, task_id: str, frame) -> Optional[dict]:
         task_paths = self._task_paths(task_id, timestamp=frame.timestamp)
         latest_dir = task_paths["latest_dir"]
         latest_dir.mkdir(parents=True, exist_ok=True)
@@ -937,13 +943,91 @@ class AppState:
         compatibility_path.write_bytes(frame.image_bytes)
         self._cleanup_latest_screenshots(latest_dir=latest_dir, keep_latest_files=5)
         relative_path = screenshot_path.relative_to(self.runtime_dir).as_posix()
-        self.remember_screenshot(path=f"runtime/{relative_path}", width=frame.width, height=frame.height)
         return {
             "path": str(screenshot_path),
+            "relative_path": relative_path,
             "compatibility_path": str(compatibility_path),
             "image_width": frame.width,
             "image_height": frame.height,
             "timestamp": frame.timestamp,
+        }
+
+    def capture_task_screenshot(self, *, task_id: str) -> dict:
+        task = self.sqlite_store.get_task(task_id)
+        if task is None:
+            raise ValueError("任务不存在")
+        spec = WatchSpec.from_dict(task["spec"])
+        runner = WatchRunner(
+            spec,
+            task_id=task_id,
+            event_sink=None,
+            log_sink=self._runner_log_sink,
+            runtime_dir=self.runtime_dir,
+        )
+        result = runner.capture_latest_frame()
+        if not result.ok or result.frame is None:
+            self.log_store.write(
+                category="capture",
+                level="warning",
+                message=result.message or result.status,
+                task_id=task_id,
+                metadata={"status": result.status, "operation": "fresh_task_screenshot"},
+            )
+            return {
+                "task_id": task_id,
+                "path": None,
+                "image_width": None,
+                "image_height": None,
+                "capture_status": result.status,
+                "capture_message": result.message,
+                "capture_timestamp": time.time(),
+            }
+        payload = self._persist_frame_as_latest_screenshot(task_id=task_id, frame=result.frame) or {}
+        path = payload.get("relative_path")
+        display_path = f"/runtime/{path}" if path else None
+        self.log_store.write(
+            category="capture",
+            level="info",
+            message="已为任务即时采样最新截图",
+            task_id=task_id,
+            metadata={"path": display_path, "capture_status": result.status},
+        )
+        return {
+            "task_id": task_id,
+            "path": display_path,
+            "image_width": payload.get("image_width"),
+            "image_height": payload.get("image_height"),
+            "regions": [
+                {
+                    "region_id": region.region_id,
+                    "name": region.name,
+                    "x": region.x,
+                    "y": region.y,
+                    "w": region.w,
+                    "h": region.h,
+                    "coordinate_space": region.coordinate_space,
+                }
+                for region in spec.target.regions
+                if region.enabled
+            ],
+            "capture_status": result.status,
+            "capture_message": result.message,
+            "capture_timestamp": payload.get("timestamp"),
+            "target": asdict(spec.target),
+            "capture_target": self._capture_target_payload_from_frame(result.frame),
+        }
+
+    def _capture_target_payload_from_frame(self, frame) -> dict:
+        metadata = frame.metadata or {}
+        return {
+            "type": frame.target_type,
+            "target_id": frame.target_id,
+            "process_name": metadata.get("process_name"),
+            "process_id": metadata.get("process_id"),
+            "window_id": metadata.get("window_id"),
+            "screen_id": metadata.get("screen_id"),
+            "window_title": metadata.get("window_title") or "",
+            "window_state": metadata.get("window_state") or "",
         }
 
     def _cleanup_latest_screenshots(self, *, latest_dir: Path, keep_latest_files: int) -> None:

@@ -50,6 +50,8 @@ def test_agent_contracts_endpoint_exposes_expected_routes() -> None:
     assert "region_bindings" in payload["watch.confirm_plan"]["request"]
     assert "alert_message_template" in payload["watch.confirm_plan"]["request"]
     assert "snapshot.inspect" in payload
+    assert payload["snapshot.fresh"]["path"] == "/api/tasks/{task_id}/screenshot/fresh"
+    assert "capture_status" in payload["snapshot.fresh"]["response_keys"]
     assert "timeline.recent" in payload
     assert payload["timeline.query"]["path"] == "/api/ask"
     assert "structured_matches" in payload["timeline.query"]["response_keys"]

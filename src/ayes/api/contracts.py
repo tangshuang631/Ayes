@@ -1014,6 +1014,12 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "query": {"task_id": "可选"},
             "response_keys": ["path", "regions", "target", "capture_target", "capture_status", "capture_timestamp"],
         },
+        "snapshot.fresh": {
+            "method": "POST",
+            "path": "/api/tasks/{task_id}/screenshot/fresh",
+            "request": {"task_id": "必填；按指定任务目标即时采一张最新截图，不要求任务正在运行，也不切换当前任务"},
+            "response_keys": ["task_id", "path", "image_width", "image_height", "regions", "target", "capture_target", "capture_status", "capture_message", "capture_timestamp"],
+        },
         "memory.recent": {
             "method": "GET",
             "path": "/api/memory/recent",

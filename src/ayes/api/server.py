@@ -977,6 +977,16 @@ def get_screenshot() -> JSONResponse:
     return JSONResponse(_build_screenshot_payload())
 
 
+@app.post("/api/tasks/{task_id}/screenshot/fresh")
+def capture_task_fresh_screenshot(task_id: str) -> JSONResponse:
+    try:
+        payload = state.capture_task_screenshot(task_id=task_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    status_code = 200 if payload.get("capture_status") == "ok" else 409
+    return JSONResponse(payload, status_code=status_code)
+
+
 @app.get("/api/watch/status")
 def watch_status() -> JSONResponse:
     return JSONResponse(state.status())
