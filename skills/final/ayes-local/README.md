@@ -2,7 +2,7 @@
 
 Ayes Local 是一个 macOS 本地屏幕监控 skill。它让 Codex、OpenClaw 或其他本地 Agent 拥有“可持续观察屏幕的眼睛”：可以监控全屏、某个进程、窗口或 ROI 区域，并在之后回答“刚刚发生了什么”“我刚才看了什么”“这个区域有没有变化”。
 
-第一版只支持 macOS。
+如果你需要 Windows 版，请安装仓库里的 `skills/final/ayes-local-windows/`。
 
 ## 功能
 
@@ -38,6 +38,8 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local status
 $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 ```
 
+安装脚本会尽量额外创建 `~/.local/bin/ayes-agent-local` 与 `~/.local/bin/ayes-menubar-local` 软链，方便新窗口直接命中；但对 agent 文档和排障来说，仍推荐优先使用上面的绝对 wrapper 路径。
+
 如果菜单栏启动成功，macOS 右上角会出现 `Ayes ○` 或 `Ayes ◉`。
 
 ## 安装到 OpenClaw 或其他 Agent
@@ -68,13 +70,13 @@ python3 -m venv .venv
 帮我监控 Chrome 这个进程，任务名叫 Chrome 页面监控
 ```
 
-Agent 应该先调用：
+Agent 应优先直接调用安装后的绝对 wrapper：
 
 ```bash
-ayes-agent-local ensure-service
-ayes-agent-local plan-spec ...
-ayes-agent-local confirm-plan ...
-ayes-agent-local start
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local ensure-service
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local plan-spec ...
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local confirm-plan ...
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local start
 ```
 
 如果需要菜单栏：
@@ -88,21 +90,21 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 ### 1. 查看当前有没有监控任务
 
 ```bash
-ayes-agent-local status
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local status
 ```
 
 ### 2. 问最近几分钟发生了什么
 
 ```bash
-ayes-agent-local activity --minutes 5
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local query --minutes 5 --question "最近几分钟发生了什么"
 ```
 
-Agent 回答普通回忆问题时应优先用 `activity`，不要默认读取日志或原始 JSONL。
+Agent 回答普通回忆问题时应优先用 `query`，不要默认读取日志或原始 JSONL。
 
 ### 3. 读取更细的短期记忆
 
 ```bash
-ayes-agent-local memory-items --task-id <task_id> --minutes 5 --limit 5
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local memory-items --task-id <task_id> --minutes 5 --limit 5
 ```
 
 默认返回紧凑结构，过滤 OCR blocks、bbox、evidence_refs 等重字段。
@@ -110,13 +112,13 @@ ayes-agent-local memory-items --task-id <task_id> --minutes 5 --limit 5
 ### 4. 读取最新截图证据
 
 ```bash
-ayes-agent-local screenshot --task-id <task_id>
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local screenshot --task-id <task_id>
 ```
 
 如果任务没有运行，但想按该任务目标即时采样：
 
 ```bash
-ayes-agent-local screenshot --task-id <task_id> --fresh
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local screenshot --task-id <task_id> --fresh
 ```
 
 ### 5. 创建 ROI
@@ -126,7 +128,7 @@ ayes-agent-local screenshot --task-id <task_id> --fresh
 Agent 也可以用命令创建：
 
 ```bash
-ayes-agent-local roi create \
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local roi create \
   --task-id <task_id> \
   --roi-name 价格监控 \
   --region "roi_price|价格监控|120|240|360|160|target"
@@ -137,24 +139,24 @@ ayes-agent-local roi create \
 默认策略已经偏保守：
 
 ```bash
-ayes-agent-local sampling --interval-sec 6 --quality standard --save-ocr-screenshots false
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local sampling --interval-sec 6 --quality standard --save-ocr-screenshots false
 ```
 
 如果长期监控建议使用：
 
 ```bash
-ayes-agent-local sampling --quality space_saver --save-ocr-screenshots false
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local sampling --quality space_saver --save-ocr-screenshots false
 ```
 
 只有确实需要逐事件原图证据时才开启：
 
 ```bash
-ayes-agent-local sampling --save-ocr-screenshots true
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local sampling --save-ocr-screenshots true
 ```
 
 ### 7. 开启本地视觉增强
 
-先安装并启动 Ollama，再拉取视觉模型：
+本地视觉增强是可选功能；没有 Ollama 或视觉模型时，Ayes 仍会使用 OCR、注意力分区和记忆索引工作。先从 [Ollama 官网](https://ollama.com) 安装并启动 Ollama，再拉取视觉模型：
 
 ```bash
 ollama pull qwen2.5vl:7b
@@ -163,18 +165,20 @@ ollama pull qwen2.5vl:7b
 然后：
 
 ```bash
-ayes-agent-local vision models
-ayes-agent-local vision enable --provider ollama --model qwen2.5vl:7b --auto-use-when-available true
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local vision models
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local vision enable --provider ollama --model qwen2.5vl:7b --auto-use-when-available true
 ```
 
 如果选择了非视觉模型，Ayes 会自动关闭本地视觉增强。
+
+也可以直接对 agent 说“启用 Ayes 本地模型增强”。agent 会按 skill 文档检查 Ollama 服务、提示安装官网、拉取默认 `qwen2.5vl:7b`，再写入 Ayes 本地配置。
 
 ### 8. 企业微信提醒
 
 给某个任务或 ROI 配 webhook：
 
 ```bash
-ayes-agent-local task-alert \
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local task-alert \
   --task-id <task_id_or_roi_task_id> \
   --enabled true \
   --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx" \
@@ -239,7 +243,7 @@ mv "$HOME/.codex/skills/ayes-local" "$HOME/.codex/skills/ayes-local.backup.$(dat
 
 ## 当前限制
 
-- 第一版只支持 macOS。
+- 这个发行目录只支持 macOS；Windows 请安装 `skills/final/ayes-local-windows/`。
 - 需要屏幕录制权限。
 - 截图快捷键粘贴需要辅助功能权限。
 - 本地视觉增强依赖 Ollama 和视觉模型。

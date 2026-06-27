@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,7 +80,7 @@ def install_skill(
     *,
     repo_root: Path,
     skill_root: Path,
-    python_bin: str = "python3",
+    python_bin: str = sys.executable,
     module: str = "ayes.cli.agent_tool",
 ) -> InstallPaths:
     paths = build_install_paths(repo_root=repo_root, skill_root=skill_root)
@@ -105,14 +106,32 @@ def install_skill(
     paths.agent_wrapper_path.chmod(0o755)
     paths.menubar_wrapper_path.write_text(menubar_wrapper, encoding="utf-8")
     paths.menubar_wrapper_path.chmod(0o755)
+    _install_local_bin_symlink(link_name="ayes-agent-local", target=paths.agent_wrapper_path)
+    _install_local_bin_symlink(link_name="ayes-menubar-local", target=paths.menubar_wrapper_path)
     return paths
+
+
+def _install_local_bin_symlink(*, link_name: str, target: Path) -> None:
+    local_bin = Path.home() / ".local" / "bin"
+    try:
+        local_bin.mkdir(parents=True, exist_ok=True)
+        link_path = local_bin / link_name
+        if link_path.exists() or link_path.is_symlink():
+            if link_path.is_symlink() and link_path.resolve() == target.resolve():
+                return
+            if not link_path.is_symlink():
+                return
+            link_path.unlink()
+        link_path.symlink_to(target)
+    except OSError:
+        return
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="安装 ayes-local skill 到本地智能体 skill 目录")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--skill-root", default=str(Path.home() / ".codex" / "skills"))
-    parser.add_argument("--python-bin", default="python3")
+    parser.add_argument("--python-bin", default=sys.executable)
     parser.add_argument("--module", default="ayes.cli.agent_tool")
     return parser
 

@@ -26,7 +26,7 @@ ayes-agent-local start
 
 ```bash
 ayes-agent-local status
-ayes-agent-local activity --minutes 30
+ayes-agent-local query --minutes 30 --question "最近半小时主要发生了什么"
 du -sh "$HOME/.codex/skills/ayes-local/runtime"
 find "$HOME/.codex/skills/ayes-local/runtime/tasks" -path '*/screenshots/latest/*' -type f | wc -l
 find "$HOME/.codex/skills/ayes-local/runtime/tasks" -path '*/screenshots/evidence/*' -type f | wc -l

@@ -8,6 +8,15 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local
 
 为简洁，下文用 `ayes-agent-local` 代指该脚本。
 
+如果安装脚本成功写入本机软链，也可以直接调用：
+
+```bash
+~/.local/bin/ayes-agent-local
+~/.local/bin/ayes-menubar-local
+```
+
+但对 agent 来说，优先使用上面的绝对 wrapper 路径，避免在新窗口里先花 token 排查 PATH。
+
 注意：
 
 - 这是最终无状态 skill 产物对应的命令面
@@ -22,7 +31,7 @@ ayes-agent-local ensure-service
 ayes-agent-local contracts
 ayes-agent-local region-bind-contract
 ayes-agent-local status
-ayes-agent-local activity --minutes 5
+ayes-agent-local query --minutes 5 --question "最近几分钟发生了什么"
 ayes-agent-local observe-live --minutes 5 --limit 20
 ~/.codex/skills/ayes-local/scripts/ayes-menubar-local
 ayes-menubar
@@ -34,7 +43,7 @@ ayes-menubar
 - `contracts`：查看当前 HTTP 接口契约
 - `region-bind-contract`：单独读取正式 `region-bind` 输入输出合同，适合外部选择器、截图标注器或 agent 做结构对齐
 - `status`：查看当前任务、运行状态、最近健康摘要
-- `activity`：读取轻量近期活动摘要，是回答“最近在干什么/刚刚发生了什么”的默认入口
+- `query`：统一轻量问答入口，是回答“最近在干什么/刚刚发生了什么/刚刚看的内容是什么”的默认入口
 - `observe-live`：读取完整实时观察上下文；仅在需要截图、证据状态、ROI 综合上下文或排障时使用
 - `~/.codex/skills/ayes-local/scripts/ayes-menubar-local`：启动 skill 自带的 macOS 原生菜单栏控制面，供用户查看运行中任务、最近任务，手动暂停、恢复、进入 ROI 管理、打开原生设置弹窗和打开任务专属数据目录
 - 菜单栏设置弹窗可配置截图快捷键，例如 `cmd+shift+9`；该快捷键只在菜单栏进程运行且当前任务正在监控时生效，会把最新采样图复制到剪贴板并模拟粘贴到当前输入框
@@ -221,7 +230,7 @@ ayes-agent-local run-once
 
 如果用户问“昨天某个进程在做什么”“最近几天最低价是什么时候”：
 
-- 优先根据问题跨度设置 `activity --minutes` 或 `memory-items --minutes`，短期紧凑明细可查到任务策略允许的天数
+- 优先根据问题跨度设置 `query --minutes --question "..."` 或 `memory-items --minutes`，短期紧凑明细可查到任务策略允许的天数
 - 如果跨度超出短期紧凑明细或需要概览，改用 `long-term --hours` 或 `ask --hours`
 - 如果问题超出短期和长期保留策略，应明确说明记忆已超过保留范围
 - 记忆文件按任务和日期切割存放在安装目录 `runtime/tasks/<date>/<task_id>/memory/short/` 与 `runtime/tasks/<date>/<task_id>/memory/long/`
@@ -240,12 +249,14 @@ ayes-agent-local vision status
 
 说明：
 
+- Ollama 官网：https://ollama.com
 - `vision prepare`：只在显式启用请求下检查 Ollama / 服务 / 默认模型是否就绪
 - `vision models`：读取本地 Ollama 模型列表；每个模型包含 `is_vision_model`，并返回 `default_selected_model`
 - `vision enable`：写入本地视觉增强配置
 - `vision status`：回读当前启用状态
 - 默认模型应使用 `qwen2.5vl:7b`
 - 如果启用时选择了非视觉模型，服务端会强制保存为 `enabled=false` 并返回 warning；菜单栏设置弹窗也会自动取消勾选
+- 如果用户说“启用 Ayes 本地模型增强”，agent 应按本节顺序检查 Ollama、提示安装官网、拉取默认视觉模型，再启用；不要在普通监控或普通回忆问题里自动下载模型。
 
 ## 4. 提问
 

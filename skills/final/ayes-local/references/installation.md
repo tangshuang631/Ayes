@@ -44,6 +44,15 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local
 $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 ```
 
+安装脚本还会尽量创建：
+
+```text
+$HOME/.local/bin/ayes-agent-local
+$HOME/.local/bin/ayes-menubar-local
+```
+
+如果目标位置已被用户自定义文件占用，安装不会报错覆盖；这种情况下仍以安装目录里的绝对 wrapper 为准。
+
 ## 2. 自定义安装目录
 
 如果是 OpenClaw 或其他本地 Agent 环境，可指定 skill 根目录：
@@ -82,6 +91,12 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 
 ```bash
 ls -l "$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local"
+```
+
+如果希望检查全局可发现入口，也可以看：
+
+```bash
+ls -l "$HOME/.local/bin/ayes-agent-local"
 ```
 
 再验证服务与接口：
@@ -126,7 +141,9 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-menubar-local
 - 最近任务切换
 - 手动暂停、恢复、打开 ROI 管理、打开设置和打开数据目录
 
-安装后的包装脚本会导出 `AYES_RUNTIME_DIR=$HOME/.codex/skills/ayes-local/runtime`。因此正式安装使用时，运行态不会写入公开发行仓库或开发仓库。
+安装后的包装脚本会导出 `AYES_RUNTIME_DIR=$HOME/.codex/skills/ayes-local/runtime`。安装器默认会把 wrapper 绑定到执行安装脚本的 Python 解释器；因此正式安装后，agent 在新窗口里直接调用安装态 wrapper 时，不必再先搜索 PATH 或重建依赖环境。
+
+因此正式安装使用时，运行态不会写入公开发行仓库或开发仓库。
 
 任务记忆策略也存放在该安装实例的 `runtime/` 中：
 

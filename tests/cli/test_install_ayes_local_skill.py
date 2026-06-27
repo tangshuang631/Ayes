@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 from scripts import install_ayes_local_skill
 
@@ -32,6 +33,23 @@ def test_build_install_paths_targets_skill_root(tmp_path: Path) -> None:
     assert paths.target_scripts_dir == skill_root / "ayes-local" / "scripts"
     assert paths.agent_wrapper_path == skill_root / "ayes-local" / "scripts" / "ayes-agent-local"
     assert paths.menubar_wrapper_path == skill_root / "ayes-local" / "scripts" / "ayes-menubar-local"
+
+
+def test_install_skill_creates_local_bin_symlinks_when_possible(tmp_path: Path, monkeypatch) -> None:
+    repo_root = tmp_path / "Ayes"
+    source_dir = repo_root / "skills" / "final" / "ayes-local"
+    (source_dir / "references").mkdir(parents=True)
+    (source_dir / "SKILL.md").write_text("skill", encoding="utf-8")
+    skill_root = tmp_path / ".codex" / "skills"
+    local_bin = tmp_path / ".local" / "bin"
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    paths = install_ayes_local_skill.install_skill(repo_root=repo_root, skill_root=skill_root)
+
+    assert (local_bin / "ayes-agent-local").is_symlink()
+    assert (local_bin / "ayes-agent-local").resolve() == paths.agent_wrapper_path.resolve()
+    assert (local_bin / "ayes-menubar-local").is_symlink()
+    assert (local_bin / "ayes-menubar-local").resolve() == paths.menubar_wrapper_path.resolve()
 
 
 def test_install_skill_preserves_existing_runtime_directory(tmp_path: Path) -> None:
@@ -115,6 +133,13 @@ def test_root_readme_routes_users_to_mac_or_windows_skill() -> None:
     assert "skills/final/ayes-local-windows/" in readme
     assert "Windows" in readme
     assert "macOS" in readme
+
+
+def test_install_parser_defaults_to_current_python_executable() -> None:
+    parser = install_ayes_local_skill.build_parser()
+    args = parser.parse_args([])
+
+    assert args.python_bin == sys.executable
 
 
 def test_windows_powershell_wrappers_use_installed_skill_runtime() -> None:

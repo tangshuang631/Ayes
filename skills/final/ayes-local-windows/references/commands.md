@@ -89,8 +89,11 @@ Windows 第一版窗口/进程监控使用窗口矩形裁剪；如果窗口被�
 
 ## 视觉增强和提醒
 
+本地视觉增强是可选功能。没有 Ollama 或视觉模型时，Ayes 仍使用 OCR 和记忆索引；需要启用时先从 https://ollama.com 安装并启动 Ollama，再拉取默认视觉模型，或直接对 agent 说“启用 Ayes 本地模型增强”。
+
 ```powershell
 ayes-agent-local vision models
+ollama pull qwen2.5vl:7b
 ayes-agent-local vision enable --provider ollama --model qwen2.5vl:7b --auto-use-when-available true
 ayes-agent-local task-alert --task-id <task_id> --enabled true --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"
 ```

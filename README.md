@@ -33,6 +33,8 @@ python3 -m venv .venv
 .venv/bin/python scripts/install_ayes_local_skill.py --skill-root "$HOME/.codex/skills" --python-bin "$PWD/.venv/bin/python"
 ```
 
+安装器会把安装态 wrapper 绑定到你执行安装时使用的 Python 解释器；因此安装完成后，新窗口里的 agent 应优先直接使用安装后的绝对 wrapper，而不是先搜索 PATH 或手动补 `PYTHONPATH`。
+
 验证：
 
 ```bash
@@ -51,6 +53,8 @@ py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe scripts\install_ayes_local_skill.py --skill-root "$env:USERPROFILE\.codex\skills" --python-bin "$PWD\.venv\Scripts\python.exe"
 ```
+
+Windows 版同样会把安装态 PowerShell wrapper 绑定到安装时传入的 Python 解释器。
 
 验证：
 

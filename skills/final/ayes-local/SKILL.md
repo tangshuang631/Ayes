@@ -14,13 +14,15 @@ If the user message contains the short prompt `Ayes context mode`, treat the nex
 1. Ensure the service is available only when needed:
 
 ```bash
-ayes-agent-local ensure-service
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local ensure-service
 ```
+
+Treat `$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local` as the canonical entrypoint. Do not spend time searching `PATH` first.
 
 2. For normal recall questions, use `query` first:
 
 ```bash
-ayes-agent-local query --minutes 240 --question "用户的问题"
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local query --minutes 240 --question "用户的问题"
 ```
 
 Use this for questions like “最近在干什么”, “刚刚发生了什么”, “刚刚看的内容是什么”, “页面里有什么”, “这个任务现在怎么样”. `query` does routing, memory-index lookup, rerank, and compact output. Answer from its `answer/items/retrieval/needs_detail` fields when sufficient.
@@ -28,7 +30,7 @@ Use this for questions like “最近在干什么”, “刚刚发生了什么�
 3. If the user asks for more detail, add compact memory only:
 
 ```bash
-ayes-agent-local memory-items --limit 5
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local memory-items --limit 5
 ```
 
 Do not request raw memory unless the user explicitly asks for raw evidence or debugging.
@@ -36,20 +38,20 @@ Do not request raw memory unless the user explicitly asks for raw evidence or de
 4. If the user asks for visual evidence or a screenshot, use screenshot:
 
 ```bash
-ayes-agent-local screenshot
-ayes-agent-local screenshot --fresh --task-id <task_id>
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local screenshot
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local screenshot --fresh --task-id <task_id>
 ```
 
 5. If the user asks about notifications, use alerts first:
 
 ```bash
-ayes-agent-local alerts --minutes 15 --limit 20
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local alerts --minutes 15 --limit 20
 ```
 
 6. If the user explicitly asks for logs or debugging, then use logs:
 
 ```bash
-ayes-agent-local logs --minutes 15
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local logs --minutes 15
 ```
 
 Normal recall must not default to logs, raw JSONL, OCR blocks, bbox, evidence refs, full screenshot lists, or full config snapshots.
@@ -59,22 +61,22 @@ Normal recall must not default to logs, raw JSONL, OCR blocks, bbox, evidence re
 Common task commands:
 
 ```bash
-ayes-agent-local status
-ayes-agent-local tasks
-ayes-agent-local switch-task --task-id <task_id>
-ayes-agent-local start
-ayes-agent-local stop
-ayes-agent-local control status
-ayes-agent-local control pause-all
-ayes-agent-local control resume-all
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local status
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local tasks
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local switch-task --task-id <task_id>
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local start
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local stop
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local control status
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local control pause-all
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local control resume-all
 ```
 
 If the user asks to create a task from natural language, use the planning flow:
 
 ```bash
-ayes-agent-local plan-spec --prompt "..." --target-type process --process-name Safari
-ayes-agent-local confirm-plan --plan-file /tmp/task.plan.json
-ayes-agent-local start
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local plan-spec --prompt "..." --target-type process --process-name Safari
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local confirm-plan --plan-file /tmp/task.plan.json
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local start
 ```
 
 Read and follow returned `questions[]`, `setup_guidance[]`, `region_intents[]`, and `action_intents[]`. Do not invent missing webhook, ROI, or vision configuration.

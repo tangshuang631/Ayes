@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,7 +54,7 @@ def build_powershell_wrapper(*, python_bin: str, module: str) -> str:
     )
 
 
-def install_skill(*, repo_root: Path, skill_root: Path, python_bin: str = "python") -> InstallPaths:
+def install_skill(*, repo_root: Path, skill_root: Path, python_bin: str = sys.executable) -> InstallPaths:
     paths = build_install_paths(repo_root=repo_root, skill_root=skill_root)
     if not paths.source_skill_dir.exists():
         raise FileNotFoundError(f"未找到 Windows skill 模板目录: {paths.source_skill_dir}")
@@ -80,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="安装 Windows ayes-local skill 到本地智能体 skill 目录")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--skill-root", default=str(Path.home() / ".codex" / "skills"))
-    parser.add_argument("--python-bin", default="python")
+    parser.add_argument("--python-bin", default=sys.executable)
     return parser
 
 
