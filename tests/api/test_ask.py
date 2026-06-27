@@ -1,10 +1,11 @@
 from fastapi.testclient import TestClient
 import time
+from dataclasses import replace
 
 from ayes.api.server import app, state
 from ayes.config.models import WatchSpec
 from ayes.events.factory import build_event
-from ayes.events.models import EventTarget, EventText, EventTextBlock, Observability, Region, WatchMatch
+from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, WatchMatch
 
 
 client = TestClient(app)
@@ -315,3 +316,278 @@ def test_ask_endpoint_supports_long_term_hours_scope() -> None:
     payload = response.json()
     assert payload["memory_layers_used"] == ["long_term_persisted"]
     assert payload["time_scope_respected"] is True
+
+
+def test_ask_content_question_uses_wide_memory_without_exact_question_keyword() -> None:
+    task_id = "task_content_question"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "哔哩哔哩"},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    state.set_runner(spec, task_id=task_id)
+    state.clear_runner()
+    now = time.time()
+    watched = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now - 120,
+        source="capture",
+        event_type="target_window_changed",
+        priority="medium",
+        confidence=0.96,
+        target=EventTarget(
+            type="process",
+            process_name="哔哩哔哩",
+            window_title="布欧怎么出现的？太古恶魔or魔法产物？哪个形态最强？【话说龙珠】",
+        ),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="进程 哔哩哔哩 代表窗口切换: 首页 -> 布欧怎么出现的？太古恶魔or魔法产物？哪个形态最强？【话说龙珠】",
+    )
+    latest_grid = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now - 10,
+        source="tagger",
+        event_type="visual_summary",
+        priority="medium",
+        confidence=0.68,
+        target=EventTarget(type="process", process_name="哔哩哔哩"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="图中有多个视频缩略图展示，每个缩略图下方有播放次数和点赞数等信息。",
+    )
+    latest_grid = replace(
+        latest_grid,
+        visual=EventVisual(summary="图中有多个视频缩略图展示，每个缩略图下方有播放次数和点赞数等信息。", provider="ollama"),
+    )
+    state.sqlite_store.insert_event(watched)
+    for index in range(1200):
+        noisy = build_event(
+            task_id=task_id,
+            spec_version="1.0",
+            task_mode="observe",
+            timestamp=now - 119 + index,
+            source="ocr",
+            event_type="text_change",
+            priority="medium",
+            confidence=0.35,
+            target=EventTarget(type="process", process_name="哔哩哔哩", window_title="哔哩哔哩 (゜-゜)つロ 干杯~-bilibili"),
+            observability=Observability(True, True, True, True, "ok"),
+            summary="OCR 未识别到文本 (vision)",
+        )
+        state.sqlite_store.insert_event(noisy)
+    state.sqlite_store.insert_event(latest_grid)
+
+    response = client.get("/api/ask", params={"task_id": task_id, "minutes": 240, "question": "最近看的视频是什么"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "布欧怎么出现的" in payload["answer"]
+    assert "话说龙珠" in payload["answer"]
+    assert "多个视频缩略图" not in payload["answer"]
+
+
+def test_ask_content_question_uses_compact_file_memory_when_sqlite_is_noisy() -> None:
+    task_id = "task_content_file_memory"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "哔哩哔哩"},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    state.set_runner(spec, task_id=task_id)
+    state.clear_runner()
+    now = time.time()
+    memory_path = state.memory_file_store.short_event_path(task_id=task_id, timestamp=now - 120)
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    memory_path.write_text(
+        '{"time":"2026-06-26T14:23:03Z","info":"进程 哔哩哔哩 代表窗口切换: 首页 -> 布欧怎么出现的？太古恶魔or魔法产物？哪个形态最强？【话说龙珠】"}\n',
+        encoding="utf-8",
+    )
+    for index in range(30):
+        noisy = build_event(
+            task_id=task_id,
+            spec_version="1.0",
+            task_mode="observe",
+            timestamp=now - 30 + index,
+            source="ocr",
+            event_type="text_change",
+            priority="medium",
+            confidence=0.35,
+            target=EventTarget(type="process", process_name="哔哩哔哩", window_title="哔哩哔哩 (゜-゜)つロ 干杯~-bilibili"),
+            observability=Observability(True, True, True, True, "ok"),
+            summary="OCR 未识别到文本 (vision)",
+        )
+        state.sqlite_store.insert_event(noisy)
+
+    response = client.get("/api/ask", params={"task_id": task_id, "minutes": 240, "question": "最近看的视频是什么"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "布欧怎么出现的" in payload["answer"]
+    assert "话说龙珠" in payload["answer"]
+    assert payload["memory_layers_used"] == ["short_term_file"]
+
+
+def test_ask_content_identity_question_prefers_file_title_over_later_visual_scenes() -> None:
+    task_id = "task_content_title_over_visual"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "哔哩哔哩"},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    state.set_runner(spec, task_id=task_id)
+    state.clear_runner()
+    now = time.time()
+    memory_path = state.memory_file_store.short_event_path(task_id=task_id, timestamp=now - 180)
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    memory_path.write_text(
+        '{"time":"2026-06-26T14:23:03Z","info":"进程 哔哩哔哩 代表窗口切换: 首页 -> 布欧怎么出现的？太古恶魔or魔法产物？哪个形态最强？【话说龙珠】"}\n',
+        encoding="utf-8",
+    )
+    for index, summary in enumerate(
+        [
+            "这张图片展示了两个卡通人物坐在沙发上对话的场景。",
+            "图中有两个穿着军装的卡通人物站在储物柜前。",
+            "一个男孩坐在书桌前，背景墙上挂着哥斯拉海报。",
+        ]
+    ):
+        event = build_event(
+                task_id=task_id,
+                spec_version="1.0",
+                task_mode="observe",
+                timestamp=now - 60 + index,
+                source="tagger",
+                event_type="visual_summary",
+                priority="medium",
+                confidence=0.88,
+                target=EventTarget(type="process", process_name="哔哩哔哩", window_title="皮特替子从军高兴的都哭了"),
+                observability=Observability(True, True, True, True, "ok"),
+                summary=summary,
+            )
+        state.sqlite_store.insert_event(replace(event, visual=EventVisual(summary=summary)))
+
+    response = client.get("/api/ask", params={"task_id": task_id, "minutes": 240, "question": "最近看的视频是什么"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "布欧怎么出现的" in payload["answer"]
+    assert "卡通人物坐在沙发" not in payload["answer"]
+    assert payload["memory_layers_used"] == ["short_term_file"]
+
+
+def test_ask_payload_strips_heavy_vision_request_payload() -> None:
+    task_id = "task_ask_compact_payload"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = state.set_runner(spec, task_id=task_id)
+    event = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=time.time(),
+        source="vision",
+        event_type="visual_summary",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="主内容是一页包含错误弹窗的网页",
+    )
+    event = replace(
+        event,
+        visual=EventVisual(
+            summary="主内容是一页包含错误弹窗的网页",
+            attributes={
+                "request_payload": {"images": ["x" * 1000], "prompt": "heavy"},
+                "raw_text": "主内容是一页包含错误弹窗的网页",
+                "structured_observation": {"visual": {"summary": "主内容是一页包含错误弹窗的网页"}},
+            },
+        ),
+    )
+    runner.memory.append(event)
+
+    response = client.get("/api/ask", params={"task_id": task_id, "minutes": 5, "question": "页面内容是什么"})
+
+    assert response.status_code == 200
+    encoded = response.text
+    assert "request_payload" not in encoded
+    assert "xxxxxxxxxx" not in encoded
+    assert "structured_observations" in encoded
+
+
+def test_query_endpoint_returns_compact_reranked_answer_without_raw_payload() -> None:
+    task_id = "task_query_compact"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "哔哩哔哩"},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = state.set_runner(spec, task_id=task_id)
+    now = time.time()
+    title_event = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now - 90,
+        source="file_memory",
+        event_type="compact_short_memory",
+        priority="medium",
+        confidence=0.86,
+        target=EventTarget(type="process", process_name="哔哩哔哩", window_title="布欧怎么出现的？太古恶魔or魔法产物？哪个形态最强？【话说龙珠】"),
+        observability=Observability(True, False, False, True, "summary"),
+        summary="进程 哔哩哔哩 代表窗口切换: 首页 -> 布欧怎么出现的？太古恶魔or魔法产物？哪个形态最强？【话说龙珠】",
+    )
+    heavy_visual = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now - 30,
+        source="vision",
+        event_type="visual_summary",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="process", process_name="哔哩哔哩"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="这张图片展示了两个卡通人物坐在沙发上对话的场景。",
+    )
+    heavy_visual = replace(
+        heavy_visual,
+        text=EventText(ocr_text="noise", blocks=[EventTextBlock(text="noise", confidence=0.2, bbox=[1, 2, 3, 4])]),
+        visual=EventVisual(attributes={"request_payload": {"images": ["x" * 1000]}}),
+    )
+    runner.event_sink(title_event)
+    runner.event_sink(heavy_visual)
+
+    response = client.get("/api/query", params={"task_id": task_id, "minutes": 240, "question": "最近看的视频是什么"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["route"] == "memory_index"
+    assert "布欧怎么出现的" in payload["answer"]
+    encoded = response.text
+    assert "request_payload" not in encoded
+    assert "bbox" not in encoded
+    assert payload["logs_used"] is False
+    assert '"items":' in encoded
+    assert '"logs":' not in encoded
+    assert len(encoded) < 8000

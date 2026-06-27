@@ -1,0 +1,678 @@
+"""Compact task memory index for token-efficient agent queries."""
+
+from __future__ import annotations
+
+from dataclasses import asdict
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import re
+import shutil
+import sqlite3
+from typing import Any, Dict, List, Optional
+
+from ayes.app.task_paths import date_from_timestamp, safe_task_segment, task_runtime_paths
+from ayes.events.models import TimelineEvent
+from ayes.memory.content_signal import clean_memory_summary
+
+
+class MemorySearchIndex:
+    def __init__(self, *, runtime_dir: Path, task_path_resolver=None) -> None:
+        self.runtime_dir = Path(runtime_dir).resolve()
+        self.task_path_resolver = task_path_resolver
+
+    def task_index_dir(self, task_id: str, *, timestamp: float | None = None) -> Path:
+        if self.task_path_resolver is not None:
+            paths = self.task_path_resolver(task_id, timestamp=timestamp)
+            return Path(paths["task_dir"]) / "index"
+        return task_runtime_paths(self.runtime_dir, task_id, timestamp=timestamp)["task_dir"] / "index"
+
+    def index_event(self, event: TimelineEvent) -> Optional[dict]:
+        chunk = self._chunk_from_event(event)
+        if chunk is None:
+            return None
+        self.index_chunk(chunk)
+        return chunk
+
+    def index_long_summary(self, payload: Dict[str, Any]) -> Optional[dict]:
+        task_id = str(payload.get("task_id") or "").strip()
+        info = clean_memory_summary(str(payload.get("summary") or ""))
+        if not task_id or not info:
+            return None
+        timestamp = float(payload.get("window_end") or payload.get("window_start") or 0.0)
+        chunk = {
+            "chunk_id": str(payload.get("summary_id") or f"long:{task_id}:{int(timestamp)}"),
+            "task_id": task_id,
+            "timestamp": timestamp,
+            "layer": "long",
+            "source": "long_term",
+            "event_type": "long_term_summary",
+            "info": self._trim(info, 240),
+            "region": "",
+            "target": "",
+            "tags": ["long_term"],
+            "confidence": 0.78,
+        }
+        self.index_chunk(chunk)
+        return chunk
+
+    def index_chunk(self, chunk: Dict[str, Any]) -> None:
+        task_id = str(chunk.get("task_id") or "").strip()
+        timestamp = float(chunk.get("timestamp") or 0.0)
+        if not task_id:
+            return
+        normalized = self._normalize_chunk(chunk)
+        index_dir = self.task_index_dir(task_id, timestamp=timestamp)
+        index_dir.mkdir(parents=True, exist_ok=True)
+        self._append_chunk_file(index_dir=index_dir, chunk=normalized)
+        self._upsert_fts(index_dir=index_dir, chunk=normalized)
+
+    def query(
+        self,
+        *,
+        task_id: str,
+        question: str,
+        minutes: int = 240,
+        now: float | None = None,
+        limit: int = 8,
+    ) -> Dict[str, Any]:
+        current_now = now if now is not None else datetime.now(timezone.utc).timestamp()
+        since_timestamp = current_now - (minutes * 60)
+        index_dirs = self._candidate_index_dirs(task_id=task_id, since_timestamp=since_timestamp, now=current_now)
+        candidates: list[dict] = []
+        query_limit = self._candidate_limit(question=question, limit=limit)
+        for index_dir in index_dirs:
+            candidates.extend(self._query_index_dir(index_dir=index_dir, task_id=task_id, question=question, since_timestamp=since_timestamp, limit=query_limit))
+        backfilled = False
+        if not candidates:
+            backfilled = self.backfill_from_memory_files(task_id=task_id, since_timestamp=since_timestamp)
+            if backfilled:
+                index_dirs = self._candidate_index_dirs(task_id=task_id, since_timestamp=since_timestamp, now=current_now)
+                for index_dir in index_dirs:
+                    candidates.extend(self._query_index_dir(index_dir=index_dir, task_id=task_id, question=question, since_timestamp=since_timestamp, limit=query_limit))
+        if not candidates:
+            candidates = self._query_chunk_files(task_id=task_id, since_timestamp=since_timestamp)
+        ranked = self._rank_candidates(candidates, question=question, since_timestamp=since_timestamp)[:limit]
+        if _is_content_identity_question(question):
+            ranked = self._prefer_title_facts(ranked)
+        if not _is_content_identity_question(question):
+            ranked = sorted(ranked, key=lambda item: float(item.get("timestamp") or 0.0))
+        return {
+            "task_id": task_id,
+            "question": question,
+            "minutes": minutes,
+            "answer": self._build_answer(ranked, minutes=minutes),
+            "items": ranked,
+            "count": len(ranked),
+            "retrieval": {
+                "strategy": "fts_chunk_rerank",
+                "index_dirs": [str(path) for path in index_dirs],
+                "candidate_count": len(candidates),
+                "returned_count": len(ranked),
+                "backfilled": backfilled,
+                "token_saving": "compact_chunks_only",
+            },
+            "needs_detail": len(ranked) == 0,
+            "next_step": "screenshot_or_observe_live_only_if_user_needs_visual_evidence" if ranked else "broaden_time_or_check_long_term",
+        }
+
+    def backfill_from_memory_files(self, *, task_id: str, since_timestamp: float = 0.0) -> bool:
+        chunks = self._chunks_from_memory_files(task_id=task_id, since_timestamp=since_timestamp)
+        for chunk in chunks:
+            self.index_chunk(chunk)
+        return bool(chunks)
+
+    def delete_task_index(self, task_id: str) -> Dict[str, Any]:
+        index_dirs = self._existing_task_index_dirs(task_id)
+        deleted_bytes = 0
+        deleted_paths = 0
+        errors = []
+        paths = []
+        for index_dir in index_dirs:
+            size = self._path_size(index_dir)
+            try:
+                shutil.rmtree(index_dir)
+                deleted_bytes += size
+                deleted_paths += 1
+                paths.append(str(index_dir))
+            except OSError as exc:
+                errors.append({"path": str(index_dir), "error": str(exc)})
+        return {
+            "task_id": task_id,
+            "deleted": deleted_paths > 0,
+            "deleted_bytes": deleted_bytes,
+            "deleted_paths": deleted_paths,
+            "paths": paths,
+            "errors": errors,
+        }
+
+    def rebuild_task_index(self, task_id: str, *, since_timestamp: float = 0.0) -> Dict[str, Any]:
+        self.delete_task_index(task_id)
+        chunks = self._chunks_from_memory_files(task_id=task_id, since_timestamp=since_timestamp)
+        for chunk in chunks:
+            self.index_chunk(chunk)
+        return {
+            "task_id": task_id,
+            "indexed_chunks": len(chunks),
+            "since_timestamp": since_timestamp,
+            "index_dirs": [str(path) for path in self._existing_task_index_dirs(task_id)],
+        }
+
+    def _chunk_from_event(self, event: TimelineEvent) -> Optional[dict]:
+        if event.event_type in {"vision_skipped", "vision_triggered"}:
+            return None
+        payload = asdict(event)
+        info = self._best_info(payload)
+        if not info:
+            return None
+        return {
+            "chunk_id": event.event_id,
+            "task_id": event.task_id,
+            "timestamp": event.timestamp,
+            "layer": "short",
+            "source": event.source,
+            "event_type": event.event_type,
+            "info": self._trim(info, 220),
+            "region": ((payload.get("region") or {}).get("name") or (payload.get("region") or {}).get("region_id") or ""),
+            "target": self._target_label(payload.get("target") or {}),
+            "tags": list(payload.get("tags") or []),
+            "confidence": float(payload.get("confidence") or 0.0),
+        }
+
+    def _best_info(self, event: Dict[str, Any]) -> str:
+        text = event.get("text") or {}
+        visual = event.get("visual") or {}
+        for value in [
+            event.get("summary"),
+            text.get("normalized_text"),
+            text.get("ocr_text"),
+            visual.get("summary"),
+        ]:
+            cleaned = clean_memory_summary(str(value or ""))
+            if not cleaned:
+                continue
+            if cleaned.startswith(("OCR vision |", "视觉增强已跳过", "视觉增强已触发")):
+                continue
+            return cleaned
+        return ""
+
+    def _normalize_chunk(self, chunk: Dict[str, Any]) -> dict:
+        timestamp = float(chunk.get("timestamp") or 0.0)
+        return {
+            "chunk_id": str(chunk.get("chunk_id") or f"chunk:{int(timestamp)}"),
+            "task_id": str(chunk.get("task_id") or ""),
+            "timestamp": timestamp,
+            "time": self._format_timestamp(timestamp),
+            "layer": str(chunk.get("layer") or "short"),
+            "source": str(chunk.get("source") or ""),
+            "event_type": str(chunk.get("event_type") or ""),
+            "info": self._trim(clean_memory_summary(str(chunk.get("info") or "")), 240),
+            "region": clean_memory_summary(str(chunk.get("region") or "")),
+            "target": clean_memory_summary(str(chunk.get("target") or "")),
+            "tags": [str(tag) for tag in (chunk.get("tags") or [])][:8],
+            "confidence": float(chunk.get("confidence") or 0.0),
+        }
+
+    def _append_chunk_file(self, *, index_dir: Path, chunk: Dict[str, Any]) -> None:
+        chunk_dir = index_dir / "chunks"
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = float(chunk.get("timestamp") or 0.0)
+        date_hour = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%d-%H")
+        path = chunk_dir / f"{date_hour}.jsonl"
+        if self._chunk_file_contains_id(path=path, chunk_id=str(chunk.get("chunk_id") or "")):
+            return
+        with path.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(chunk, ensure_ascii=False, sort_keys=True))
+            output.write("\n")
+
+    def _chunk_file_contains_id(self, *, path: Path, chunk_id: str) -> bool:
+        if not chunk_id or not path.exists():
+            return False
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if str(payload.get("chunk_id") or "") == chunk_id:
+                        return True
+        except OSError:
+            return False
+        return False
+
+    def _upsert_fts(self, *, index_dir: Path, chunk: Dict[str, Any]) -> None:
+        db_path = index_dir / "fts.sqlite"
+        with sqlite3.connect(str(db_path)) as connection:
+            self._initialize_schema(connection)
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO memory_chunks
+                (chunk_id, task_id, timestamp, layer, source, event_type, info, region, target, tags_json, confidence, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chunk["chunk_id"],
+                    chunk["task_id"],
+                    chunk["timestamp"],
+                    chunk["layer"],
+                    chunk["source"],
+                    chunk["event_type"],
+                    chunk["info"],
+                    chunk["region"],
+                    chunk["target"],
+                    json.dumps(chunk["tags"], ensure_ascii=False),
+                    chunk["confidence"],
+                    json.dumps(chunk, ensure_ascii=False),
+                ),
+            )
+            try:
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO memory_chunks_fts
+                    (chunk_id, task_id, info, region, target, tags)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (chunk["chunk_id"], chunk["task_id"], chunk["info"], chunk["region"], chunk["target"], " ".join(chunk["tags"])),
+                )
+            except sqlite3.OperationalError:
+                pass
+            connection.commit()
+
+    def _initialize_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_chunks (
+                chunk_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                layer TEXT NOT NULL,
+                source TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                info TEXT NOT NULL,
+                region TEXT NOT NULL,
+                target TEXT NOT NULL,
+                tags_json TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                payload_json TEXT NOT NULL
+            )
+            """
+        )
+        try:
+            connection.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts
+                USING fts5(chunk_id UNINDEXED, task_id UNINDEXED, info, region, target, tags)
+                """
+            )
+        except sqlite3.OperationalError:
+            pass
+
+    def _query_index_dir(self, *, index_dir: Path, task_id: str, question: str, since_timestamp: float, limit: int) -> list[dict]:
+        db_path = index_dir / "fts.sqlite"
+        if not db_path.exists():
+            return []
+        terms = self._query_terms(question)
+        with sqlite3.connect(str(db_path)) as connection:
+            if terms:
+                fts_query = " OR ".join(terms)
+                try:
+                    rows = connection.execute(
+                        """
+                        SELECT c.payload_json
+                        FROM memory_chunks_fts f
+                        JOIN memory_chunks c ON c.chunk_id = f.chunk_id
+                        WHERE f.task_id = ? AND c.timestamp >= ? AND memory_chunks_fts MATCH ?
+                        ORDER BY c.timestamp DESC
+                        LIMIT ?
+                        """,
+                        (task_id, since_timestamp, fts_query, limit),
+                    ).fetchall()
+                    if rows:
+                        return [json.loads(row[0]) for row in rows]
+                except sqlite3.OperationalError:
+                    pass
+            rows = connection.execute(
+                """
+                SELECT payload_json FROM memory_chunks
+                WHERE task_id = ? AND timestamp >= ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (task_id, since_timestamp, limit),
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def _query_chunk_files(self, *, task_id: str, since_timestamp: float) -> list[dict]:
+        chunks: list[dict] = []
+        root = self.runtime_dir / "tasks"
+        for path in root.glob(f"**/{safe_task_segment(task_id)}/index/chunks/*.jsonl"):
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if float(payload.get("timestamp") or 0.0) >= since_timestamp:
+                    chunks.append(payload)
+        return chunks
+
+    def _existing_task_index_dirs(self, task_id: str) -> list[Path]:
+        root = self.runtime_dir / "tasks"
+        if not root.exists():
+            return []
+        safe_task_id = safe_task_segment(task_id)
+        return sorted(path for path in root.glob(f"**/{safe_task_id}/index") if path.exists())
+
+    def _path_size(self, path: Path) -> int:
+        try:
+            if path.is_file():
+                return path.stat().st_size
+            if not path.exists():
+                return 0
+            return sum(child.stat().st_size for child in path.rglob("*") if child.is_file())
+        except OSError:
+            return 0
+
+    def _chunks_from_memory_files(self, *, task_id: str, since_timestamp: float) -> list[dict]:
+        chunks: list[dict] = []
+        root = self.runtime_dir / "tasks"
+        safe_task_id = safe_task_segment(task_id)
+        for path in root.glob(f"**/{safe_task_id}/memory/compact/*.jsonl"):
+            chunks.extend(self._chunks_from_compact_file(path=path, task_id=task_id, since_timestamp=since_timestamp))
+        for path in root.glob(f"**/{safe_task_id}/memory/short/*.jsonl"):
+            chunks.extend(self._chunks_from_short_file(path=path, task_id=task_id, since_timestamp=since_timestamp))
+        for path in root.glob(f"**/{safe_task_id}/memory/long/*.jsonl"):
+            chunks.extend(self._chunks_from_long_file(path=path, task_id=task_id, since_timestamp=since_timestamp))
+        return chunks
+
+    def _chunks_from_compact_file(self, *, path: Path, task_id: str, since_timestamp: float) -> list[dict]:
+        chunks = []
+        for index, payload in enumerate(self._read_jsonl(path)):
+            timestamp = _parse_memory_time(payload.get("to") or payload.get("from"))
+            if timestamp < since_timestamp:
+                continue
+            info = clean_memory_summary(str(payload.get("info") or ""))
+            if not info:
+                continue
+            repeat_count = int(payload.get("repeat_count") or 1)
+            if repeat_count > 1:
+                info = f"{info}（持续重复 {repeat_count} 次）"
+            chunks.append(
+                {
+                    "chunk_id": f"compact:{path.name}:{index}",
+                    "task_id": task_id,
+                    "timestamp": timestamp,
+                    "layer": "compact",
+                    "source": "file_memory_compact",
+                    "event_type": "compact_memory_segment",
+                    "info": info,
+                    "region": "",
+                    "target": "",
+                    "tags": ["compact_memory"],
+                    "confidence": 0.86,
+                }
+            )
+        return chunks
+
+    def _chunks_from_short_file(self, *, path: Path, task_id: str, since_timestamp: float) -> list[dict]:
+        chunks = []
+        for index, payload in enumerate(self._read_jsonl(path)):
+            timestamp = _parse_memory_time(payload.get("time"))
+            if timestamp < since_timestamp:
+                continue
+            info = clean_memory_summary(str(payload.get("info") or ""))
+            if not info:
+                continue
+            chunks.append(
+                {
+                    "chunk_id": f"short:{path.name}:{index}",
+                    "task_id": task_id,
+                    "timestamp": timestamp,
+                    "layer": "short",
+                    "source": "file_memory",
+                    "event_type": "compact_short_memory",
+                    "info": info,
+                    "region": "",
+                    "target": "",
+                    "tags": ["short_memory"],
+                    "confidence": 0.84,
+                }
+            )
+        return chunks
+
+    def _chunks_from_long_file(self, *, path: Path, task_id: str, since_timestamp: float) -> list[dict]:
+        chunks = []
+        for index, payload in enumerate(self._read_jsonl(path)):
+            timestamp = _parse_memory_time(payload.get("to") or payload.get("from"))
+            if timestamp < since_timestamp:
+                continue
+            info = clean_memory_summary(str(payload.get("info") or ""))
+            if not info:
+                continue
+            chunks.append(
+                {
+                    "chunk_id": f"long:{path.name}:{index}",
+                    "task_id": task_id,
+                    "timestamp": timestamp,
+                    "layer": "long",
+                    "source": "long_term",
+                    "event_type": "long_term_summary",
+                    "info": info,
+                    "region": "",
+                    "target": "",
+                    "tags": ["long_term"],
+                    "confidence": 0.78,
+                }
+            )
+        return chunks
+
+    def _read_jsonl(self, path: Path) -> list[dict]:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        payloads = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                payloads.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return payloads
+
+    def _rank_candidates(self, candidates: list[dict], *, question: str, since_timestamp: float) -> list[dict]:
+        seen: set[str] = set()
+        unique: list[dict] = []
+        for item in candidates:
+            key = str(item.get("chunk_id") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            if float(item.get("timestamp") or 0.0) < since_timestamp:
+                continue
+            payload = dict(item)
+            if _is_content_identity_question(question) and self._should_drop_content_candidate(payload):
+                continue
+            payload["score"] = round(self._score(payload, question=question), 4)
+            if payload["score"] >= self._minimum_score(question=question):
+                unique.append(payload)
+        unique.sort(key=lambda item: (float(item.get("score") or 0.0), float(item.get("timestamp") or 0.0)), reverse=True)
+        return unique
+
+    def _score(self, item: dict, *, question: str) -> float:
+        info = str(item.get("info") or "")
+        score = float(item.get("confidence") or 0.0)
+        content_identity_question = _is_content_identity_question(question)
+        if item.get("event_type") in {"target_window_changed", "window_title_changed", "compact_short_memory"}:
+            score += 2.0
+        if item.get("source") == "file_memory":
+            score += 1.2
+        if item.get("layer") == "long":
+            score += 0.4
+        if _contains_title_like_text(info):
+            score += 1.0
+        if _is_generic_visual(info) and content_identity_question:
+            score -= 4.0
+        for token in self._semantic_tokens(question):
+            if token in info.lower():
+                score += 0.6
+        if _looks_noisy(info):
+            score -= 2.5
+        if content_identity_question and _is_low_value_content_identity(info):
+            score -= 2.0
+        return score
+
+    def _candidate_limit(self, *, question: str, limit: int) -> int:
+        if _is_content_identity_question(question):
+            return max(limit * 80, 1000)
+        return limit * 4
+
+    def _minimum_score(self, *, question: str) -> float:
+        if _is_content_identity_question(question):
+            return 2.0
+        return 0.01
+
+    def _should_drop_content_candidate(self, item: dict) -> bool:
+        info = str(item.get("info") or "")
+        return _looks_noisy(info) or _is_low_value_content_identity(info) or _is_short_non_title_fragment(info)
+
+    def _prefer_title_facts(self, ranked: list[dict]) -> list[dict]:
+        title_facts = [item for item in ranked if _is_title_fact(str(item.get("info") or ""))]
+        return title_facts or ranked
+
+    def _candidate_index_dirs(self, *, task_id: str, since_timestamp: float, now: float) -> list[Path]:
+        dirs: list[Path] = []
+        start_day = int(since_timestamp // 86400)
+        end_day = int(now // 86400)
+        for day in range(start_day, end_day + 1):
+            timestamp = day * 86400.0
+            dirs.append(self.task_index_dir(task_id, timestamp=timestamp))
+        current_dir = self.task_index_dir(task_id)
+        if current_dir not in dirs:
+            dirs.append(current_dir)
+        return dirs
+
+    def _query_terms(self, question: str) -> list[str]:
+        terms = []
+        for token in self._semantic_tokens(question):
+            if re.fullmatch(r"[\w\u4e00-\u9fff]{2,}", token):
+                terms.append(token)
+        return terms[:8]
+
+    def _semantic_tokens(self, question: str) -> list[str]:
+        raw_tokens = re.split(r"\s+|[，。！？、,.!?：:【】\\[\\]()（）/]+", str(question or "").lower())
+        stopwords = {"最近", "刚刚", "什么", "内容", "页面", "视频", "文档", "有没有", "发生", "情况", "的是", "我在", "看的", "看了", "打开"}
+        return [token for token in raw_tokens if token and len(token) >= 2 and token not in stopwords]
+
+    def _build_answer(self, items: list[dict], *, minutes: int) -> str:
+        if not items:
+            return f"最近 {minutes} 分钟内未在轻量索引中找到足够相关的记忆。"
+        return "；".join(f"{item.get('info')}@{self._format_clock(float(item.get('timestamp') or 0.0))}" for item in items[:5])
+
+    def _target_label(self, target: dict) -> str:
+        return clean_memory_summary(str(target.get("window_title") or target.get("process_name") or target.get("screen_id") or target.get("type") or ""))
+
+    def _trim(self, value: str, limit: int) -> str:
+        text = clean_memory_summary(value)
+        return text if len(text) <= limit else text[: limit - 3] + "..."
+
+    def _format_timestamp(self, timestamp: float) -> str:
+        return datetime.fromtimestamp(timestamp, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    def _format_clock(self, timestamp: float) -> str:
+        return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+
+
+def _contains_title_like_text(text: str) -> bool:
+    value = str(text or "")
+    return len(value) >= 8 and any(marker in value for marker in ["？", "?", "！", "!", "【", "】", "：", ":", "->"])
+
+
+def _is_title_fact(text: str) -> bool:
+    value = str(text or "")
+    if _looks_noisy(value):
+        return False
+    return any(marker in value for marker in ["窗口切换", "标题切换", "代表窗口切换"]) or (
+        any("\u4e00" <= char <= "\u9fff" for char in value) and any(marker in value for marker in ["？", "【", "】", "->"])
+    )
+
+
+def _is_generic_visual(text: str) -> bool:
+    value = str(text or "")
+    return any(marker in value for marker in ["这张图片展示", "图中显示", "图中有", "多个缩略图", "视频列表", "播放次数和点赞数"])
+
+
+def _is_content_identity_question(question: str) -> bool:
+    value = str(question or "")
+    return any(marker in value for marker in ["看了什么", "看的什么", "视频是什么", "文档是什么", "打开了什么", "具体内容", "页面内容"])
+
+
+def _looks_noisy(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value or value.startswith(("OCR 未识别到文本", "OCR 低质量文本已降权")):
+        return True
+    if "\uffff" in value or "�" in value:
+        return True
+    chars = [char for char in value if not char.isspace()]
+    if len(chars) < 3:
+        return True
+    useful = sum(1 for char in chars if "\u4e00" <= char <= "\u9fff" or char.isalpha())
+    symbol_count = sum(1 for char in chars if not char.isalnum() and not ("\u4e00" <= char <= "\u9fff"))
+    digit_count = sum(1 for char in chars if char.isdigit())
+    cjk_count = sum(1 for char in chars if "\u4e00" <= char <= "\u9fff")
+    ascii_alpha_count = sum(1 for char in chars if char.isascii() and char.isalpha())
+    if useful / max(len(chars), 1) < 0.2:
+        return True
+    if cjk_count == 0 and symbol_count >= 3 and (digit_count + symbol_count) / max(len(chars), 1) > 0.45:
+        return True
+    if cjk_count == 0 and ascii_alpha_count <= 8 and symbol_count >= 2 and digit_count >= 4:
+        return True
+    if re.search(r"[A-Za-z]\*%[A-Za-z]\*", value):
+        return True
+    return False
+
+
+def _is_low_value_content_identity(text: str) -> bool:
+    value = str(text or "").strip()
+    markers = [
+        "多个视频缩略图",
+        "播放次数和点赞数",
+        "视频列表",
+        "首页推荐",
+        "推荐视频",
+        "没有明显标题",
+        "无法确定具体",
+    ]
+    return any(marker in value for marker in markers)
+
+
+def _is_short_non_title_fragment(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return True
+    has_cjk = any("\u4e00" <= char <= "\u9fff" for char in value)
+    if has_cjk or _contains_title_like_text(value):
+        return False
+    alnum_count = sum(1 for char in value if char.isalnum())
+    return len(value) <= 24 or alnum_count <= 12
+
+
+def _parse_memory_time(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0

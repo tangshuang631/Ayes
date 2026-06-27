@@ -66,6 +66,27 @@ def test_agent_tool_tasks_reads_task_list_endpoint(monkeypatch, capsys) -> None:
     assert '"2026-06-25__price_watch"' in capsys.readouterr().out
 
 
+def test_agent_tool_query_reads_unified_query_endpoint(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["base_url"] = base_url
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"task_id": "task_demo", "route": "memory_index", "answer": "Apifox 登录页", "items": []}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["query", "--task-id", "task_demo", "--minutes", "240", "--question", "刚才页面内容是什么"])
+
+    assert exit_code == 0
+    assert recorded["base_url"] == "http://127.0.0.1:8770"
+    assert recorded["path"] == "/api/query?task_id=task_demo&question=%E5%88%9A%E6%89%8D%E9%A1%B5%E9%9D%A2%E5%86%85%E5%AE%B9%E6%98%AF%E4%BB%80%E4%B9%88&minutes=240&limit=8"
+    assert recorded["method"] == "GET"
+    assert recorded["payload"] is None
+    assert '"route": "memory_index"' in capsys.readouterr().out
+
+
 def test_agent_tool_memory_policy_reads_task_policy(monkeypatch, capsys) -> None:
     recorded = {}
 
@@ -106,6 +127,8 @@ def test_agent_tool_memory_policy_updates_task_policy(monkeypatch, capsys) -> No
             "25",
             "--disable-auto-cleanup",
             "true",
+            "--compact-every",
+            "900",
         ]
     )
 
@@ -116,6 +139,7 @@ def test_agent_tool_memory_policy_updates_task_policy(monkeypatch, capsys) -> No
         "short_term_retain_days": 10,
         "long_term_retain_days": 25,
         "disable_auto_cleanup": True,
+        "memory_compact_every_n_events": 900,
     }
     assert '"disable_auto_cleanup": true' in capsys.readouterr().out
 
@@ -137,6 +161,65 @@ def test_agent_tool_memory_cleanup_posts_task_cleanup(monkeypatch, capsys) -> No
     assert recorded["method"] == "POST"
     assert recorded["payload"] == {}
     assert '"deleted_events": 2' in capsys.readouterr().out
+
+
+def test_agent_tool_storage_status_reads_storage_endpoint(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"runtime_dir": "/tmp/ayes-runtime", "total_bytes": 123}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(["storage", "status"])
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/storage/status"
+    assert recorded["method"] == "GET"
+    assert recorded["payload"] is None
+    assert '"total_bytes": 123' in capsys.readouterr().out
+
+
+def test_agent_tool_storage_cleanup_posts_selected_flags(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    def fake_request_json(base_url, path, *, method="GET", payload=None):
+        recorded["path"] = path
+        recorded["method"] = method
+        recorded["payload"] = payload
+        return {"status": "ok", "cleanup": {"screenshots": {"deleted_bytes": 3}}}
+
+    monkeypatch.setattr(agent_tool, "_request_json", fake_request_json)
+    exit_code = agent_tool.main(
+        [
+            "storage",
+            "cleanup",
+            "--task-id",
+            "task_demo",
+            "--screenshots",
+            "--logs",
+            "--index",
+            "--rebuild-index",
+            "--vacuum",
+        ]
+    )
+
+    assert exit_code == 0
+    assert recorded["path"] == "/api/storage/cleanup"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"] == {
+        "task_id": "task_demo",
+        "screenshots": True,
+        "logs": True,
+        "memory": False,
+        "index": True,
+        "legacy": False,
+        "vacuum": True,
+        "rebuild_index": True,
+    }
+    assert '"deleted_bytes": 3' in capsys.readouterr().out
 
 
 def test_agent_tool_roi_list_reads_parent_roi_endpoint(monkeypatch, capsys) -> None:
@@ -855,8 +938,37 @@ def test_build_menubar_roi_editor_uses_screenshot_selection_and_preview(tmp_path
     assert '"coordinate_space": @"target"' in source
     assert "ROI 预览确认" in source
     assert "请拖拽框选 ROI 区域" in source
+
+
+def test_build_menubar_hotkey_uses_fresh_snapshot_endpoint(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert '@"/api/hotkey/latest-frame"' in source
+    assert '@"/api/screenshot"' not in source
     assert "toPath:roiPath" in source
     assert "当前任务 ROI 子任务数" not in source
+
+
+def test_build_menubar_context_hotkey_pastes_short_ayes_prompt(tmp_path: Path) -> None:
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
+    assert "monitor_context_hotkey" in source
+    assert "monitor_context_prompt" in source
+    assert '@"Ayes context mode"' in source
+    assert "copyTextToPasteboard" in source
+    assert "pasteMonitorContextPrompt" in source
 
 
 def test_build_menubar_global_settings_does_not_target_current_task_sampling(tmp_path: Path) -> None:

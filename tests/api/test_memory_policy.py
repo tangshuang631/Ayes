@@ -26,6 +26,7 @@ def test_load_configured_persists_task_memory_policy_and_exposes_directory() -> 
                 "short_term": {"retain_days": 8},
                 "long_term": {"retain_days": 22},
                 "disable_auto_cleanup": True,
+                "memory_compact_every_n_events": 750,
             },
         },
     )
@@ -35,6 +36,7 @@ def test_load_configured_persists_task_memory_policy_and_exposes_directory() -> 
     assert payload["memory_policy"]["short_term_retain_days"] == 8
     assert payload["memory_policy"]["long_term_retain_days"] == 22
     assert payload["memory_policy"]["disable_auto_cleanup"] is True
+    assert payload["memory_policy"]["memory_compact_every_n_events"] == 750
     assert payload["memory_policy"]["memory_dir"].endswith(f"/{task_id}/memory")
 
 
@@ -56,6 +58,7 @@ def test_task_memory_policy_endpoint_updates_per_task_policy() -> None:
             "short_term_retain_days": 12,
             "long_term_retain_days": 28,
             "disable_auto_cleanup": True,
+            "memory_compact_every_n_events": 900,
         },
     )
 
@@ -65,6 +68,42 @@ def test_task_memory_policy_endpoint_updates_per_task_policy() -> None:
     assert policy["short_term_retain_days"] == 12
     assert policy["long_term_retain_days"] == 28
     assert policy["disable_auto_cleanup"] is True
+    assert policy["memory_compact_every_n_events"] == 900
+
+
+def test_event_sink_compacts_short_memory_when_threshold_reached() -> None:
+    task_id = f"task_memory_compact_threshold_{uuid4().hex}"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+            "memory": {"memory_compact_every_n_events": 100},
+        }
+    )
+    state.set_runner(spec, task_id=task_id)
+
+    for index in range(100):
+        state._event_sink(
+            build_event(
+                task_id=task_id,
+                spec_version="1.0",
+                task_mode="observe",
+                timestamp=1792944000.0 + (index * 31),
+                source="ocr",
+                event_type="text_change",
+                priority="medium",
+                confidence=0.9,
+                target=EventTarget(type="screen", screen_id=1),
+                observability=Observability(True, True, True, True, "ok"),
+                summary="Apifox 登录页",
+            )
+        )
+
+    compact_path = state.memory_file_store.compact_segments_path(task_id=task_id, timestamp=1792944000.0)
+    assert compact_path.exists()
+    assert "Apifox 登录页" in compact_path.read_text(encoding="utf-8")
 
 
 def test_apply_memory_cleanup_deletes_expired_short_and_long_memory() -> None:

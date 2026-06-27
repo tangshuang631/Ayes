@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any, Dict, Optional
 
 from ayes.events.models import TimelineEvent
@@ -15,6 +16,7 @@ class TaskMemoryFileStore:
     def __init__(self, *, runtime_dir: Path, task_path_resolver=None) -> None:
         self.runtime_dir = Path(runtime_dir).resolve()
         self.task_path_resolver = task_path_resolver
+        self._last_short_by_path: dict[str, tuple[str, float]] = {}
 
     def task_dir(self, task_id: str, *, timestamp: float | None = None) -> Path:
         if self.task_path_resolver is not None:
@@ -32,10 +34,17 @@ class TaskMemoryFileStore:
         date_text = date_from_timestamp(timestamp)
         return self.task_dir(safe_task_id, timestamp=timestamp) / "long" / f"{date_text}-{safe_task_id}-summary.jsonl"
 
+    def compact_segments_path(self, *, task_id: str, timestamp: float) -> Path:
+        safe_task_id = safe_task_segment(task_id)
+        date_text = date_from_timestamp(timestamp)
+        return self.task_dir(safe_task_id, timestamp=timestamp) / "compact" / f"{date_text}-{safe_task_id}-segments.jsonl"
+
     def append_short_event(self, event: TimelineEvent) -> Path:
         path = self.short_event_path(task_id=event.task_id, timestamp=event.timestamp)
         payload = self._compact_short_event(event)
         if payload is not None:
+            if self._is_duplicate_short_payload(path=path, payload=payload, timestamp=event.timestamp):
+                return path
             self._append_jsonl(path, payload)
         return path
 
@@ -51,6 +60,16 @@ class TaskMemoryFileStore:
         with path.open("a", encoding="utf-8") as output:
             output.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             output.write("\n")
+
+    def _is_duplicate_short_payload(self, *, path: Path, payload: Dict[str, Any], timestamp: float) -> bool:
+        info = str(payload.get("info") or "")
+        key = str(path)
+        previous = self._last_short_by_path.get(key)
+        self._last_short_by_path[key] = (info, float(timestamp))
+        if previous is None:
+            return False
+        previous_info, previous_timestamp = previous
+        return previous_info == info and (float(timestamp) - previous_timestamp) < 30.0
 
     def delete_expired_files(self, *, task_id: str, short_cutoff: float, long_cutoff: float) -> Dict[str, int]:
         safe_task_id = safe_task_segment(task_id)
@@ -95,12 +114,89 @@ class TaskMemoryFileStore:
         if event.event_type in {"vision_skipped", "vision_triggered"}:
             return None
         info = self._best_event_info(event)
-        if not info:
+        if not info or self._looks_like_gibberish(info):
             return None
         return {
             "time": self._format_timestamp(event.timestamp),
             "info": info,
         }
+
+    def compact_short_memory(self, *, task_id: str, timestamp: float) -> Dict[str, Any]:
+        short_path = self.short_event_path(task_id=task_id, timestamp=timestamp)
+        compact_path = self.compact_segments_path(task_id=task_id, timestamp=timestamp)
+        rows = self._read_jsonl(short_path)
+        segments = self._build_adjacent_segments(rows)
+        compact_path.parent.mkdir(parents=True, exist_ok=True)
+        with compact_path.open("w", encoding="utf-8") as output:
+            for segment in segments:
+                output.write(json.dumps(segment, ensure_ascii=False, sort_keys=True))
+                output.write("\n")
+        return {
+            "task_id": task_id,
+            "short_path": str(short_path),
+            "compact_path": str(compact_path),
+            "source_count": len(rows),
+            "segment_count": len(segments),
+        }
+
+    def count_short_events(self, *, task_id: str, timestamp: float) -> int:
+        path = self.short_event_path(task_id=task_id, timestamp=timestamp)
+        if not path.exists():
+            return 0
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return sum(1 for line in handle if line.strip())
+        except OSError:
+            return 0
+
+    def _read_jsonl(self, path: Path) -> list[dict]:
+        if not path.exists():
+            return []
+        rows = []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                rows.append(payload)
+        return rows
+
+    def _build_adjacent_segments(self, rows: list[dict]) -> list[dict]:
+        segments: list[dict] = []
+        current: Optional[dict] = None
+        current_key = ""
+        for row in rows:
+            info = self._trim_info(str(row.get("info") or ""))
+            if not info:
+                continue
+            row_time = str(row.get("time") or "")
+            key = self._normalize_segment_info(info)
+            if current is not None and key == current_key:
+                current["to"] = row_time or current["to"]
+                current["repeat_count"] = int(current["repeat_count"]) + 1
+                continue
+            if current is not None:
+                segments.append(current)
+            current_key = key
+            current = {
+                "from": row_time,
+                "to": row_time,
+                "info": info,
+                "repeat_count": 1,
+            }
+        if current is not None:
+            segments.append(current)
+        return segments
+
+    def _normalize_segment_info(self, value: str) -> str:
+        return " ".join(str(value or "").strip().lower().split())
 
     def _compact_long_summary(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -138,6 +234,27 @@ class TaskMemoryFileStore:
             if part not in parts:
                 parts.append(part)
         return "；".join(parts)
+
+    def _looks_like_gibberish(self, value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return True
+        chars = [char for char in text if not char.isspace()]
+        if len(chars) < 3:
+            return True
+        cjk_count = sum(1 for char in chars if "\u4e00" <= char <= "\u9fff")
+        symbol_count = sum(1 for char in chars if not char.isalnum() and not ("\u4e00" <= char <= "\u9fff"))
+        digit_count = sum(1 for char in chars if char.isdigit())
+        ascii_alpha_count = sum(1 for char in chars if char.isascii() and char.isalpha())
+        if cjk_count == 0 and symbol_count >= 3 and (digit_count + symbol_count) / max(len(chars), 1) > 0.45:
+            return True
+        if cjk_count == 0 and symbol_count / max(len(chars), 1) > 0.35:
+            return True
+        if cjk_count == 0 and ascii_alpha_count <= 12 and symbol_count >= 2 and digit_count >= 2:
+            return True
+        if re.search(r"[A-Za-z]\*%[A-Za-z]\*", text):
+            return True
+        return False
 
     def _format_timestamp(self, timestamp: float) -> str:
         return datetime.fromtimestamp(float(timestamp), timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

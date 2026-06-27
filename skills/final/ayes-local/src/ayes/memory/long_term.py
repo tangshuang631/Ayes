@@ -6,6 +6,7 @@ from typing import Iterable, List
 from uuid import uuid4
 
 from ayes.events.models import TimelineEvent
+from ayes.memory.content_signal import is_memory_worthy_event, rank_memory_events, summarize_memory_event
 
 
 def build_long_term_summary(*, task_id: str, events: Iterable[TimelineEvent]) -> dict:
@@ -13,7 +14,8 @@ def build_long_term_summary(*, task_id: str, events: Iterable[TimelineEvent]) ->
     if not collected:
         raise ValueError("无法对空事件列表生成长期摘要")
     collected = sorted(collected, key=lambda item: item.timestamp)
-    texts = [_trim_summary(event.summary) for event in collected if _is_user_memory_event(event) and _trim_summary(event.summary)][:5]
+    ranked = rank_memory_events([event for event in collected if _is_user_memory_event(event) and is_memory_worthy_event(event)], limit=5)
+    texts = [_trim_summary(summarize_memory_event(event)) for event in ranked if _trim_summary(summarize_memory_event(event))]
     snapshot = _build_main_content_snapshot(collected)
     return {
         "summary_id": f"lts_{uuid4().hex}",

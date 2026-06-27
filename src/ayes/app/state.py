@@ -25,6 +25,7 @@ from ayes.config.models import (
 from ayes.logs.store import LogStore
 from ayes.memory.file_store import TaskMemoryFileStore
 from ayes.memory.long_term import build_long_term_summary
+from ayes.memory.search_index import MemorySearchIndex
 from ayes.storage.sqlite_store import SQLiteStore
 from ayes.targets.discovery.macos import MacOSWindowDiscovery
 
@@ -35,6 +36,7 @@ class AppState:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.sqlite_store = SQLiteStore()
         self.memory_file_store = TaskMemoryFileStore(runtime_dir=self.runtime_dir, task_path_resolver=self._task_paths)
+        self.search_index = MemorySearchIndex(runtime_dir=self.runtime_dir, task_path_resolver=self._task_paths)
         self.log_store = LogStore(sink=self._log_sink)
         self.window_discovery = MacOSWindowDiscovery()
         self.current_runner: Optional[WatchRunner] = None
@@ -57,6 +59,7 @@ class AppState:
         self._last_cleanup_reminder_check_at: Optional[float] = None
         self._last_long_term_summary_at: Optional[float] = None
         self._last_long_term_event_index: int = 0
+        self._last_compacted_short_count: dict[str, int] = {}
         self._ensure_cleanup_reminder_defaults()
         self._ensure_vision_enhancement_defaults()
         self._ensure_app_settings_defaults()
@@ -129,6 +132,7 @@ class AppState:
             "long_term_hours": self.current_spec.memory.long_term.retain_hours,
             "long_term_days": self.current_spec.memory.long_term.retain_days,
             "disable_auto_cleanup": self.current_spec.memory.disable_auto_cleanup,
+            "memory_compact_every_n_events": self.current_spec.memory.memory_compact_every_n_events,
             "roi": dict(self.current_spec.roi) if hasattr(self.current_spec, "roi") and isinstance(self.current_spec.roi, dict) else {},
         }
 
@@ -303,6 +307,38 @@ class AppState:
     def _event_sink(self, event) -> None:
         self.sqlite_store.insert_event(event)
         self.memory_file_store.append_short_event(event)
+        self._maybe_compact_short_memory(task_id=event.task_id, timestamp=event.timestamp, force=False)
+        try:
+            self.search_index.index_event(event)
+        except Exception as exc:
+            self.last_error = f"memory_index_failed: {exc}"
+
+    def _maybe_compact_short_memory(self, *, task_id: str, timestamp: float, force: bool = False) -> Optional[dict]:
+        policy = self.get_task_memory_policy(task_id)
+        threshold = int(policy.get("memory_compact_every_n_events") or 500)
+        current_count = self.memory_file_store.count_short_events(task_id=task_id, timestamp=timestamp)
+        key = f"{task_id}:{self.memory_file_store.short_event_path(task_id=task_id, timestamp=timestamp)}"
+        previous_count = int(self._last_compacted_short_count.get(key, 0))
+        if not force and current_count < previous_count + threshold:
+            return None
+        if current_count <= 0:
+            return None
+        result = self.memory_file_store.compact_short_memory(task_id=task_id, timestamp=timestamp)
+        self._last_compacted_short_count[key] = current_count
+        self.log_store.write(
+            category="watch",
+            level="info",
+            message="短期记忆已压缩合并",
+            task_id=task_id,
+            metadata={
+                "source_count": result["source_count"],
+                "segment_count": result["segment_count"],
+                "compact_path": result["compact_path"],
+                "forced": force,
+                "threshold": threshold,
+            },
+        )
+        return result
 
     def _task_paths(self, task_id: str, *, timestamp: Optional[float] = None) -> dict[str, Path]:
         roi_meta = self.sqlite_store.get_task_roi(task_id)
@@ -320,6 +356,7 @@ class AppState:
         short_term_retain_days: Optional[int] = None,
         long_term_retain_days: Optional[int] = None,
         disable_auto_cleanup: Optional[bool] = None,
+        memory_compact_every_n_events: Optional[int] = None,
     ) -> dict:
         current = self.get_task_memory_policy(task_id)
         policy = self.sqlite_store.upsert_task_memory_policy(
@@ -327,6 +364,11 @@ class AppState:
             short_term_retain_days=int(short_term_retain_days if short_term_retain_days is not None else current.get("short_term_retain_days", 7)),
             long_term_retain_days=int(long_term_retain_days if long_term_retain_days is not None else current.get("long_term_retain_days", 14)),
             disable_auto_cleanup=bool(disable_auto_cleanup) if disable_auto_cleanup is not None else bool(current.get("disable_auto_cleanup", False)),
+            memory_compact_every_n_events=int(
+                memory_compact_every_n_events
+                if memory_compact_every_n_events is not None
+                else current.get("memory_compact_every_n_events", 500)
+            ),
         )
         self.log_store.write(
             category="control",
@@ -336,7 +378,7 @@ class AppState:
             metadata=self._build_policy_change_metadata(
                 before=current,
                 after=policy,
-                keys=["short_term_retain_days", "long_term_retain_days", "disable_auto_cleanup"],
+                keys=["short_term_retain_days", "long_term_retain_days", "disable_auto_cleanup", "memory_compact_every_n_events"],
                 config_path=self._task_paths(task_id)["config_dir"] / "task-settings.json",
             ),
         )
@@ -361,6 +403,7 @@ class AppState:
             "short_term_retain_days": policy.get("short_term_retain_days"),
             "long_term_retain_days": policy.get("long_term_retain_days"),
             "disable_auto_cleanup": policy.get("disable_auto_cleanup"),
+            "memory_compact_every_n_events": policy.get("memory_compact_every_n_events"),
         }
 
     def _ensure_task_memory_policy(self, *, task_id: str, spec: WatchSpec) -> dict:
@@ -369,6 +412,7 @@ class AppState:
             short_term_retain_days=spec.memory.short_term.retain_days,
             long_term_retain_days=spec.memory.long_term.retain_days,
             disable_auto_cleanup=spec.memory.disable_auto_cleanup,
+            memory_compact_every_n_events=spec.memory.memory_compact_every_n_events,
         )
         self._persist_task_config_snapshot(task_id=task_id, spec=spec, memory_policy=policy)
         return policy
@@ -435,7 +479,7 @@ class AppState:
         if not entry.task_id:
             return
         try:
-            paths = self._task_paths(entry.task_id, timestamp=entry.timestamp)
+            paths = self._task_paths(entry.task_id)
             logs_dir = paths["logs_dir"]
             logs_dir.mkdir(parents=True, exist_ok=True)
             date_text = time.strftime("%Y-%m-%d", time.localtime(entry.timestamp))
@@ -700,6 +744,10 @@ class AppState:
             payload=summary,
         )
         self.memory_file_store.append_long_summary(summary)
+        try:
+            self.search_index.index_long_summary(summary)
+        except Exception as exc:
+            self.last_error = f"memory_index_failed: {exc}"
         self._prune_expired_long_term_summaries(task_id=self.current_task_id, now=summary["window_end"])
         self._last_long_term_summary_at = summary["window_end"]
         self._last_long_term_event_index = len(events)
@@ -719,6 +767,8 @@ class AppState:
     def clear_runner(self) -> None:
         self.stop_background_watch()
         self._flush_long_term_summary(force=True)
+        if self.current_runner is not None and self.current_task_id is not None and self.current_runner.events:
+            self._maybe_compact_short_memory(task_id=self.current_task_id, timestamp=self.current_runner.events[-1].timestamp, force=True)
         self.current_runner = None
         self.current_spec = None
         self.current_task_id = None
@@ -787,10 +837,9 @@ class AppState:
                 self.runtime_dir,
                 roi_meta["parent_task_id"],
                 task_id,
-                timestamp=float((task or {}).get("created_at") or time.time()),
             )
         elif task is not None:
-            task_paths = task_runtime_paths(self.runtime_dir, task_id, timestamp=float(task.get("created_at") or time.time()))
+            task_paths = task_runtime_paths(self.runtime_dir, task_id)
         if task_id == self.current_task_id:
             self.clear_runner()
         deleted = self.sqlite_store.delete_task_data(task_id)
@@ -1017,6 +1066,21 @@ class AppState:
             "capture_target": self._capture_target_payload_from_frame(result.frame),
         }
 
+    def capture_hotkey_latest_frame(self) -> dict:
+        if not self.is_background_running() or self.current_runner is None or self.current_task_id is None:
+            return {
+                "task_id": self.current_task_id or self.last_task_id,
+                "path": None,
+                "image_width": None,
+                "image_height": None,
+                "capture_status": "not_running",
+                "capture_message": "当前没有正在监控的任务",
+                "hotkey_action": "not_running",
+            }
+        payload = self.capture_task_screenshot(task_id=self.current_task_id)
+        payload["hotkey_action"] = "fresh_sample"
+        return payload
+
     def _capture_target_payload_from_frame(self, frame) -> dict:
         metadata = frame.metadata or {}
         return {
@@ -1188,6 +1252,8 @@ class AppState:
             "capture_screen_when_display_sleep": False,
             "cleanup_reminder_days": 7,
             "latest_frame_hotkey": "",
+            "monitor_context_hotkey": "",
+            "monitor_context_prompt": "Ayes context mode",
             "capture_sleep_note": "进程或窗口监控优先使用窗口捕获；整屏熄屏监控依赖 macOS 是否仍提供可读显示帧，不可用时会建议切换到进程监控。",
         }
 
@@ -1211,6 +1277,8 @@ class AppState:
         capture_screen_when_display_sleep: Optional[bool] = None,
         cleanup_reminder_days: Optional[int] = None,
         latest_frame_hotkey: Optional[str] = None,
+        monitor_context_hotkey: Optional[str] = None,
+        monitor_context_prompt: Optional[str] = None,
     ) -> dict:
         current = self.get_app_settings()
         next_payload = dict(current)
@@ -1222,6 +1290,20 @@ class AppState:
         if latest_frame_hotkey is not None:
             parsed_hotkey = parse_hotkey(latest_frame_hotkey)
             next_payload["latest_frame_hotkey"] = parsed_hotkey.canonical if parsed_hotkey is not None else ""
+        if monitor_context_hotkey is not None:
+            parsed_hotkey = parse_hotkey(monitor_context_hotkey)
+            next_payload["monitor_context_hotkey"] = parsed_hotkey.canonical if parsed_hotkey is not None else ""
+        if monitor_context_prompt is not None:
+            prompt = str(monitor_context_prompt).strip() or "Ayes context mode"
+            if len(prompt) > 64:
+                raise ValueError("监控提问提示不能超过 64 个字符")
+            next_payload["monitor_context_prompt"] = prompt
+        if (
+            next_payload.get("latest_frame_hotkey")
+            and next_payload.get("monitor_context_hotkey")
+            and next_payload.get("latest_frame_hotkey") == next_payload.get("monitor_context_hotkey")
+        ):
+            raise ValueError("截图快捷键和监控提问快捷键不能相同")
         self.sqlite_store.upsert_app_settings(next_payload)
         changed_keys = [key for key in sorted(next_payload.keys()) if current.get(key) != next_payload.get(key)]
         changes = {key: {"from": current.get(key), "to": next_payload.get(key)} for key in changed_keys}
@@ -1562,7 +1644,7 @@ class AppState:
                 }
                 for item in self.list_tasks(limit=5)
             ],
-            "task_tree": self._build_task_tree(limit=50),
+            "task_tree": self._build_task_tree(limit=500),
         }
         return {
             "has_runner": self.current_runner is not None,

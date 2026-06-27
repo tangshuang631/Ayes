@@ -34,6 +34,28 @@ def test_sqlite_store_persists_events_and_logs(tmp_path) -> None:
     assert store.list_logs(task_id="task_1", limit=10)[0]["message"] == "测试日志"
 
 
+def test_sqlite_store_vacuum_returns_reclaimed_size_payload(tmp_path) -> None:
+    db_path = tmp_path / "ayes.db"
+    store = SQLiteStore(db_path=str(db_path))
+    store.insert_log(
+        LogEntry(
+            log_id="log_large",
+            timestamp=100.0,
+            category="system",
+            level="info",
+            message="x" * 10000,
+            task_id="task_vacuum",
+        )
+    )
+    store.delete_task_data("task_vacuum")
+
+    payload = store.vacuum()
+
+    assert payload["db_path"] == str(db_path)
+    assert payload["before_bytes"] >= payload["after_bytes"]
+    assert payload["reclaimed_bytes"] == payload["before_bytes"] - payload["after_bytes"]
+
+
 def test_sqlite_store_filters_events_and_logs_by_timestamp_and_keyword(tmp_path) -> None:
     store = SQLiteStore(db_path=str(tmp_path / "ayes.db"))
     early = build_event(
@@ -182,8 +204,25 @@ def test_sqlite_store_persists_task_memory_policy(tmp_path) -> None:
     assert payload["short_term_retain_days"] == 9
     assert payload["long_term_retain_days"] == 21
     assert payload["disable_auto_cleanup"] is True
-    assert payload["memory_dir"].endswith("/runtime/tasks/2026-06-26/task_policy/memory")
+    assert payload["memory_compact_every_n_events"] == 500
+    assert "/runtime/tasks/" in payload["memory_dir"]
+    assert payload["memory_dir"].endswith("/task_policy/memory")
     assert store.get_task_memory_policy("task_policy") == payload
+
+
+def test_sqlite_store_persists_memory_compaction_threshold(tmp_path) -> None:
+    store = SQLiteStore(db_path=str(tmp_path / "ayes.db"))
+
+    payload = store.upsert_task_memory_policy(
+        task_id="task_policy",
+        short_term_retain_days=9,
+        long_term_retain_days=21,
+        disable_auto_cleanup=False,
+        memory_compact_every_n_events=750,
+    )
+
+    assert payload["memory_compact_every_n_events"] == 750
+    assert store.get_task_memory_policy("task_policy")["memory_compact_every_n_events"] == 750
 
 
 def test_sqlite_store_persists_roi_task_metadata(tmp_path) -> None:

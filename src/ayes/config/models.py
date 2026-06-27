@@ -301,13 +301,18 @@ class MemoryConfig:
     short_term: ShortTermMemoryConfig = field(default_factory=ShortTermMemoryConfig)
     long_term: LongTermMemoryConfig = field(default_factory=LongTermMemoryConfig)
     disable_auto_cleanup: bool = False
+    memory_compact_every_n_events: int = 500
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryConfig":
+        compact_every = _require_int(data.get("memory_compact_every_n_events", 500), "memory.memory_compact_every_n_events", 100)
+        if compact_every > 5000:
+            raise ConfigError("memory.memory_compact_every_n_events 不能超过 5000")
         return cls(
             short_term=ShortTermMemoryConfig.from_dict(data.get("short_term", {})),
             long_term=LongTermMemoryConfig.from_dict(data.get("long_term", {})),
             disable_auto_cleanup=_require_bool(data.get("disable_auto_cleanup", False), "memory.disable_auto_cleanup"),
+            memory_compact_every_n_events=compact_every,
         )
 
 

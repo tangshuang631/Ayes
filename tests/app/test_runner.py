@@ -153,7 +153,11 @@ class SparseOCR:
 
 
 class FakeVision:
+    def __init__(self) -> None:
+        self.prompts = []
+
     def generate_vision_summary(self, *, model: str, image_bytes: bytes, prompt: str) -> VisionResult:
+        self.prompts.append(prompt)
         return VisionResult(
             provider="ollama",
             model=model,
@@ -229,6 +233,39 @@ class NoisyMainOCR:
 class FailingVision:
     def generate_vision_summary(self, *, model: str, image_bytes: bytes, prompt: str) -> VisionResult:
         raise RuntimeError("mock vision failure")
+
+
+def test_runner_vision_prompt_requests_structured_page_understanding() -> None:
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 1,
+                "ocr_interval_ms": 1,
+                "change_detection_interval_ms": 1,
+                "max_fps": 2,
+                "skip_ocr_when_no_change": False,
+            },
+            "vision": {"enabled": True, "provider": "ollama", "model": "qwen2.5vl:7b"},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    runner = WatchRunner(spec)
+    runner.capture = HugeFakeCapture()
+    runner.ocr = NoisyMainOCR()
+    runner.vision = FakeVision()
+
+    runner.run_once(now=100.0)
+
+    assert runner.vision.prompts
+    prompt = runner.vision.prompts[-1]
+    assert "页面类型" in prompt
+    assert "标题" in prompt
+    assert "主内容" in prompt
+    assert "缩略图列表" in prompt
+    assert "不要只回答" in prompt
 
 
 def test_runner_writes_ocr_event_and_supports_recent_query() -> None:

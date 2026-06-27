@@ -27,6 +27,8 @@ def test_agent_contracts_endpoint_exposes_expected_routes() -> None:
     assert "task_id" in payload["control.sampling"]["request"]
     assert payload["control.settings"]["path"] == "/api/control/settings"
     assert "latest_frame_hotkey" in payload["control.settings"]["request"]
+    assert "monitor_context_hotkey" in payload["control.settings"]["request"]
+    assert "monitor_context_prompt" in payload["control.settings"]["request"]
     assert payload["tasks.list"]["path"] == "/api/tasks"
     assert payload["tasks.switch"]["path"] == "/api/watch/switch-task"
     assert payload["tasks.delete"]["path"] == "/api/watch/task/{task_id}"

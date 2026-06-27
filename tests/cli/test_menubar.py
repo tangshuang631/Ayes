@@ -304,6 +304,23 @@ def test_format_hotkey_action_message_reports_action_result() -> None:
     assert menubar_app._format_hotkey_action_message("missing_screenshot") == "没有找到最新采样图"
 
 
+def test_menubar_hotkey_requests_fresh_snapshot_endpoint() -> None:
+    source = Path(menubar_app.__file__).read_text(encoding="utf-8")
+    assert '"/api/hotkey/latest-frame"' in source
+    hotkey_method = source.split("def copyLatestFrameAndPaste_")[1].split("def pauseAll_")[0]
+    assert '"/api/screenshot"' not in hotkey_method
+
+
+def test_menubar_context_hotkey_pastes_short_ayes_prompt() -> None:
+    source = Path(menubar_app.__file__).read_text(encoding="utf-8")
+
+    assert "monitor_context_hotkey" in source
+    assert "monitor_context_prompt" in source
+    assert "Ayes context mode" in source
+    assert "_copy_text_to_pasteboard" in source
+    assert "def pasteMonitorContextPrompt_" in source
+
+
 def test_menubar_main_passes_base_url(monkeypatch) -> None:
     recorded = {}
 

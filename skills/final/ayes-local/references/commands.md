@@ -38,6 +38,7 @@ ayes-menubar
 - `observe-live`：读取完整实时观察上下文；仅在需要截图、证据状态、ROI 综合上下文或排障时使用
 - `~/.codex/skills/ayes-local/scripts/ayes-menubar-local`：启动 skill 自带的 macOS 原生菜单栏控制面，供用户查看运行中任务、最近任务，手动暂停、恢复、进入 ROI 管理、打开原生设置弹窗和打开任务专属数据目录
 - 菜单栏设置弹窗可配置截图快捷键，例如 `cmd+shift+9`；该快捷键只在菜单栏进程运行且当前任务正在监控时生效，会把最新采样图复制到剪贴板并模拟粘贴到当前输入框
+- 菜单栏设置弹窗可配置监控提问快捷键，例如 `cmd+shift+8`；该快捷键会粘贴短提示 `Ayes context mode`，让 agent 下一问优先使用 Ayes 当前/最近任务，并默认走 `query` 与 memory index
 - `ayes-menubar`：若系统已安装全局命令，也可作为等价入口
 
 ## 2. 目标与任务
@@ -48,6 +49,9 @@ ayes-agent-local tasks
 ayes-agent-local memory-policy --task-id 2026-06-25__price_watch
 ayes-agent-local memory-policy --task-id 2026-06-25__price_watch --short-term-days 10 --long-term-days 25 --disable-auto-cleanup true
 ayes-agent-local memory-cleanup --task-id 2026-06-25__price_watch
+ayes-agent-local storage status
+ayes-agent-local storage cleanup --legacy --vacuum
+ayes-agent-local storage cleanup --task-id 2026-06-25__price_watch --screenshots --logs --index --rebuild-index --vacuum
 ayes-agent-local sampling
 ayes-agent-local sampling --interval-sec 6
 ayes-agent-local sampling --task-id 2026-06-25__price_watch --interval-sec 6
@@ -77,6 +81,11 @@ ayes-agent-local task --task-id task_web
 - `memory-policy`：读取或更新单个任务的记忆策略；短期紧凑明细默认 7 天、最高 14 天，长期简略记忆默认 14 天、最高 30 天
 - `memory-policy --disable-auto-cleanup true`：让该任务永久保留记忆，不再自动清理；传 `false` 可恢复自动清理
 - `memory-cleanup`：按当前任务策略立即执行一次过期记忆清理
+- `storage status`：查看运行目录、SQLite、每个任务截图/记忆/日志/索引/配置目录占用摘要；只返回大小和路径摘要，不读取原始日志正文或记忆正文
+- `storage cleanup --legacy --vacuum`：清理 runtime 根目录旧遗留文件并执行 SQLite VACUUM，适合安装升级后收尾
+- `storage cleanup --task-id ... --screenshots --logs --index --rebuild-index --vacuum`：清理某任务截图、日志和旧索引，然后从 `memory/compact`、`memory/short`、`memory/long` 重建轻量检索索引并压缩 SQLite
+- `storage cleanup --all`：清理截图、日志、索引和 legacy；不会隐式删除 `memory/`
+- `storage cleanup --memory`：显式删除任务记忆目录，仅在用户明确要求“删除记忆/历史”时使用
 - `sampling`：读取或更新当前任务采样策略；默认 6 秒，截图 / OCR / 变化检测会同步调整
 - `sampling --task-id`：读取或更新指定主任务/ROI 子任务的采样策略，不需要先切换当前任务
 - `sampling --interval-sec 0.5-3600`：按秒更新当前任务采样间隔，允许范围 0.5 秒到 1 小时
@@ -149,6 +158,7 @@ python3 scripts/smoke_ayes_local_skill.py \
 ## 3. 近期证据链路
 
 ```bash
+ayes-agent-local query --task-id task_web --minutes 240 --question "刚才页面内容是什么"
 ayes-agent-local activity --task-id task_web --minutes 5
 ayes-agent-local memory-items --task-id task_web --minutes 5 --limit 5
 ayes-agent-local observe-live --task-id task_web --minutes 5 --limit 20
@@ -165,6 +175,7 @@ ayes-agent-local run-once
 
 用途：
 
+- `query`：默认统一轻量问答入口；工具端完成问题路由、FTS/chunk 索引检索、rerank 和压缩，只返回 `answer/items/retrieval/needs_detail` 等精简字段
 - `activity`：轻量近期活动摘要，只返回时间范围、主要内容、短时间线、关键词、置信度和是否有截图证据；不返回 OCR blocks、bbox、evidence_refs、完整结构化观察或日志
 - `screenshot`：读取最近截图路径与 ROI 覆盖信息；加 `--fresh --task-id ...` 时会按指定任务目标即时采一张最新截图，不要求任务正在运行，也不会切换当前任务
 - `recent`：读取最近时间线事件
@@ -179,7 +190,9 @@ ayes-agent-local run-once
 
 默认查询策略：
 
-- 普通“最近在干什么/刚才发生了什么”只用 `activity`
+- 普通“最近在干什么/刚才发生了什么”和内容型“看了什么/打开了什么/页面内容是什么/具体内容是什么/刚才那个视频或文档是什么”都先用 `query --minutes 240 --question "..."`
+- `query.route=memory_index` 时直接使用返回的精简 `answer/items`，不要再查原始事件、截图或日志
+- `query.needs_detail=true` 时才按需补细节
 - 需要少量细节时用 `memory-items --limit 5`
 - 需要截图证据时用 `screenshot`
 - 需要完整实时上下文时用 `observe-live`
@@ -204,7 +217,7 @@ ayes-agent-local run-once
 - 最近有哪些可恢复的历史任务
 - 用户说“继续之前那个任务”时是否应先 `tasks` 再 `switch-task`
 
-追问“最近在干什么”“最近发生了什么”时，应先用 `activity`。需要细节时补 `memory-items --limit 5`；需要截图证据时补 `screenshot` 或完整 `observe-live`；需要原始 blocks/bbox 或排障时才用 `memory-items --raw` 或 `logs`。不要为了普通回忆读取原始 JSONL、完整 OCR blocks、bbox、evidence_refs 或完整配置快照。
+追问“最近在干什么”“最近发生了什么”“看了什么/打开了什么/具体内容是什么”时，应先用 `query`。`query` 会优先使用任务目录 `index/fts.sqlite` 和 `index/chunks/` 的精简块，并做 rerank，避免最新空白页、缩略图页或低价值帧覆盖更早的有效内容。需要截图证据时补 `screenshot` 或完整 `observe-live`；需要原始 blocks/bbox 或排障时才用 `memory-items --raw` 或 `logs`。不要为了普通回忆读取原始 JSONL、完整 OCR blocks、bbox、evidence_refs 或完整配置快照。
 
 如果用户问“昨天某个进程在做什么”“最近几天最低价是什么时候”：
 
@@ -212,6 +225,7 @@ ayes-agent-local run-once
 - 如果跨度超出短期紧凑明细或需要概览，改用 `long-term --hours` 或 `ask --hours`
 - 如果问题超出短期和长期保留策略，应明确说明记忆已超过保留范围
 - 记忆文件按任务和日期切割存放在安装目录 `runtime/tasks/<date>/<task_id>/memory/short/` 与 `runtime/tasks/<date>/<task_id>/memory/long/`
+- 检索索引按任务存放在 `runtime/tasks/<date>/<task_id>/index/`，其中 `fts.sqlite` 是轻量 FTS 索引，`chunks/*.jsonl` 是按小时切割的精简检索块
 
 ## 3.1 本地视觉增强准备与启用
 

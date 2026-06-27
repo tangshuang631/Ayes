@@ -35,6 +35,7 @@ try:
         NSPanel,
         NSPasteboard,
         NSPasteboardTypePNG,
+        NSPasteboardTypeString,
         NSPopUpButton,
         NSShiftKeyMask,
         NSStatusBar,
@@ -66,6 +67,7 @@ except ImportError:  # pragma: no cover
     NSPanel = None
     NSPasteboard = None
     NSPasteboardTypePNG = None
+    NSPasteboardTypeString = "public.utf8-plain-text"
     NSPopUpButton = None
     NSShiftKeyMask = None
     NSStatusBar = None
@@ -431,6 +433,13 @@ def _copy_png_to_pasteboard(image_path: str) -> None:  # pragma: no cover - macO
         raise RuntimeError("写入剪贴板失败")
 
 
+def _copy_text_to_pasteboard(text: str) -> None:  # pragma: no cover - macOS integration
+    pasteboard = NSPasteboard.generalPasteboard()
+    pasteboard.clearContents()
+    if not pasteboard.setString_forType_(text, NSPasteboardTypeString):
+        raise RuntimeError("写入剪贴板失败")
+
+
 def _paste_from_clipboard() -> None:  # pragma: no cover - macOS integration
     if CGEventCreateKeyboardEvent is None or CGEventPost is None:
         raise RuntimeError("当前环境不支持模拟粘贴")
@@ -474,9 +483,14 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         self.settings_quality_popup = None
         self.settings_save_ocr_checkbox = None
         self.settings_hotkey_field = None
+        self.settings_context_hotkey_field = None
+        self.settings_memory_compact_field = None
         self.settings_error_label = None
         self.hotkey_monitor = None
         self.current_hotkey = None
+        self.context_hotkey_monitor = None
+        self.current_context_hotkey = None
+        self.current_context_prompt = "Ayes context mode"
         self._flash_timer = None
         return self
 
@@ -607,34 +621,66 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
     def _refresh_hotkey_registration(self) -> None:
         try:
             settings_payload = _request_json(self.base_url, "/api/control/settings")
-            hotkey = parse_hotkey((settings_payload.get("settings") or {}).get("latest_frame_hotkey"))
+            settings = settings_payload.get("settings") or {}
+            hotkey = parse_hotkey(settings.get("latest_frame_hotkey"))
+            context_hotkey = parse_hotkey(settings.get("monitor_context_hotkey"))
+            context_prompt = str(settings.get("monitor_context_prompt") or "Ayes context mode").strip() or "Ayes context mode"
         except Exception:
             hotkey = None
+            context_hotkey = None
+            context_prompt = "Ayes context mode"
         if hotkey == self.current_hotkey:
+            pass
+        else:
+            if self.hotkey_monitor is not None:
+                NSEvent.removeMonitor_(self.hotkey_monitor)
+                _menubar_log("hotkey_unregistered", hotkey=getattr(self.current_hotkey, "canonical", ""))
+                self.hotkey_monitor = None
+            self.current_hotkey = hotkey
+            if hotkey is None:
+                _menubar_log("hotkey_disabled")
+            else:
+                def _handler(event):
+                    try:
+                        if _event_matches_hotkey(event, hotkey):
+                            _menubar_log("hotkey_matched", hotkey=hotkey.canonical)
+                            self.copyLatestFrameAndPaste_(None)
+                            return None
+                    except Exception as exc:
+                        _menubar_log("hotkey_handler_failed", error=str(exc))
+                        return event
+                    return event
+
+                self.hotkey_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSKeyDownMask, _handler)
+                trusted = bool(AXIsProcessTrusted()) if AXIsProcessTrusted is not None else None
+                _menubar_log("hotkey_registered", hotkey=hotkey.canonical, accessibility_trusted=trusted)
+
+        if context_hotkey == self.current_context_hotkey and context_prompt == self.current_context_prompt:
             return
-        if self.hotkey_monitor is not None:
-            NSEvent.removeMonitor_(self.hotkey_monitor)
-            _menubar_log("hotkey_unregistered", hotkey=getattr(self.current_hotkey, "canonical", ""))
-            self.hotkey_monitor = None
-        self.current_hotkey = hotkey
-        if hotkey is None:
-            _menubar_log("hotkey_disabled")
+        if self.context_hotkey_monitor is not None:
+            NSEvent.removeMonitor_(self.context_hotkey_monitor)
+            _menubar_log("context_hotkey_unregistered", hotkey=getattr(self.current_context_hotkey, "canonical", ""))
+            self.context_hotkey_monitor = None
+        self.current_context_hotkey = context_hotkey
+        self.current_context_prompt = context_prompt
+        if context_hotkey is None:
+            _menubar_log("context_hotkey_disabled")
             return
 
-        def _handler(event):
+        def _context_handler(event):
             try:
-                if _event_matches_hotkey(event, hotkey):
-                    _menubar_log("hotkey_matched", hotkey=hotkey.canonical)
-                    self.copyLatestFrameAndPaste_(None)
+                if _event_matches_hotkey(event, context_hotkey):
+                    _menubar_log("context_hotkey_matched", hotkey=context_hotkey.canonical)
+                    self.pasteMonitorContextPrompt_(None)
                     return None
             except Exception as exc:
-                _menubar_log("hotkey_handler_failed", error=str(exc))
+                _menubar_log("context_hotkey_handler_failed", error=str(exc))
                 return event
             return event
 
-        self.hotkey_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSKeyDownMask, _handler)
+        self.context_hotkey_monitor = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSKeyDownMask, _context_handler)
         trusted = bool(AXIsProcessTrusted()) if AXIsProcessTrusted is not None else None
-        _menubar_log("hotkey_registered", hotkey=hotkey.canonical, accessibility_trusted=trusted)
+        _menubar_log("context_hotkey_registered", hotkey=context_hotkey.canonical, accessibility_trusted=trusted)
 
     def _flash_status_title(self, message: str) -> None:
         if self.status_item is None:
@@ -654,7 +700,7 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
                 self._flash_status_title(_format_hotkey_action_message(result))
                 _menubar_log("paste_latest_skipped", result=result, control_status=control_status)
                 return
-            screenshot = _request_json(self.base_url, "/api/screenshot")
+            screenshot = _request_json(self.base_url, "/api/hotkey/latest-frame", method="POST")
             raw_path = str(screenshot.get("path") or "").strip()
             if not raw_path:
                 result = "missing_screenshot"
@@ -682,6 +728,16 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
             self._flash_status_title(_format_hotkey_action_message(result))
             _menubar_log("paste_latest_failed", result=result, error=str(exc))
             return
+
+    def pasteMonitorContextPrompt_(self, sender):
+        try:
+            _copy_text_to_pasteboard(self.current_context_prompt or "Ayes context mode")
+            _paste_from_clipboard()
+            self._flash_status_title("已粘贴 Ayes 提问提示")
+            _menubar_log("context_prompt_pasted", prompt=self.current_context_prompt or "Ayes context mode")
+        except Exception as exc:
+            self._flash_status_title("粘贴提问提示失败")
+            _menubar_log("context_prompt_paste_failed", error=str(exc))
 
     def pauseAll_(self, sender):
         try:
@@ -712,20 +768,31 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
                 quality="standard",
                 save_ocr_screenshots=False,
                 latest_frame_hotkey="",
+                monitor_context_hotkey="",
+                memory_compact_every_n_events=500,
                 error=str(exc),
             )
             return
         sampling = sampling_payload.get("sampling") or {}
         settings = settings_payload.get("settings") or {}
+        memory_policy = {}
+        task_id = str(status_payload.get("task_id") or "")
+        if task_id:
+            try:
+                memory_policy = (_request_json(self.base_url, f"/api/tasks/{task_id}/memory-policy").get("memory_policy") or {})
+            except Exception:
+                memory_policy = {}
         interval_ms = int(sampling.get("interval_ms") or DEFAULT_SAMPLING_INTERVAL_MS)
         summary = build_menu_bar_summary(status_payload)
         self._show_settings_panel(
-            task_id=_safe_text(status_payload.get("task_id"), "无任务"),
+            task_id=_safe_text(task_id, "无任务"),
             target_line=summary.target_line,
             interval_ms=interval_ms,
             quality=str(sampling.get("quality") or "standard"),
             save_ocr_screenshots=bool(sampling.get("save_ocr_screenshots", False)),
             latest_frame_hotkey=str(settings.get("latest_frame_hotkey") or ""),
+            monitor_context_hotkey=str(settings.get("monitor_context_hotkey") or ""),
+            memory_compact_every_n_events=int(memory_policy.get("memory_compact_every_n_events") or 500),
             error="",
         )
 
@@ -738,10 +805,12 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         quality: str,
         save_ocr_screenshots: bool,
         latest_frame_hotkey: str,
+        monitor_context_hotkey: str,
+        memory_compact_every_n_events: int,
         error: str,
     ) -> None:
         panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, 460, 420),
+            NSMakeRect(0, 0, 480, 540),
             NSWindowStyleMaskTitled | NSWindowStyleMaskClosable,
             NSBackingStoreBuffered,
             False,
@@ -750,18 +819,18 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         panel.setBackgroundColor_(NSColor.whiteColor())
         content = panel.contentView()
 
-        content.addSubview_(_make_label("Ayes 设置", x=24, y=372, w=220, h=28, bold=True))
-        content.addSubview_(_make_muted_label("桌面控制面板，配置直接写入当前任务。", x=24, y=348, w=390))
-        content.addSubview_(_make_label(f"任务：{task_id}", x=24, y=312, w=400))
-        content.addSubview_(_make_label(target_line, x=24, y=286, w=400))
-        content.addSubview_(_make_label("采样间隔", x=24, y=246, w=100, bold=True))
-        self.settings_interval_field = _make_text_field(_format_interval_seconds(interval_ms), x=124, y=242, w=96)
+        content.addSubview_(_make_label("Ayes 设置", x=24, y=492, w=220, h=28, bold=True))
+        content.addSubview_(_make_muted_label("桌面控制面板，配置直接写入当前任务。", x=24, y=468, w=410))
+        content.addSubview_(_make_label(f"任务：{task_id}", x=24, y=432, w=420))
+        content.addSubview_(_make_label(target_line, x=24, y=406, w=420))
+        content.addSubview_(_make_label("采样间隔", x=24, y=366, w=100, bold=True))
+        self.settings_interval_field = _make_text_field(_format_interval_seconds(interval_ms), x=124, y=362, w=96)
         content.addSubview_(self.settings_interval_field)
-        content.addSubview_(_make_label("秒", x=230, y=246, w=30))
-        content.addSubview_(_make_muted_label("范围 0.5 秒到 3600 秒。默认 6 秒，保存后截图、OCR、变化检测同步更新。", x=24, y=216, w=410))
+        content.addSubview_(_make_label("秒", x=230, y=366, w=30))
+        content.addSubview_(_make_muted_label("范围 0.5 秒到 3600 秒。默认 6 秒，保存后截图、OCR、变化检测同步更新。", x=24, y=336, w=430))
 
-        content.addSubview_(_make_label("采样质量", x=24, y=178, w=100, bold=True))
-        self.settings_quality_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(124, 172, 180, 30), False)
+        content.addSubview_(_make_label("采样质量", x=24, y=298, w=100, bold=True))
+        self.settings_quality_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(124, 292, 180, 30), False)
         quality_items = [
             ("原始质量", "original"),
             ("标准质量 · 1920", "standard"),
@@ -775,29 +844,40 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
                 self.settings_quality_popup.selectItem_(self.settings_quality_popup.lastItem())
         content.addSubview_(self.settings_quality_popup)
 
-        self.settings_save_ocr_checkbox = NSButton.alloc().initWithFrame_(NSMakeRect(120, 132, 260, 28))
+        self.settings_save_ocr_checkbox = NSButton.alloc().initWithFrame_(NSMakeRect(120, 252, 260, 28))
         self.settings_save_ocr_checkbox.setButtonType_(NSSwitchButton)
         self.settings_save_ocr_checkbox.setTitle_("保存事件证据截图")
         self.settings_save_ocr_checkbox.setState_(1 if save_ocr_screenshots else 0)
         content.addSubview_(self.settings_save_ocr_checkbox)
-        content.addSubview_(_make_muted_label("关闭后只保留记忆、事件和日志；手动导出/告警证据可再临时保存。", x=24, y=104, w=410))
+        content.addSubview_(_make_muted_label("关闭后只保留记忆、事件和日志；手动导出/告警证据可再临时保存。", x=24, y=224, w=430))
 
-        content.addSubview_(_make_label("截图快捷键", x=24, y=70, w=100, bold=True))
-        self.settings_hotkey_field = _make_text_field(latest_frame_hotkey, x=124, y=66, w=150)
+        content.addSubview_(_make_label("记忆合并", x=24, y=186, w=100, bold=True))
+        self.settings_memory_compact_field = _make_text_field(str(memory_compact_every_n_events), x=124, y=182, w=96)
+        content.addSubview_(self.settings_memory_compact_field)
+        content.addSubview_(_make_label("条", x=230, y=186, w=30))
+        content.addSubview_(_make_muted_label("每 N 条短期记忆合并相邻重复段；范围 100-5000，默认 500。", x=24, y=156, w=430))
+
+        content.addSubview_(_make_label("截图快捷键", x=24, y=120, w=100, bold=True))
+        self.settings_hotkey_field = _make_text_field(latest_frame_hotkey, x=124, y=116, w=150)
         content.addSubview_(self.settings_hotkey_field)
-        content.addSubview_(_make_muted_label("例：cmd+shift+9。仅菜单栏运行且监控中生效；留空关闭。", x=24, y=38, w=400))
+        content.addSubview_(_make_muted_label("例：cmd+shift+9。仅菜单栏运行且监控中生效；留空关闭。", x=24, y=90, w=430))
 
-        self.settings_error_label = _make_muted_label(error, x=24, y=16, w=260)
+        content.addSubview_(_make_label("提问快捷键", x=24, y=58, w=100, bold=True))
+        self.settings_context_hotkey_field = _make_text_field(monitor_context_hotkey, x=124, y=54, w=150)
+        content.addSubview_(self.settings_context_hotkey_field)
+        content.addSubview_(_make_muted_label("例：cmd+shift+8。粘贴短提示：Ayes context mode。", x=24, y=28, w=430))
+
+        self.settings_error_label = _make_muted_label(error, x=24, y=6, w=280)
         if error:
             self.settings_error_label.setTextColor_(NSColor.systemRedColor())
         content.addSubview_(self.settings_error_label)
 
-        cancel_button = _make_button("取消", x=286, y=10, w=76)
+        cancel_button = _make_button("取消", x=306, y=10, w=76)
         cancel_button.setTarget_(self)
         cancel_button.setAction_("cancelSettings:")
         content.addSubview_(cancel_button)
 
-        save_button = _make_button("保存", x=372, y=10, w=66)
+        save_button = _make_button("保存", x=392, y=10, w=66)
         save_button.setTarget_(self)
         save_button.setAction_("saveSettings:")
         save_button.setKeyEquivalent_("\r")
@@ -819,12 +899,24 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         try:
             interval_ms = _parse_interval_seconds(self.settings_interval_field.stringValue())
             latest_frame_hotkey = str(self.settings_hotkey_field.stringValue() if self.settings_hotkey_field is not None else "")
+            monitor_context_hotkey = str(self.settings_context_hotkey_field.stringValue() if self.settings_context_hotkey_field is not None else "")
             quality = "standard"
             if self.settings_quality_popup is not None and self.settings_quality_popup.selectedItem() is not None:
                 quality = str(self.settings_quality_popup.selectedItem().representedObject() or "standard")
             save_ocr_screenshots = bool(self.settings_save_ocr_checkbox.state()) if self.settings_save_ocr_checkbox is not None else False
             _post_json(self.base_url, "/api/control/sampling", {"interval_ms": interval_ms, "quality": quality, "save_ocr_screenshots": save_ocr_screenshots})
-            _post_json(self.base_url, "/api/control/settings", {"latest_frame_hotkey": latest_frame_hotkey})
+            _post_json(
+                self.base_url,
+                "/api/control/settings",
+                {"latest_frame_hotkey": latest_frame_hotkey, "monitor_context_hotkey": monitor_context_hotkey},
+            )
+            status_payload = self._request_status()
+            task_id = str(status_payload.get("task_id") or "")
+            if task_id and self.settings_memory_compact_field is not None:
+                compact_every = int(str(self.settings_memory_compact_field.stringValue()).strip())
+                if compact_every < 100 or compact_every > 5000:
+                    raise ValueError("记忆合并阈值必须在 100 到 5000 之间")
+                _post_json(self.base_url, f"/api/tasks/{task_id}/memory-policy", {"memory_compact_every_n_events": compact_every})
         except Exception as exc:
             if self.settings_error_label is not None:
                 self.settings_error_label.setStringValue_(str(exc))

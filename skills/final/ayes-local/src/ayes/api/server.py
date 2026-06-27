@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Optional
 import time
@@ -32,8 +34,10 @@ from ayes.config.models import (
     WatchSpec,
 )
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, TimelineEvent, WatchMatch
+from ayes.memory.content_signal import content_signal_score
 from ayes.memory.short_term import QueryResult
 from ayes.planner.service import WatchSpecPlanner
+from ayes.storage.maintenance import build_storage_status, cleanup_storage
 from ayes.targets.preview import TargetPreviewService
 from ayes.vision.ollama import OllamaService
 
@@ -196,7 +200,8 @@ def _build_vision_prepare_payload(*, requested_by: str) -> dict:
 
 
 def _build_query_result_from_store(*, task_id: str, minutes: int, keyword: Optional[str], question: str) -> QueryResult:
-    items = state.sqlite_store.query_events(task_id=task_id, minutes=minutes, keyword=keyword, limit=100)
+    query_limit = 10000 if _is_content_question(question) else 100
+    items = state.sqlite_store.query_events(task_id=task_id, minutes=minutes, keyword=keyword, limit=query_limit)
     matched_events = [_event_from_payload(item) for item in items]
     from ayes.memory.short_term import ShortTermMemoryStore
 
@@ -204,6 +209,12 @@ def _build_query_result_from_store(*, task_id: str, minutes: int, keyword: Optio
     for event in matched_events:
         temp_store.append(event)
     result = temp_store.query(now=time.time(), minutes=minutes, keyword=keyword, question=question)
+    file_result = _build_content_query_result_from_short_files(task_id=task_id, minutes=minutes, question=question) if _is_content_question(question) else None
+    if file_result is not None and _best_content_score(file_result.matched_events, question=question) >= _best_content_score(
+        result.matched_events or matched_events,
+        question=question,
+    ):
+        return file_result
     if matched_events:
         return QueryResult(
             answer=result.answer,
@@ -225,6 +236,79 @@ def _build_query_result_from_store(*, task_id: str, minutes: int, keyword: Optio
         matched_events=[],
         memory_layers_used=["short_term_persisted"],
     )
+
+
+def _build_content_query_result_from_short_files(*, task_id: str, minutes: int, question: str) -> Optional[QueryResult]:
+    cutoff = time.time() - minutes * 60
+    memory_dir = state.memory_file_store.task_dir(task_id)
+    events: list[TimelineEvent] = []
+    for path in sorted((memory_dir / "short").glob("*.jsonl")):
+        if not path.is_file():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            timestamp = _parse_memory_time(payload.get("time"))
+            if timestamp <= 0:
+                timestamp = path.stat().st_mtime
+            if timestamp < cutoff and path.stat().st_mtime < cutoff:
+                continue
+            info = str(payload.get("info") or "").strip()
+            if not info:
+                continue
+            event = TimelineEvent(
+                event_id=f"short-file:{path.name}:{len(events)}",
+                task_id=task_id,
+                spec_version="1.0",
+                task_mode="observe",
+                timestamp=timestamp,
+                source="file_memory",
+                event_type="compact_short_memory",
+                priority="medium",
+                confidence=0.86,
+                target=EventTarget(type="process"),
+                observability=Observability(True, False, False, True, "summary"),
+                summary=info,
+            )
+            if content_signal_score(event, question=question) > 0:
+                events.append(event)
+    if not events:
+        return None
+    events.sort(key=lambda event: (content_signal_score(event, question=question), event.timestamp), reverse=True)
+    selected = sorted(events[:5], key=lambda event: event.timestamp)
+    answer = "；".join(f"{event.summary}@{datetime.fromtimestamp(event.timestamp).strftime('%H:%M:%S')}" for event in selected)
+    return QueryResult(
+        answer=answer,
+        confidence=0.82,
+        matched_events=selected,
+        memory_layers_used=["short_term_file"],
+    )
+
+
+def _parse_memory_time(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _best_content_score(events: list[TimelineEvent], *, question: str) -> float:
+    if not events:
+        return 0.0
+    return max(content_signal_score(event, question=question) for event in events)
 
 
 def _build_long_term_query_result_from_store(*, task_id: str, hours: int, keyword: Optional[str]) -> QueryResult:
@@ -263,6 +347,34 @@ def _build_long_term_query_result_from_store(*, task_id: str, hours: int, keywor
         matched_events=matched_events[-5:],
         memory_layers_used=["long_term_persisted"],
     )
+
+
+def _derive_ask_keyword(question: str) -> Optional[str]:
+    cleaned_question = str(question or "").strip()
+    if cleaned_question in {"", "最近发生了什么", "最近几分钟发生了什么"}:
+        return None
+    if any(token in cleaned_question for token in ["低于", "高于", "小于", "大于"]):
+        return None
+    if _is_content_question(cleaned_question):
+        return None
+    return cleaned_question
+
+
+def _is_content_question(question: str) -> bool:
+    cleaned_question = str(question or "").strip()
+    content_question_markers = [
+        "看了什么",
+        "看的什么",
+        "打开了什么",
+        "页面内容",
+        "具体内容",
+        "视频是什么",
+        "文档是什么",
+        "刚才那个",
+        "最近看的",
+        "最近打开",
+    ]
+    return any(marker in cleaned_question for marker in content_question_markers)
 
 
 def _event_from_payload(item: dict) -> TimelineEvent:
@@ -412,6 +524,8 @@ def update_control_settings(payload: dict = Body(...)) -> JSONResponse:
             capture_screen_when_display_sleep=payload.get("capture_screen_when_display_sleep"),
             cleanup_reminder_days=payload.get("cleanup_reminder_days"),
             latest_frame_hotkey=payload.get("latest_frame_hotkey"),
+            monitor_context_hotkey=payload.get("monitor_context_hotkey"),
+            monitor_context_prompt=payload.get("monitor_context_prompt"),
         )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -836,6 +950,64 @@ def get_activity_summary(
     )
 
 
+@app.get("/api/query")
+def query_question(
+    question: str = Query(...),
+    minutes: int = Query(240, ge=1, le=14 * 24 * 60),
+    task_id: Optional[str] = None,
+    limit: int = Query(8, ge=1, le=20),
+) -> JSONResponse:
+    resolved_task_id = _resolve_task_id(task_id)
+    if not resolved_task_id:
+        return JSONResponse({"task_id": None, "question": question, "answer": "当前没有监控任务", "items": [], "route": "none", "needs_detail": True})
+    index_payload = state.search_index.query(
+        task_id=resolved_task_id,
+        question=question,
+        minutes=minutes,
+        limit=limit,
+    )
+    if index_payload.get("items"):
+        payload = dict(index_payload)
+        payload["route"] = "memory_index"
+        payload["logs_used"] = False
+        payload["raw_events_used"] = False
+        payload["screenshot_used"] = False
+        return JSONResponse(payload)
+    if _is_content_question(question):
+        result = _build_query_result_from_store(
+            task_id=resolved_task_id,
+            minutes=minutes,
+            keyword=_derive_ask_keyword(question),
+            question=question,
+        )
+        payload = build_query_result_payload(result=result, minutes=minutes, task_id=resolved_task_id, question=question)
+        payload["route"] = "ask_fallback"
+        payload["logs_used"] = False
+        payload["raw_events_used"] = False
+        payload["screenshot_used"] = False
+        payload["retrieval"] = {"strategy": "ask_compact_fallback", "reason": "memory_index_empty"}
+        payload["needs_detail"] = not bool(payload.get("matched_events"))
+        return JSONResponse(payload)
+    observed_at = time.time()
+    items = state.sqlite_store.query_events(task_id=resolved_task_id, minutes=minutes, limit=20, now=observed_at)
+    payload = build_activity_payload(
+        items=items,
+        task_id=resolved_task_id,
+        minutes=minutes,
+        observed_at=observed_at,
+        has_screenshot_evidence=bool(state.last_screenshot_path),
+    )
+    payload["question"] = question
+    payload["route"] = "activity_fallback"
+    payload["answer"] = payload.get("primary_summary")
+    payload["items"] = payload.get("timeline", [])
+    payload["logs_used"] = False
+    payload["raw_events_used"] = False
+    payload["screenshot_used"] = False
+    payload["retrieval"] = {"strategy": "activity_compact_fallback", "reason": "memory_index_empty"}
+    return JSONResponse(payload)
+
+
 @app.get("/api/ask")
 def ask_question(
     question: str = Query(...),
@@ -846,13 +1018,7 @@ def ask_question(
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
         return JSONResponse({"answer": "当前没有监控任务", "matched_events": []})
-    cleaned_question = question.strip()
-    if cleaned_question in {"", "最近发生了什么", "最近几分钟发生了什么"}:
-        keyword = None
-    elif any(token in cleaned_question for token in ["低于", "高于", "小于", "大于"]):
-        keyword = None
-    else:
-        keyword = cleaned_question
+    keyword = _derive_ask_keyword(question)
     if hours is not None:
         result = _build_long_term_query_result_from_store(
             task_id=resolved_task_id,
@@ -983,6 +1149,13 @@ def capture_task_fresh_screenshot(task_id: str) -> JSONResponse:
         payload = state.capture_task_screenshot(task_id=task_id)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=404)
+    status_code = 200 if payload.get("capture_status") == "ok" else 409
+    return JSONResponse(payload, status_code=status_code)
+
+
+@app.post("/api/hotkey/latest-frame")
+def capture_hotkey_latest_frame() -> JSONResponse:
+    payload = state.capture_hotkey_latest_frame()
     status_code = 200 if payload.get("capture_status") == "ok" else 409
     return JSONResponse(payload, status_code=status_code)
 
@@ -1151,6 +1324,7 @@ def update_task_memory_policy(task_id: str, payload: dict = Body(...)) -> JSONRe
             short_term_retain_days=payload.get("short_term_retain_days"),
             long_term_retain_days=payload.get("long_term_retain_days"),
             disable_auto_cleanup=payload.get("disable_auto_cleanup"),
+            memory_compact_every_n_events=payload.get("memory_compact_every_n_events"),
         )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1163,6 +1337,32 @@ def run_task_memory_cleanup(task_id: str, payload: dict = Body(default={})) -> J
     if task is None:
         return JSONResponse({"error": "任务不存在"}, status_code=404)
     return JSONResponse({"status": "ok", "cleanup": state.apply_memory_cleanup(task_id=task_id, now=payload.get("now"))})
+
+
+@app.get("/api/storage/status")
+def get_storage_status() -> JSONResponse:
+    return JSONResponse(build_storage_status(runtime_dir=state.runtime_dir, sqlite_store=state.sqlite_store))
+
+
+@app.post("/api/storage/cleanup")
+def run_storage_cleanup(payload: dict = Body(default={})) -> JSONResponse:
+    task_id = str(payload.get("task_id") or "").strip() or None
+    if task_id and state.sqlite_store.get_task(task_id) is None:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+    cleanup = cleanup_storage(
+        runtime_dir=state.runtime_dir,
+        sqlite_store=state.sqlite_store,
+        search_index=state.search_index,
+        task_id=task_id,
+        screenshots=bool(payload.get("screenshots", False)),
+        logs=bool(payload.get("logs", False)),
+        memory=bool(payload.get("memory", False)),
+        index=bool(payload.get("index", False)),
+        legacy=bool(payload.get("legacy", False)),
+        vacuum=bool(payload.get("vacuum", False)),
+        rebuild_index=bool(payload.get("rebuild_index", False)),
+    )
+    return JSONResponse({"status": "ok", "cleanup": cleanup})
 
 
 @app.post("/api/watch/switch-task")

@@ -23,6 +23,19 @@ class SQLiteStore:
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
 
+    def vacuum(self) -> Dict[str, Any]:
+        db_path = Path(self.db_path)
+        before_bytes = db_path.stat().st_size if db_path.exists() else 0
+        with self._connect() as connection:
+            connection.execute("VACUUM")
+        after_bytes = db_path.stat().st_size if db_path.exists() else 0
+        return {
+            "db_path": str(db_path),
+            "before_bytes": before_bytes,
+            "after_bytes": after_bytes,
+            "reclaimed_bytes": max(before_bytes - after_bytes, 0),
+        }
+
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -105,10 +118,17 @@ class SQLiteStore:
                     short_term_retain_days INTEGER NOT NULL,
                     long_term_retain_days INTEGER NOT NULL,
                     disable_auto_cleanup INTEGER NOT NULL,
+                    memory_compact_every_n_events INTEGER NOT NULL DEFAULT 500,
                     memory_dir TEXT NOT NULL,
                     updated_at REAL NOT NULL
                 )
                 """
+            )
+            self._ensure_column(
+                connection,
+                table_name="task_memory_policies",
+                column_name="memory_compact_every_n_events",
+                definition="INTEGER NOT NULL DEFAULT 500",
             )
             connection.execute(
                 """
@@ -124,6 +144,11 @@ class SQLiteStore:
             )
             connection.commit()
 
+    def _ensure_column(self, connection: sqlite3.Connection, *, table_name: str, column_name: str, definition: str) -> None:
+        columns = [row[1] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()]
+        if column_name not in columns:
+            connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
     def _memory_dir_for_task(self, task_id: str) -> str:
         return str(task_runtime_paths(runtime_root(), task_id)["memory_dir"])
 
@@ -133,6 +158,7 @@ class SQLiteStore:
             "short_term_retain_days": 7,
             "long_term_retain_days": 14,
             "disable_auto_cleanup": False,
+            "memory_compact_every_n_events": 500,
             "memory_dir": self._memory_dir_for_task(task_id),
             "updated_at": None,
         }
@@ -144,6 +170,7 @@ class SQLiteStore:
         short_term_retain_days: int,
         long_term_retain_days: int,
         disable_auto_cleanup: bool,
+        memory_compact_every_n_events: int = 500,
         updated_at: Optional[float] = None,
     ) -> Dict[str, Any]:
         import time
@@ -157,11 +184,15 @@ class SQLiteStore:
             raise ValueError("short_term_retain_days 必须在 1 到 14 之间")
         if long_days < 1 or long_days > 30:
             raise ValueError("long_term_retain_days 必须在 1 到 30 之间")
+        compact_every = int(memory_compact_every_n_events)
+        if compact_every < 100 or compact_every > 5000:
+            raise ValueError("memory_compact_every_n_events 必须在 100 到 5000 之间")
         payload = {
             "task_id": normalized_task_id,
             "short_term_retain_days": short_days,
             "long_term_retain_days": long_days,
             "disable_auto_cleanup": bool(disable_auto_cleanup),
+            "memory_compact_every_n_events": compact_every,
             "memory_dir": self._memory_dir_for_task(normalized_task_id),
             "updated_at": float(updated_at if updated_at is not None else time.time()),
         }
@@ -169,14 +200,15 @@ class SQLiteStore:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO task_memory_policies
-                (task_id, short_term_retain_days, long_term_retain_days, disable_auto_cleanup, memory_dir, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (task_id, short_term_retain_days, long_term_retain_days, disable_auto_cleanup, memory_compact_every_n_events, memory_dir, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["task_id"],
                     payload["short_term_retain_days"],
                     payload["long_term_retain_days"],
                     1 if payload["disable_auto_cleanup"] else 0,
+                    payload["memory_compact_every_n_events"],
                     payload["memory_dir"],
                     payload["updated_at"],
                 ),
@@ -191,7 +223,7 @@ class SQLiteStore:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT task_id, short_term_retain_days, long_term_retain_days, disable_auto_cleanup, memory_dir, updated_at
+                SELECT task_id, short_term_retain_days, long_term_retain_days, disable_auto_cleanup, memory_compact_every_n_events, memory_dir, updated_at
                 FROM task_memory_policies
                 WHERE task_id = ?
                 """,
@@ -200,22 +232,24 @@ class SQLiteStore:
         if row is None:
             return self._default_task_memory_policy(normalized_task_id)
         expected_memory_dir = self._memory_dir_for_task(normalized_task_id)
-        stored_memory_dir = str(row[4] or "")
+        stored_memory_dir = str(row[5] or "")
         if stored_memory_dir != expected_memory_dir:
             return self.upsert_task_memory_policy(
                 task_id=normalized_task_id,
                 short_term_retain_days=int(row[1]),
                 long_term_retain_days=int(row[2]),
                 disable_auto_cleanup=bool(row[3]),
-                updated_at=row[5],
+                memory_compact_every_n_events=int(row[4] or 500),
+                updated_at=row[6],
             )
         return {
             "task_id": row[0],
             "short_term_retain_days": int(row[1]),
             "long_term_retain_days": int(row[2]),
             "disable_auto_cleanup": bool(row[3]),
+            "memory_compact_every_n_events": int(row[4] or 500),
             "memory_dir": stored_memory_dir,
-            "updated_at": row[5],
+            "updated_at": row[6],
         }
 
     def upsert_app_settings(self, payload: Dict[str, Any]) -> None:

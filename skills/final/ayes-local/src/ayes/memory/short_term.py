@@ -8,6 +8,7 @@ import re
 from typing import Iterable, List, Optional
 
 from ayes.events.models import TimelineEvent
+from ayes.memory.content_signal import rank_memory_events, summarize_memory_event
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,18 @@ class ShortTermMemoryStore:
                 memory_layers_used=["short_term"],
             )
         matched = sorted(matched, key=lambda item: item.timestamp)
+        content_ranked = rank_memory_events(matched, question=question or keyword or "", limit=5)
+        if content_ranked:
+            answer = "；".join(
+                f"{summarize_memory_event(event)}@{format_human_time(event.timestamp)}"
+                for event in content_ranked
+            )
+            return QueryResult(
+                answer=answer,
+                confidence=0.88,
+                matched_events=content_ranked,
+                memory_layers_used=["short_term"],
+            )
         answer = "；".join(
             f"{event.summary or event.event_type}@{int(event.timestamp)}"
             for event in matched[-5:]

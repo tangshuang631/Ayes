@@ -76,6 +76,7 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     base_url_literal = _objc_literal(base_url.rstrip("/"))
     runtime_dir_literal = _objc_literal(runtime_dir.resolve().as_posix())
     return f'''#import <Cocoa/Cocoa.h>
+#import <ApplicationServices/ApplicationServices.h>
 
 @interface RoiSelectionView : NSView
 @property(strong) NSImage *image;
@@ -201,6 +202,11 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
 @property(strong) NSMenu *menu;
 @property(assign) NSButton *visionSettingsCheckbox;
 @property(assign) NSPopUpButton *visionSettingsPopup;
+@property(strong) id hotkeyMonitor;
+@property(strong) NSString *currentHotkey;
+@property(strong) id contextHotkeyMonitor;
+@property(strong) NSString *currentContextHotkey;
+@property(strong) NSString *currentContextPrompt;
 @end
 
 @implementation AyesDelegate
@@ -350,6 +356,129 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
         [self showInfo:@"当前选择增强模型为非视觉模型，已关闭本地模型增强。"];
     }}
 }}
+- (NSString *)configuredHotkey {{
+    NSDictionary *payload = [self jsonForPath:@"/api/control/settings"];
+    NSDictionary *settings = [[payload objectForKey:@"settings"] isKindOfClass:[NSDictionary class]] ? [payload objectForKey:@"settings"] : @{{}};
+    return [self safeText:[settings objectForKey:@"latest_frame_hotkey"] fallback:@""];
+}}
+- (NSString *)configuredContextHotkey {{
+    NSDictionary *payload = [self jsonForPath:@"/api/control/settings"];
+    NSDictionary *settings = [[payload objectForKey:@"settings"] isKindOfClass:[NSDictionary class]] ? [payload objectForKey:@"settings"] : @{{}};
+    return [self safeText:[settings objectForKey:@"monitor_context_hotkey"] fallback:@""];
+}}
+- (NSString *)configuredContextPrompt {{
+    NSDictionary *payload = [self jsonForPath:@"/api/control/settings"];
+    NSDictionary *settings = [[payload objectForKey:@"settings"] isKindOfClass:[NSDictionary class]] ? [payload objectForKey:@"settings"] : @{{}};
+    return [self safeText:[settings objectForKey:@"monitor_context_prompt"] fallback:@"Ayes context mode"];
+}}
+- (BOOL)event:(NSEvent *)event matchesHotkey:(NSString *)hotkey {{
+    NSString *normalized = [[hotkey lowercaseString] stringByReplacingOccurrencesOfString:@" " withString:@""];
+    if ([normalized length] == 0) {{ return NO; }}
+    NSArray *parts = [normalized componentsSeparatedByString:@"+"];
+    NSString *key = [parts lastObject] ?: @"";
+    NSString *chars = [[event charactersIgnoringModifiers] lowercaseString] ?: @"";
+    if (![chars isEqualToString:key]) {{ return NO; }}
+    NSEventModifierFlags flags = [event modifierFlags];
+    if ([parts containsObject:@"cmd"] && !(flags & NSEventModifierFlagCommand)) {{ return NO; }}
+    if ([parts containsObject:@"command"] && !(flags & NSEventModifierFlagCommand)) {{ return NO; }}
+    if ([parts containsObject:@"shift"] && !(flags & NSEventModifierFlagShift)) {{ return NO; }}
+    if (([parts containsObject:@"option"] || [parts containsObject:@"alt"]) && !(flags & NSEventModifierFlagOption)) {{ return NO; }}
+    if (([parts containsObject:@"ctrl"] || [parts containsObject:@"control"]) && !(flags & NSEventModifierFlagControl)) {{ return NO; }}
+    return YES;
+}}
+- (void)refreshHotkeyRegistration {{
+    NSString *hotkey = [self configuredHotkey];
+    if (![(self.currentHotkey ?: @"") isEqualToString:hotkey]) {{
+        if (self.hotkeyMonitor != nil) {{
+            [NSEvent removeMonitor:self.hotkeyMonitor];
+            self.hotkeyMonitor = nil;
+        }}
+        self.currentHotkey = hotkey;
+        if ([hotkey length] > 0) {{
+            __block AyesDelegate *weakSelf = self;
+            self.hotkeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event) {{
+                AyesDelegate *strongSelf = weakSelf;
+                if (strongSelf == nil) {{ return; }}
+                if ([strongSelf event:event matchesHotkey:hotkey]) {{
+                    [strongSelf copyLatestFrameAndPaste:nil];
+                }}
+            }}];
+        }}
+    }}
+
+    NSString *contextHotkey = [self configuredContextHotkey];
+    NSString *contextPrompt = [self configuredContextPrompt];
+    if (![(self.currentContextHotkey ?: @"") isEqualToString:contextHotkey] || ![(self.currentContextPrompt ?: @"") isEqualToString:contextPrompt]) {{
+        if (self.contextHotkeyMonitor != nil) {{
+            [NSEvent removeMonitor:self.contextHotkeyMonitor];
+            self.contextHotkeyMonitor = nil;
+        }}
+        self.currentContextHotkey = contextHotkey;
+        self.currentContextPrompt = contextPrompt;
+        if ([contextHotkey length] > 0) {{
+            __block AyesDelegate *weakSelf = self;
+            self.contextHotkeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event) {{
+                AyesDelegate *strongSelf = weakSelf;
+                if (strongSelf == nil) {{ return; }}
+                if ([strongSelf event:event matchesHotkey:contextHotkey]) {{
+                    [strongSelf pasteMonitorContextPrompt:nil];
+                }}
+            }}];
+        }}
+    }}
+}}
+- (void)copyImageToPasteboard:(NSString *)imagePath {{
+    NSImage *image = [[NSImage alloc] initWithContentsOfFile:imagePath];
+    if (image == nil) {{ @throw [NSException exceptionWithName:@"AyesMissingImage" reason:@"最新采样图文件不存在" userInfo:nil]; }}
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    if (![pasteboard writeObjects:@[image]]) {{
+        @throw [NSException exceptionWithName:@"AyesCopyFailed" reason:@"复制最新采样图失败" userInfo:nil];
+    }}
+}}
+- (void)copyTextToPasteboard:(NSString *)text {{
+    NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    if (![pasteboard setString:(text ?: @"Ayes context mode") forType:NSPasteboardTypeString]) {{
+        @throw [NSException exceptionWithName:@"AyesCopyFailed" reason:@"复制监控提问提示失败" userInfo:nil];
+    }}
+}}
+- (void)pasteClipboardIntoFocusedApp {{
+    CGEventRef keyDown = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)9, true);
+    CGEventRef keyUp = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)9, false);
+    CGEventSetFlags(keyDown, kCGEventFlagMaskCommand);
+    CGEventSetFlags(keyUp, kCGEventFlagMaskCommand);
+    CGEventPost(kCGHIDEventTap, keyDown);
+    CGEventPost(kCGHIDEventTap, keyUp);
+    CFRelease(keyDown);
+    CFRelease(keyUp);
+}}
+- (void)copyLatestFrameAndPaste:(id)sender {{
+    NSDictionary *status = [self jsonForPath:@"/api/control/status"];
+    BOOL running = [[status objectForKey:@"is_running"] respondsToSelector:@selector(boolValue)] && [[status objectForKey:@"is_running"] boolValue];
+    BOOL hasRunner = [[status objectForKey:@"has_runner"] respondsToSelector:@selector(boolValue)] && [[status objectForKey:@"has_runner"] boolValue];
+    if (!running || !hasRunner) {{
+        [self showInfo:@"当前没有正在监控的任务"];
+        return;
+    }}
+    NSDictionary *snapshot = [self postPathSync:@"/api/hotkey/latest-frame"];
+    NSString *rawPath = [self safeText:[snapshot objectForKey:@"path"] fallback:@""];
+    if ([rawPath length] == 0) {{
+        [self showInfo:[self safeText:[snapshot objectForKey:@"capture_message"] fallback:@"没有找到最新采样图"]];
+        return;
+    }}
+    NSString *imagePath = [self absolutePathForRuntimePath:rawPath];
+    [self copyImageToPasteboard:imagePath];
+    [self pasteClipboardIntoFocusedApp];
+    [self logEvent:@"hotkey_fresh_snapshot_pasted"];
+}}
+- (void)pasteMonitorContextPrompt:(id)sender {{
+    NSString *prompt = self.currentContextPrompt ?: [self configuredContextPrompt];
+    if ([prompt length] == 0) {{ prompt = @"Ayes context mode"; }}
+    [self copyTextToPasteboard:prompt];
+    [self pasteClipboardIntoFocusedApp];
+    [self logEvent:@"context_prompt_pasted"];
+}}
 - (BOOL)statusBoolForKey:(NSString *)key {{
     NSDictionary *payload = [self jsonForPath:@"/api/control/status"];
     id value = [payload objectForKey:key];
@@ -360,6 +489,7 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     BOOL paused = [self statusBoolForKey:@"is_paused"];
     self.statusItem.button.title = paused ? @"Ayes ◐" : (running ? @"Ayes ◉" : @"Ayes ○");
     self.statusItem.button.toolTip = paused ? @"Ayes 已暂停" : (running ? @"Ayes 正在监控" : @"Ayes 未在监控");
+    [self refreshHotkeyRegistration];
     [self rebuildMenu];
 }}
 - (void)menuWillOpen:(NSMenu *)menu {{
@@ -406,6 +536,7 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     BOOL virtualSleep = [[appSettings objectForKey:@"capture_screen_when_display_sleep"] respondsToSelector:@selector(boolValue)] && [[appSettings objectForKey:@"capture_screen_when_display_sleep"] boolValue];
     NSInteger cleanupDays = [[appSettings objectForKey:@"cleanup_reminder_days"] respondsToSelector:@selector(integerValue)] ? [[appSettings objectForKey:@"cleanup_reminder_days"] integerValue] : 7;
     NSString *hotkey = [appSettings objectForKey:@"latest_frame_hotkey"] ?: @"";
+    NSString *contextHotkey = [appSettings objectForKey:@"monitor_context_hotkey"] ?: @"";
     BOOL visionEnabled = [[vision objectForKey:@"enabled"] respondsToSelector:@selector(boolValue)] && [[vision objectForKey:@"enabled"] boolValue];
     NSString *visionModel = [vision objectForKey:@"model"] ?: @"qwen2.5vl:7b";
     NSDictionary *visionModelsPayload = [self jsonForPath:@"/api/vision/models"];
@@ -419,15 +550,15 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [alert addButtonWithTitle:@"保存"];
     [alert addButtonWithTitle:@"取消"];
 
-    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 430, 360)];
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 430, 400)];
     NSTextField *intervalLabel = [NSTextField labelWithString:@"采样间隔（秒）"];
-    intervalLabel.frame = NSMakeRect(0, 324, 120, 22);
-    NSTextField *intervalField = [[NSTextField alloc] initWithFrame:NSMakeRect(140, 320, 90, 28)];
+    intervalLabel.frame = NSMakeRect(0, 364, 120, 22);
+    NSTextField *intervalField = [[NSTextField alloc] initWithFrame:NSMakeRect(140, 360, 90, 28)];
     intervalField.stringValue = [NSString stringWithFormat:@"%.1f", interval];
 
     NSTextField *qualityLabel = [NSTextField labelWithString:@"采样质量"];
-    qualityLabel.frame = NSMakeRect(0, 286, 120, 22);
-    NSPopUpButton *qualityPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(140, 282, 190, 28)];
+    qualityLabel.frame = NSMakeRect(0, 326, 120, 22);
+    NSPopUpButton *qualityPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(140, 322, 190, 28)];
     NSArray *items = @[@[@"原始质量", @"original"], @[@"标准质量 1920", @"standard"], @[@"节省空间 1280", @"space_saver"], @[@"极省空间 960", @"ultra_saver"]];
     for (NSArray *item in items) {{
         [qualityPopup addItemWithTitle:item[0]];
@@ -489,17 +620,21 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [self visionSelectionChanged:visionCheckbox];
 
     NSTextField *hotkeyLabel = [NSTextField labelWithString:@"截图快捷键"];
-    hotkeyLabel.frame = NSMakeRect(0, 56, 120, 22);
-    NSTextField *hotkeyField = [[NSTextField alloc] initWithFrame:NSMakeRect(140, 52, 120, 28)];
+    hotkeyLabel.frame = NSMakeRect(0, 68, 120, 22);
+    NSTextField *hotkeyField = [[NSTextField alloc] initWithFrame:NSMakeRect(140, 64, 120, 28)];
     hotkeyField.stringValue = hotkey;
+    NSTextField *contextHotkeyLabel = [NSTextField labelWithString:@"提问快捷键"];
+    contextHotkeyLabel.frame = NSMakeRect(0, 28, 120, 22);
+    NSTextField *contextHotkeyField = [[NSTextField alloc] initWithFrame:NSMakeRect(140, 24, 120, 28)];
+    contextHotkeyField.stringValue = contextHotkey;
     NSTextField *cleanupDaysLabel = [NSTextField labelWithString:@"清理提醒（天）"];
-    cleanupDaysLabel.frame = NSMakeRect(270, 56, 90, 22);
-    NSTextField *cleanupDaysField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 52, 60, 28)];
+    cleanupDaysLabel.frame = NSMakeRect(270, 68, 90, 22);
+    NSTextField *cleanupDaysField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 64, 60, 28)];
     cleanupDaysField.stringValue = [NSString stringWithFormat:@"%ld", (long)cleanupDays];
 
-    NSButton *sleepCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(136, 16, 260, 24)];
+    NSButton *sleepCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(266, 24, 160, 24)];
     [sleepCheckbox setButtonType:NSSwitchButton];
-    sleepCheckbox.title = @"整屏熄屏时尝试虚拟屏幕监控";
+    sleepCheckbox.title = @"熄屏监控";
     sleepCheckbox.state = virtualSleep ? NSControlStateValueOn : NSControlStateValueOff;
 
     [view addSubview:intervalLabel];
@@ -516,6 +651,8 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [view addSubview:visionPopup];
     [view addSubview:hotkeyLabel];
     [view addSubview:hotkeyField];
+    [view addSubview:contextHotkeyLabel];
+    [view addSubview:contextHotkeyField];
     [view addSubview:cleanupDaysLabel];
     [view addSubview:cleanupDaysField];
     [view addSubview:sleepCheckbox];
@@ -561,7 +698,8 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     NSDictionary *settingsResult = [self postJsonSync:@{{
         @"capture_screen_when_display_sleep": sleepCheckbox.state == NSControlStateValueOn ? @YES : @NO,
         @"cleanup_reminder_days": @(cleanupDaysValue),
-        @"latest_frame_hotkey": hotkeyField.stringValue ?: @""
+        @"latest_frame_hotkey": hotkeyField.stringValue ?: @"",
+        @"monitor_context_hotkey": contextHotkeyField.stringValue ?: @""
     }} toPath:@"/api/control/settings"];
     if ([settingsResult objectForKey:@"error"] != nil) {{
         [self showError:[settingsResult objectForKey:@"error"]];
@@ -900,7 +1038,7 @@ def _compile_native_menubar_app(*, output_path: Path, source_path: Path) -> bool
     if not clang:
         return False
     result = subprocess.run(
-        [clang, str(source_path), "-framework", "AppKit", "-framework", "Foundation", "-o", str(output_path)],
+        [clang, str(source_path), "-framework", "AppKit", "-framework", "Foundation", "-framework", "ApplicationServices", "-o", str(output_path)],
         check=False,
         capture_output=True,
     )
@@ -1309,8 +1447,22 @@ def build_parser() -> argparse.ArgumentParser:
     memory_policy_parser.add_argument("--short-term-days", type=int, default=None)
     memory_policy_parser.add_argument("--long-term-days", type=int, default=None)
     memory_policy_parser.add_argument("--disable-auto-cleanup", default=None)
+    memory_policy_parser.add_argument("--compact-every", type=int, default=None, help="每多少条短期记忆触发一次相邻重复合并，范围 100-5000，默认 500")
     memory_cleanup_parser = subparsers.add_parser("memory-cleanup", help="按指定任务策略执行一次记忆清理")
     memory_cleanup_parser.add_argument("--task-id", required=True)
+    storage_parser = subparsers.add_parser("storage", help="查看或清理 Ayes 运行态存储")
+    storage_subparsers = storage_parser.add_subparsers(dest="storage_command", required=True)
+    storage_subparsers.add_parser("status", help="查看运行态、SQLite、任务目录占用摘要")
+    storage_cleanup_parser = storage_subparsers.add_parser("cleanup", help="清理选定存储类别，可选 vacuum 和索引重建")
+    storage_cleanup_parser.add_argument("--task-id", default=None)
+    storage_cleanup_parser.add_argument("--screenshots", action="store_true")
+    storage_cleanup_parser.add_argument("--logs", action="store_true")
+    storage_cleanup_parser.add_argument("--memory", action="store_true")
+    storage_cleanup_parser.add_argument("--index", action="store_true")
+    storage_cleanup_parser.add_argument("--legacy", action="store_true")
+    storage_cleanup_parser.add_argument("--vacuum", action="store_true")
+    storage_cleanup_parser.add_argument("--rebuild-index", action="store_true")
+    storage_cleanup_parser.add_argument("--all", action="store_true", help="清理截图、日志、索引和旧根目录遗留文件；不会隐式删除 memory")
     sampling_parser = subparsers.add_parser("sampling", help="读取或更新当前任务采样策略")
     sampling_parser.add_argument("--task-id", default=None)
     sampling_parser.add_argument("--interval-sec", type=float, default=None)
@@ -1366,6 +1518,12 @@ def build_parser() -> argparse.ArgumentParser:
     activity_parser = subparsers.add_parser("activity", help="读取轻量近期活动摘要，默认用于回答最近在做什么")
     activity_parser.add_argument("--task-id", default=None)
     activity_parser.add_argument("--minutes", type=int, default=5)
+
+    query_parser = subparsers.add_parser("query", help="统一轻量问答入口：工具端完成索引检索、rerank 和压缩，默认节省 token")
+    query_parser.add_argument("--task-id", default=None)
+    query_parser.add_argument("--question", required=True)
+    query_parser.add_argument("--minutes", type=int, default=240)
+    query_parser.add_argument("--limit", type=int, default=8)
 
     alerts_parser = subparsers.add_parser("alerts", help="读取最近告警审计结果")
     alerts_parser.add_argument("--task-id", default=None)
@@ -1523,6 +1681,7 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
             "short_term_retain_days": args.short_term_days,
             "long_term_retain_days": args.long_term_days,
             "disable_auto_cleanup": _parse_optional_bool(args.disable_auto_cleanup),
+            "memory_compact_every_n_events": args.compact_every,
         }
         payload = {key: value for key, value in payload.items() if value is not None}
         if payload:
@@ -1530,6 +1689,24 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
         return _request_json(base_url, path)
     if args.command == "memory-cleanup":
         return _request_json(base_url, f"/api/tasks/{_path_segment(args.task_id)}/memory-cleanup", method="POST", payload={})
+    if args.command == "storage":
+        if args.storage_command == "status":
+            return _request_json(base_url, "/api/storage/status")
+        if args.storage_command == "cleanup":
+            all_selected = bool(args.all)
+            payload = {
+                "task_id": args.task_id,
+                "screenshots": bool(args.screenshots or all_selected),
+                "logs": bool(args.logs or all_selected),
+                "memory": bool(args.memory),
+                "index": bool(args.index or all_selected),
+                "legacy": bool(args.legacy or all_selected),
+                "vacuum": bool(args.vacuum),
+                "rebuild_index": bool(args.rebuild_index),
+            }
+            payload = {key: value for key, value in payload.items() if value is not None}
+            return _request_json(base_url, "/api/storage/cleanup", method="POST", payload=payload)
+        raise RuntimeError(f"未知 storage 命令: {args.storage_command}")
     if args.command == "sampling":
         if args.interval_sec is not None and args.interval_ms is not None:
             raise RuntimeError("--interval-sec 和 --interval-ms 只能选择一个")
@@ -1576,6 +1753,9 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
         return _request_json(base_url, path)
     if args.command == "activity":
         path = _build_query_path("/api/activity", task_id=args.task_id, minutes=args.minutes)
+        return _request_json(base_url, path)
+    if args.command == "query":
+        path = _build_query_path("/api/query", task_id=args.task_id, question=args.question, minutes=args.minutes, limit=args.limit)
         return _request_json(base_url, path)
     if args.command == "alerts":
         path = _build_query_path("/api/alerts/recent", task_id=args.task_id, minutes=args.minutes, limit=args.limit)

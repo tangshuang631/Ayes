@@ -230,7 +230,12 @@ def test_task_load_and_app_settings_logs_store_summaries_not_full_configs() -> N
     )
     current_settings = state.get_app_settings()
     next_cleanup_days = 10 if int(current_settings.get("cleanup_reminder_days") or 7) != 10 else 11
-    next_hotkey = "cmd+shift+8" if current_settings.get("latest_frame_hotkey") != "cmd+shift+8" else "cmd+shift+9"
+    next_hotkey = next(
+        candidate
+        for candidate in ["cmd+shift+8", "cmd+shift+9", "cmd+shift+7"]
+        if candidate != current_settings.get("latest_frame_hotkey")
+        and candidate != current_settings.get("monitor_context_hotkey")
+    )
     settings_response = client.post(
         "/api/control/settings",
         json={"cleanup_reminder_days": next_cleanup_days, "latest_frame_hotkey": next_hotkey},
@@ -1261,6 +1266,33 @@ def test_task_fresh_screenshot_captures_without_switching_current_task(monkeypat
     assert state.last_screenshot_path is None or "task_roi_inactive_target" not in state.last_screenshot_path
 
 
+def test_hotkey_snapshot_captures_fresh_current_running_task(monkeypatch) -> None:
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": "task_hotkey_current",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post("/api/watch/start")
+    assert state.current_task_id == "task_hotkey_current"
+    monkeypatch.setattr("ayes.app.runner.MacOSScreenCapture", lambda: FakeCaptureBlue())
+
+    response = client.post("/api/hotkey/latest-frame")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"] == "task_hotkey_current"
+    assert payload["capture_status"] == "ok"
+    assert payload["image_width"] == 4
+    assert payload["image_height"] == 3
+    assert payload["hotkey_action"] == "fresh_sample"
+    assert "/task_hotkey_current/screenshots/latest/" in payload["path"]
+    client.post("/api/watch/stop")
+
+
 def test_memory_items_endpoint_returns_recent_event_items() -> None:
     client.post("/api/watch/load-screen")
     client.post("/api/watch/run-once")
@@ -2278,3 +2310,74 @@ def test_events_endpoint_returns_query_scope_metadata() -> None:
     assert payload["source"] == "ocr"
     assert payload["minutes"] == 5
     assert "count" in payload
+
+
+def test_storage_status_reports_task_category_sizes() -> None:
+    task_id = f"2026-06-26_storage_status_{uuid4().hex}"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": task_id,
+            "target": {"type": "screen", "screen_id": 1},
+        },
+    )
+    task_dir = Path(state.current_task_paths(task_id=task_id)["task_dir"])
+    (task_dir / "screenshots" / "latest").mkdir(parents=True, exist_ok=True)
+    (task_dir / "memory" / "short").mkdir(parents=True, exist_ok=True)
+    (task_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (task_dir / "index" / "chunks").mkdir(parents=True, exist_ok=True)
+    (task_dir / "screenshots" / "latest" / "frame.png").write_bytes(b"abc")
+    (task_dir / "memory" / "short" / "items.jsonl").write_text("memory", encoding="utf-8")
+    (task_dir / "logs" / "task.log").write_text("log", encoding="utf-8")
+    (task_dir / "index" / "chunks" / "chunks.jsonl").write_text("index", encoding="utf-8")
+
+    response = client.get("/api/storage/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    task_payload = next(item for item in payload["tasks"] if item["task_id"] == task_id)
+    assert task_payload["screenshots_bytes"] == 3
+    assert task_payload["memory_bytes"] == 6
+    assert task_payload["logs_bytes"] >= 3
+    assert task_payload["index_bytes"] == 5
+
+
+def test_storage_cleanup_removes_selected_categories_and_rebuilds_index() -> None:
+    task_id = f"2026-06-26_storage_cleanup_{uuid4().hex}"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": task_id,
+            "target": {"type": "screen", "screen_id": 1},
+        },
+    )
+    task_dir = Path(state.current_task_paths(task_id=task_id)["task_dir"])
+    (task_dir / "screenshots" / "evidence").mkdir(parents=True, exist_ok=True)
+    (task_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (task_dir / "memory" / "compact").mkdir(parents=True, exist_ok=True)
+    (task_dir / "index" / "chunks").mkdir(parents=True, exist_ok=True)
+    (task_dir / "screenshots" / "evidence" / "old.png").write_bytes(b"abc")
+    (task_dir / "logs" / "task.log").write_text("log", encoding="utf-8")
+    (task_dir / "memory" / "compact" / "segments.jsonl").write_text(
+        '{"from":"2026-10-25T16:00:00Z","to":"2026-10-25T16:01:00Z","info":"有效摘要","repeat_count":2}\n',
+        encoding="utf-8",
+    )
+    (task_dir / "index" / "chunks" / "stale.jsonl").write_text('{"info":"旧索引"}\n', encoding="utf-8")
+
+    response = client.post(
+        "/api/storage/cleanup",
+        json={"task_id": task_id, "screenshots": True, "logs": True, "index": True, "rebuild_index": True, "vacuum": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    cleanup = payload["cleanup"]
+    assert cleanup["screenshots"]["deleted_bytes"] == 3
+    assert cleanup["logs"]["deleted_bytes"] >= 3
+    assert cleanup["index"]["deleted_bytes"] >= len('{"info":"旧索引"}\n')
+    assert cleanup["memory"]["deleted_bytes"] == 0
+    assert cleanup["index_rebuild"]["indexed_chunks"] == 1
+    assert cleanup["sqlite_vacuum"]["before_bytes"] >= cleanup["sqlite_vacuum"]["after_bytes"]
+    assert not (task_dir / "screenshots" / "evidence" / "old.png").exists()
+    assert not (task_dir / "logs" / "task.log").exists()
+    assert (task_dir / "memory" / "compact" / "segments.jsonl").exists()

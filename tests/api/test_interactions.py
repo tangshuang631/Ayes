@@ -416,6 +416,27 @@ def test_control_settings_round_trip_latest_frame_hotkey() -> None:
     assert disabled.json()["settings"]["latest_frame_hotkey"] == ""
 
 
+def test_control_settings_round_trip_monitor_context_hotkey() -> None:
+    response = client.post(
+        "/api/control/settings",
+        json={"monitor_context_hotkey": "cmd+shift+8"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["settings"]["monitor_context_hotkey"] == "cmd+shift+8"
+    assert payload["settings"]["monitor_context_prompt"] == "Ayes context mode"
+
+
+def test_control_settings_rejects_duplicate_hotkeys() -> None:
+    response = client.post(
+        "/api/control/settings",
+        json={"latest_frame_hotkey": "cmd+shift+9", "monitor_context_hotkey": "cmd+shift+9"},
+    )
+
+    assert response.status_code == 400
+
+
 def test_control_settings_rejects_dangerous_latest_frame_hotkey() -> None:
     response = client.post(
         "/api/control/settings",

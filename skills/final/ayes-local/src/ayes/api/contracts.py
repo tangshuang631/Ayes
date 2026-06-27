@@ -80,12 +80,13 @@ def build_task_payload(*, task_id: str, spec: WatchSpec, extra: Dict[str, Any] |
 
 
 def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: str, question: str) -> Dict[str, Any]:
-    matched_events = [asdict(event) for event in result.matched_events]
+    raw_matched_events = [asdict(event) for event in result.matched_events]
+    matched_events = [_compact_query_event(event) for event in raw_matched_events]
     structured_observations: List[Dict[str, Any]] = []
-    for event in matched_events:
+    for event, raw_event in zip(matched_events, raw_matched_events):
         event["location_summary"] = describe_location_summary(event)
         event["preview_overlay"] = build_preview_overlay(event)
-        observation = extract_structured_observation(event)
+        observation = _compact_structured_observation(extract_structured_observation(raw_event))
         event["structured_observation"] = observation
         if observation:
             structured_observations.append(observation)
@@ -187,6 +188,80 @@ def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: st
             "location_summary": lead_event.get("location_summary") or "",
         },
         "time_scope_respected": True,
+    }
+
+
+def _compact_query_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    visual = event.get("visual") or {}
+    attrs = visual.get("attributes") or {}
+    safe_attrs = {
+        key: attrs.get(key)
+        for key in ["raw_text", "detail_lines", "detail_count", "vision_reasons", "vision_blocked_reason", "vision_model", "vision_provider", "attention"]
+        if key in attrs
+    }
+    if "structured_observation" in attrs:
+        safe_attrs["structured_observation"] = _compact_structured_observation(attrs.get("structured_observation") or {})
+    text_payload = event.get("text") or {}
+    compact_text = {
+        "ocr_text": text_payload.get("ocr_text") or "",
+        "normalized_text": text_payload.get("normalized_text") or "",
+        "blocks": [_compact_text_block(block) for block in (text_payload.get("blocks") or [])[:3] if isinstance(block, dict)],
+    }
+    return {
+        "event_id": event.get("event_id"),
+        "task_id": event.get("task_id"),
+        "spec_version": event.get("spec_version"),
+        "task_mode": event.get("task_mode"),
+        "timestamp": event.get("timestamp"),
+        "source": event.get("source"),
+        "event_type": event.get("event_type"),
+        "priority": event.get("priority"),
+        "confidence": event.get("confidence"),
+        "target": event.get("target") or {},
+        "observability": event.get("observability") or {},
+        "region": event.get("region") or {},
+        "text": compact_text,
+        "visual": {
+            "summary": visual.get("summary") or "",
+            "labels": visual.get("labels") or [],
+            "attributes": safe_attrs,
+            "provider": visual.get("provider") or "",
+        },
+        "summary": event.get("summary") or "",
+        "tags": event.get("tags") or [],
+        "watch_match": event.get("watch_match") or {},
+        "evidence_refs": event.get("evidence_refs") or [],
+        "related_event_ids": event.get("related_event_ids") or [],
+    }
+
+
+def _compact_structured_observation(observation: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(observation, dict) or not observation:
+        return {}
+    compact = {
+        key: observation.get(key)
+        for key in ["observation_version", "source", "region", "layout", "visual", "entities", "warnings", "fusion_notes", "attention"]
+        if key in observation
+    }
+    text = observation.get("text")
+    if isinstance(text, dict):
+        compact["text"] = {
+            "full_text": text.get("full_text") or "",
+            "char_count": text.get("char_count") or 0,
+            "provider": text.get("provider") or "",
+            "confidence": text.get("confidence") or 0.0,
+        }
+    return compact
+
+
+def _compact_text_block(block: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "text": block.get("text") or "",
+        "confidence": block.get("confidence"),
+        "rect_norm": block.get("rect_norm") or {},
+        "coordinate_space": block.get("coordinate_space") or "",
+        "line_index": block.get("line_index"),
+        "block_type": block.get("block_type"),
     }
 
 
@@ -891,6 +966,26 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "request": {"now": "可选"},
             "response_keys": ["status", "cleanup"],
         },
+        "storage.status": {
+            "method": "GET",
+            "path": "/api/storage/status",
+            "response_keys": ["runtime_dir", "total_bytes", "sqlite_db_bytes", "tasks", "root_legacy"],
+        },
+        "storage.cleanup": {
+            "method": "POST",
+            "path": "/api/storage/cleanup",
+            "request": {
+                "task_id": "可选，不传则作用于全部任务",
+                "screenshots": "可选，清理任务截图目录",
+                "logs": "可选，清理任务日志目录",
+                "memory": "可选，显式清理任务记忆；不会被 --all 隐式启用",
+                "index": "可选，清理任务检索索引",
+                "legacy": "可选，清理 runtime 根目录旧遗留文件",
+                "vacuum": "可选，执行 SQLite VACUUM",
+                "rebuild_index": "可选，从 compact/short/long 记忆重建索引",
+            },
+            "response_keys": ["status", "cleanup"],
+        },
         "tasks.roi.list": {
             "method": "GET",
             "path": "/api/tasks/{task_id}/roi",
@@ -1057,6 +1152,8 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
                 "capture_screen_when_display_sleep": "可选",
                 "cleanup_reminder_days": "可选",
                 "latest_frame_hotkey": "可选，例如 cmd+shift+9；留空关闭",
+                "monitor_context_hotkey": "可选，例如 cmd+shift+8；留空关闭",
+                "monitor_context_prompt": "可选，默认 Ayes context mode，最多 64 字符",
             },
             "response_keys": ["status", "settings"],
         },

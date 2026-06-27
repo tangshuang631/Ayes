@@ -811,7 +811,12 @@ class WatchRunner:
             result = self.vision.generate_vision_summary(
                 model=self.spec.vision.model,
                 image_bytes=frame.image_bytes,
-                prompt="请用一句简洁中文描述该区域中除文字外最重要的视觉信息，尽量包含图表、颜色状态、按钮、图标或弹窗结构。",
+                prompt=(
+                    "请用简洁中文做屏幕内容理解，优先输出可用于记忆和问答的事实。"
+                    "必须覆盖：页面类型、可见标题或主题、主内容是什么、当前是否像详情页/播放页/编辑页/登录页/错误弹窗、"
+                    "关键人物/对象/按钮/状态。若画面只是缩略图列表或推荐列表，请明确说“缩略图列表”，"
+                    "并尽量提取可见标题；不要只回答“有多个缩略图”这类泛化描述。"
+                ),
             )
         except Exception as exc:
             self._write_log(

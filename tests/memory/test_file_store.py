@@ -79,6 +79,111 @@ def test_task_memory_file_store_writes_compact_short_events_without_heavy_ocr_fi
     assert "task_id" not in encoded
 
 
+def test_task_memory_file_store_suppresses_consecutive_duplicate_short_events(tmp_path) -> None:
+    store = TaskMemoryFileStore(runtime_dir=tmp_path)
+    first = build_event(
+        task_id="task_browser",
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=1792944000.0,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="process", process_name="Chrome"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="Apifox 登录页",
+    )
+    duplicate = build_event(
+        task_id="task_browser",
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=1792944006.0,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="process", process_name="Chrome"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="Apifox 登录页",
+    )
+
+    path = store.append_short_event(first)
+    duplicate_path = store.append_short_event(duplicate)
+
+    assert duplicate_path == path
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == {"time": "2026-10-25T16:00:00Z", "info": "Apifox 登录页"}
+
+
+def test_task_memory_file_store_filters_gibberish_short_events(tmp_path) -> None:
+    store = TaskMemoryFileStore(runtime_dir=tmp_path)
+    event = build_event(
+        task_id="task_browser",
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=1792944000.0,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="process", process_name="Chrome"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="-.2,*.Yt.]E;-IHA iJ->AIJIfiEtJ L,I,L'l'",
+    )
+
+    path = store.append_short_event(event)
+
+    assert not path.exists()
+
+
+def test_task_memory_file_store_compacts_adjacent_duplicate_segments(tmp_path) -> None:
+    store = TaskMemoryFileStore(runtime_dir=tmp_path)
+    for index, summary in enumerate(["Apifox 登录页", "Apifox 登录页", "价格页面", "价格页面", "Apifox 登录页"]):
+        store.append_short_event(
+            build_event(
+                task_id="task_browser",
+                spec_version="1.0",
+                task_mode="observe",
+                timestamp=1792944000.0 + index * 60,
+                source="ocr",
+                event_type="text_change",
+                priority="medium",
+                confidence=0.9,
+                target=EventTarget(type="process", process_name="Chrome"),
+                observability=Observability(True, True, True, True, "ok"),
+                summary=summary,
+            )
+        )
+
+    result = store.compact_short_memory(task_id="task_browser", timestamp=1792944300.0)
+
+    assert result["segment_count"] == 3
+    compact_path = tmp_path / "tasks" / "2026-10-25" / "task_browser" / "memory" / "compact" / "2026-10-25-task_browser-segments.jsonl"
+    lines = [json.loads(line) for line in compact_path.read_text(encoding="utf-8").splitlines()]
+    assert lines == [
+        {
+            "from": "2026-10-25T16:00:00Z",
+            "to": "2026-10-25T16:01:00Z",
+            "info": "Apifox 登录页",
+            "repeat_count": 2,
+        },
+        {
+            "from": "2026-10-25T16:02:00Z",
+            "to": "2026-10-25T16:03:00Z",
+            "info": "价格页面",
+            "repeat_count": 2,
+        },
+        {
+            "from": "2026-10-25T16:04:00Z",
+            "to": "2026-10-25T16:04:00Z",
+            "info": "Apifox 登录页",
+            "repeat_count": 1,
+        },
+    ]
+
+
 def test_task_memory_file_store_deletes_expired_memory_files(tmp_path) -> None:
     store = TaskMemoryFileStore(runtime_dir=tmp_path)
     old_short = store.short_event_path(task_id="task_browser", timestamp=100.0)
