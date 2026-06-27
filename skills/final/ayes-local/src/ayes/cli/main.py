@@ -9,7 +9,7 @@ from ayes.app.runner import WatchRunner
 from ayes.cli.agent_tool import main as agent_tool_main
 from ayes.cli.helpers import load_watch_spec, to_pretty_json
 from ayes.cli.spec_builder import build_window_observe_spec
-from ayes.targets.discovery.macos import MacOSWindowDiscovery
+from ayes.targets.discovery import create_window_discovery
 
 
 def main() -> int:
@@ -24,7 +24,7 @@ def main() -> int:
     validate_parser = subparsers.add_parser("validate-spec", help="校验 watch spec JSON 文件")
     validate_parser.add_argument("path", help="watch spec JSON 路径")
 
-    subparsers.add_parser("list-windows", help="列出 macOS 窗口候选")
+    subparsers.add_parser("list-windows", help="列出当前系统窗口候选")
 
     run_once_parser = subparsers.add_parser("run-once", help="按 watch spec 执行一次最小监控链路")
     run_once_parser.add_argument("path", help="watch spec JSON 路径")
@@ -56,7 +56,7 @@ def main() -> int:
         print(to_pretty_json(asdict(spec)))
         return 0
     if args.command == "list-windows":
-        discovery = MacOSWindowDiscovery()
+        discovery = create_window_discovery()
         windows = [asdict(item) for item in discovery.list_windows()]
         print(to_pretty_json(windows))
         return 0

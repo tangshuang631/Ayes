@@ -1,4 +1,6 @@
+from ayes.targets.discovery import create_window_discovery
 from ayes.targets.discovery.macos import MacOSWindowDiscovery
+from ayes.targets.discovery.windows import WindowsWindowDiscovery
 
 
 def test_convert_raw_windows_filters_invalid_entries_and_sorts_business_first() -> None:
@@ -45,6 +47,18 @@ def test_missing_quartz_is_supported_as_empty_result() -> None:
     discovery = MacOSWindowDiscovery()
     discovery.is_available = False
     assert discovery.list_windows() == []
+
+
+def test_windows_discovery_is_supported_as_empty_result_when_backend_unavailable() -> None:
+    discovery = WindowsWindowDiscovery()
+    discovery.is_available = False
+
+    assert discovery.list_windows() == []
+
+
+def test_create_window_discovery_returns_platform_backend() -> None:
+    assert create_window_discovery(platform_name="darwin").__class__.__name__ == "MacOSWindowDiscovery"
+    assert create_window_discovery(platform_name="win32").__class__.__name__ == "WindowsWindowDiscovery"
 
 
 def test_get_primary_window_for_process_prefers_observable_business_window() -> None:

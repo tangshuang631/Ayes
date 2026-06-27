@@ -85,3 +85,44 @@ def test_final_skill_source_dir_is_stateless_template() -> None:
     assert all(not item.startswith("runtime/") for item in files)
     assert all("/runtime/" not in item for item in files)
     assert all(not item.endswith(".db") for item in files)
+
+
+def test_windows_final_skill_source_dir_is_stateless_template() -> None:
+    source_dir = Path("/Users/apple/Desktop/2026/Ayes/skills/final/ayes-local-windows")
+    files = sorted(path.relative_to(source_dir).as_posix() for path in source_dir.rglob("*") if path.is_file())
+
+    assert "SKILL.md" in files
+    assert "README.md" in files
+    assert "requirements.txt" in files
+    assert "references/windows.md" in files
+    assert "references/commands.md" in files
+    assert "references/privacy.md" in files
+    assert "scripts/install_ayes_local_skill.py" in files
+    assert "scripts/run_ayes_service.py" in files
+    assert "scripts/ayes-agent-local.ps1" in files
+    assert "scripts/ayes-tray-local.ps1" in files
+    assert "src/ayes/cli/windows_tray.py" in files
+    assert "src/ayes/cli/agent_tool.py" in files
+    assert all(not item.startswith("runtime/") for item in files)
+    assert all("/runtime/" not in item for item in files)
+    assert all(not item.endswith(".db") for item in files)
+
+
+def test_root_readme_routes_users_to_mac_or_windows_skill() -> None:
+    readme = Path("/Users/apple/Desktop/2026/Ayes/README.md").read_text(encoding="utf-8")
+
+    assert "skills/final/ayes-local/" in readme
+    assert "skills/final/ayes-local-windows/" in readme
+    assert "Windows" in readme
+    assert "macOS" in readme
+
+
+def test_windows_powershell_wrappers_use_installed_skill_runtime() -> None:
+    source_dir = Path("/Users/apple/Desktop/2026/Ayes/skills/final/ayes-local-windows")
+    agent_wrapper = (source_dir / "scripts" / "ayes-agent-local.ps1").read_text(encoding="utf-8")
+    tray_wrapper = (source_dir / "scripts" / "ayes-tray-local.ps1").read_text(encoding="utf-8")
+
+    assert "$env:PYTHONPATH = $SrcDir" in agent_wrapper
+    assert "$env:AYES_RUNTIME_DIR = Join-Path $SkillDir 'runtime'" in agent_wrapper
+    assert "python -m ayes.cli.agent_tool @args" in agent_wrapper
+    assert "python -m ayes.cli.windows_tray @args" in tray_wrapper

@@ -32,6 +32,26 @@ def test_agent_tool_targets_reads_targets_endpoint(monkeypatch, capsys) -> None:
     assert '"screens": []' in capsys.readouterr().out
 
 
+def test_agent_tool_control_tray_starts_windows_tray(monkeypatch, capsys) -> None:
+    recorded = {}
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(args, **kwargs):
+        recorded["args"] = args
+        recorded["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(agent_tool.subprocess, "Popen", fake_popen)
+
+    exit_code = agent_tool.main(["control", "tray"])
+
+    assert exit_code == 0
+    assert recorded["args"][1:3] == ["-m", "ayes.cli.windows_tray"]
+    assert '"launch": "windows_tray"' in capsys.readouterr().out
+
+
 def test_agent_tool_task_reads_watch_task_endpoint(monkeypatch, capsys) -> None:
     recorded = {}
 

@@ -17,7 +17,7 @@ from ayes.app.paths import runtime_root
 from ayes.app.task_paths import task_runtime_paths
 from ayes.alerting.notifier import WebhookNotifier
 from ayes.capture.models import CaptureFrame, CaptureResult
-from ayes.capture.screen import MacOSScreenCapture
+from ayes.capture.screen import create_screen_capture
 from ayes.capture.ticker import SamplingTicker
 from ayes.config.models import TargetRegion, WatchSpec
 from ayes.detect.diff import ByteDiffDetector
@@ -29,7 +29,7 @@ from ayes.observation.fusion import build_structured_observation, merge_vision_o
 from ayes.observation.text_quality import score_ocr_text
 from ayes.ocr.models import ImageInput
 from ayes.ocr.service import OCRService
-from ayes.targets.discovery.macos import MacOSWindowDiscovery
+from ayes.targets.discovery import create_window_discovery
 from ayes.vision.ollama import OllamaService
 from PIL import Image
 
@@ -48,10 +48,10 @@ class WatchRunner:
         self.task_id = task_id
         self.event_sink = event_sink
         self.log_sink = log_sink
-        self.capture = MacOSScreenCapture()
+        self.capture = create_screen_capture()
         self.ocr = OCRService()
         self.diff = ByteDiffDetector()
-        self.discovery = MacOSWindowDiscovery()
+        self.discovery = create_window_discovery()
         self.vision = OllamaService()
         self.memory = ShortTermMemoryStore(retain_seconds=spec.memory.short_term.retain_minutes * 60)
         self.ticker = SamplingTicker(

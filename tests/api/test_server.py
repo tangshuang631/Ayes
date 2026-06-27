@@ -1250,7 +1250,7 @@ def test_task_fresh_screenshot_captures_without_switching_current_task(monkeypat
     client.post("/api/watch/switch-task", json={"task_id": "task_roi_current_runner"})
     assert state.current_task_id == "task_roi_current_runner"
 
-    monkeypatch.setattr("ayes.app.runner.MacOSScreenCapture", lambda: FakeCaptureBlue())
+    monkeypatch.setattr("ayes.app.runner.create_screen_capture", lambda: FakeCaptureBlue())
 
     response = client.post("/api/tasks/task_roi_inactive_target/screenshot/fresh")
 
@@ -1278,7 +1278,7 @@ def test_hotkey_snapshot_captures_fresh_current_running_task(monkeypatch) -> Non
     )
     client.post("/api/watch/start")
     assert state.current_task_id == "task_hotkey_current"
-    monkeypatch.setattr("ayes.app.runner.MacOSScreenCapture", lambda: FakeCaptureBlue())
+    monkeypatch.setattr("ayes.app.runner.create_screen_capture", lambda: FakeCaptureBlue())
 
     response = client.post("/api/hotkey/latest-frame")
 

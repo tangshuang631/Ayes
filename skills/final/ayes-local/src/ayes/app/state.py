@@ -27,7 +27,7 @@ from ayes.memory.file_store import TaskMemoryFileStore
 from ayes.memory.long_term import build_long_term_summary
 from ayes.memory.search_index import MemorySearchIndex
 from ayes.storage.sqlite_store import SQLiteStore
-from ayes.targets.discovery.macos import MacOSWindowDiscovery
+from ayes.targets.discovery import create_window_discovery
 
 
 class AppState:
@@ -38,7 +38,7 @@ class AppState:
         self.memory_file_store = TaskMemoryFileStore(runtime_dir=self.runtime_dir, task_path_resolver=self._task_paths)
         self.search_index = MemorySearchIndex(runtime_dir=self.runtime_dir, task_path_resolver=self._task_paths)
         self.log_store = LogStore(sink=self._log_sink)
-        self.window_discovery = MacOSWindowDiscovery()
+        self.window_discovery = create_window_discovery()
         self.current_runner: Optional[WatchRunner] = None
         self.current_spec: Optional[WatchSpec] = None
         self.current_task_id: Optional[str] = None

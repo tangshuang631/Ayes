@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import time
 
-from ayes.capture.screen import MacOSScreenCapture
+from ayes.capture.screen import create_screen_capture
 from ayes.targets.models import WindowCandidate
 
 
@@ -17,9 +17,9 @@ LOW_RESOLUTION_MAX_HEIGHT = 500
 
 
 class TargetPreviewService:
-    def __init__(self, *, runtime_dir: Path, capture: Optional[MacOSScreenCapture] = None) -> None:
+    def __init__(self, *, runtime_dir: Path, capture: Optional[object] = None) -> None:
         self.runtime_dir = runtime_dir
-        self.capture = capture or MacOSScreenCapture()
+        self.capture = capture or create_screen_capture()
 
     def build_screen_target(self) -> dict:
         preview_path = self.capture_screen_preview(name="screen-preview-main.png")

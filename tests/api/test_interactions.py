@@ -184,7 +184,7 @@ def test_task_list_includes_roi_child_tasks_when_present() -> None:
         },
     )
 
-    response = client.get("/api/tasks")
+    response = client.get("/api/tasks", params={"limit": 500})
 
     assert response.status_code == 200
     payload = response.json()

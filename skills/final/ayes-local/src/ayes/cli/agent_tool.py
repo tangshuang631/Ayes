@@ -1537,6 +1537,7 @@ def build_parser() -> argparse.ArgumentParser:
     control_subparsers.add_parser("resume-all", help="恢复全部监控任务")
     control_subparsers.add_parser("open-data-dir", help="读取运行数据目录信息")
     control_subparsers.add_parser("menubar", help="启动 macOS 原生菜单栏控制面")
+    control_subparsers.add_parser("tray", help="启动 Windows 托盘控制面")
     cleanup_reminder_parser = control_subparsers.add_parser("cleanup-reminder", help="更新清理提醒状态")
     cleanup_reminder_parser.add_argument("--suppress-forever", default=None)
     cleanup_reminder_parser.add_argument("--snoozed-until", type=float, default=None)
@@ -1771,6 +1772,9 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
             return _request_json(base_url, "/api/control/open-data-dir")
         if args.control_command == "menubar":
             return ensure_local_menubar_started()
+        if args.control_command == "tray":
+            subprocess.Popen([sys.executable, "-m", "ayes.cli.windows_tray"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return {"status": "started", "launch": "windows_tray"}
         if args.control_command == "cleanup-reminder":
             payload = {
                 "suppress_forever": _parse_optional_bool(args.suppress_forever),
