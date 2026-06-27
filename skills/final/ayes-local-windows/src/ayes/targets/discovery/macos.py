@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
+import re
 
 from ayes.targets.models import Bounds, WindowCandidate, infer_business_candidate, observability_from_flags
 
@@ -10,6 +11,12 @@ try:
     import Quartz  # type: ignore
 except ImportError:  # pragma: no cover - exercised by unit test through availability flag
     Quartz = None
+
+try:
+    from AppKit import NSRunningApplication, NSWorkspace  # type: ignore
+except ImportError:  # pragma: no cover
+    NSRunningApplication = None
+    NSWorkspace = None
 
 
 class MacOSWindowDiscovery:
@@ -38,11 +45,7 @@ class MacOSWindowDiscovery:
         process_id: Optional[int] = None,
         only_observable: bool = True,
     ) -> List[WindowCandidate]:
-        candidates = [
-            item
-            for item in self.list_windows()
-            if self._matches_process(item, process_name=process_name, process_id=process_id)
-        ]
+        candidates = self._matching_process_candidates(process_name=process_name, process_id=process_id)
         if only_observable:
             candidates = [item for item in candidates if item.observability.is_recommended]
         return candidates
@@ -62,6 +65,57 @@ class MacOSWindowDiscovery:
         if not candidates:
             return None
         return max(candidates, key=self._process_window_rank)
+
+    def activate_process(
+        self,
+        *,
+        process_name: Optional[str] = None,
+        process_id: Optional[int] = None,
+    ) -> bool:
+        if NSRunningApplication is None:
+            return False
+        apps = list(NSRunningApplication.runningApplicationsWithBundleIdentifier_("com.tencent.xinWeChat") or [])
+        apps.extend(list(NSRunningApplication.runningApplicationsWithBundleIdentifier_("com.tencent.flue.WeChatAppEx") or []))
+        if not apps:
+            workspace_apps = list(NSRunningApplication.runningApplicationsWithBundleIdentifier_("") or [])
+            apps = workspace_apps
+        aliases = _process_name_aliases(process_name or "")
+        activated = False
+        for app in NSRunningApplication.runningApplicationsWithBundleIdentifier_("com.tencent.xinWeChat") or []:
+            if process_id is not None and int(app.processIdentifier()) != int(process_id):
+                continue
+            app.activateWithOptions_(1 << 1)
+            activated = True
+        if activated:
+            return True
+        for app in NSRunningApplication.runningApplicationsWithBundleIdentifier_("com.tencent.flue.WeChatAppEx") or []:
+            if process_id is not None and int(app.processIdentifier()) != int(process_id):
+                continue
+            app.activateWithOptions_(1 << 1)
+            activated = True
+        if activated:
+            return True
+        for app in NSRunningApplication.runningApplicationsWithBundleIdentifier_("") or []:
+            try:
+                localized = str(app.localizedName() or "")
+            except Exception:
+                continue
+            normalized = _normalize_process_token(localized)
+            if process_id is not None and int(app.processIdentifier()) != int(process_id):
+                continue
+            if aliases and normalized not in aliases:
+                continue
+            app.activateWithOptions_(1 << 1)
+            return True
+        return False
+
+    def get_frontmost_process_name(self) -> str:
+        if NSWorkspace is None:
+            return ""
+        front = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if front is None:
+            return ""
+        return str(front.localizedName() or "").strip()
 
     def _convert_raw_windows(self, raw_windows: Iterable[Dict[str, Any]]) -> List[WindowCandidate]:
         candidates: List[WindowCandidate] = []
@@ -132,6 +186,39 @@ class MacOSWindowDiscovery:
             return False
         return True
 
+    def _matching_process_candidates(
+        self,
+        *,
+        process_name: Optional[str],
+        process_id: Optional[int],
+    ) -> List[WindowCandidate]:
+        windows = self.list_windows()
+        if process_id is not None:
+            windows = [item for item in windows if item.process_id == process_id]
+        if not process_name:
+            return windows
+        exact = [item for item in windows if self._matches_process(item, process_name=process_name, process_id=process_id)]
+        if exact:
+            return exact
+        aliases = _process_name_aliases(process_name)
+        alias_matched = [item for item in windows if any(_same_process_name(item.process_name, alias) for alias in aliases)]
+        if alias_matched:
+            return alias_matched
+        normalized_target = _normalize_process_token(process_name)
+        partial = [
+            item
+            for item in windows
+            if normalized_target and normalized_target in _normalize_process_token(item.process_name)
+        ]
+        if partial:
+            return partial
+        reverse_partial = [
+            item
+            for item in windows
+            if normalized_target and _normalize_process_token(item.process_name) in normalized_target
+        ]
+        return reverse_partial
+
     def _process_window_rank(self, candidate: WindowCandidate) -> tuple:
         return (
             int(candidate.is_business_candidate),
@@ -142,3 +229,30 @@ class MacOSWindowDiscovery:
             -candidate.layer,
             candidate.bounds.area,
         )
+
+
+_PROCESS_NAME_ALIAS_MAP = {
+    "微信": ["wechat", "wechatapex"],
+    "weixin": ["wechat", "wechatapex"],
+    "wechat": ["微信", "weixin", "wechatex", "wechatapex"],
+    "哔哩哔哩": ["bilibili"],
+    "b站": ["bilibili"],
+    "bilibili": ["哔哩哔哩", "b站"],
+    "谷歌浏览器": ["googlechrome", "chrome"],
+    "chrome": ["googlechrome", "谷歌浏览器"],
+}
+
+
+def _normalize_process_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(value or "").casefold())
+
+
+def _process_name_aliases(value: str) -> list[str]:
+    normalized = _normalize_process_token(value)
+    aliases = [normalized]
+    aliases.extend(_PROCESS_NAME_ALIAS_MAP.get(normalized, []))
+    return [_normalize_process_token(item) for item in aliases if _normalize_process_token(item)]
+
+
+def _same_process_name(left: str, right: str) -> bool:
+    return _normalize_process_token(left) == _normalize_process_token(right)

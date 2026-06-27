@@ -56,13 +56,15 @@ def parse_hotkey(raw: Any) -> HotkeyConfig | None:
     key = key_parts[0]
     if len(key) != 1 and not key.startswith("f"):
         raise ValueError("快捷键普通按键只能是单字符或 F1-F20")
-    if "cmd" not in modifiers or not ({"shift", "option", "ctrl"} & set(modifiers)):
-        raise ValueError("快捷键必须包含 cmd 以及 shift/option/ctrl 中至少一个")
+    if "cmd" not in modifiers:
+        raise ValueError("快捷键必须至少包含 cmd")
     ordered_modifiers = [item for item in ("cmd", "shift", "option", "ctrl") if item in modifiers]
     canonical = "+".join([*ordered_modifiers, key])
-    if canonical in _DANGEROUS_HOTKEYS:
-        raise ValueError("该快捷键与系统常用快捷键冲突")
     return HotkeyConfig(canonical=canonical, modifiers=frozenset(ordered_modifiers), key=key)
+
+
+def is_system_common_hotkey(canonical: str) -> bool:
+    return str(canonical or "").strip().lower() in _DANGEROUS_HOTKEYS
 
 
 def should_handle_latest_frame_hotkey(status_payload: dict[str, Any]) -> bool:

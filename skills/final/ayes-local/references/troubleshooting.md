@@ -62,6 +62,8 @@ ayes-agent-local vision prepare --requested-by agent_enable_local_vision
 
 如果 `vision prepare` 返回缺 Ollama、缺服务或缺默认模型，再按提示执行安装、启动或拉取。
 
+Ollama 官网：https://ollama.com。用户也可以直接说“启用 Ayes 本地模型增强”，agent 再按本节执行检查、安装提示、默认模型拉取和启用；不要在用户未明确要求时自动下载模型。
+
 默认模型应使用：
 
 ```bash

@@ -203,10 +203,16 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
 @property(assign) NSButton *visionSettingsCheckbox;
 @property(assign) NSPopUpButton *visionSettingsPopup;
 @property(strong) id hotkeyMonitor;
-@property(strong) NSString *currentHotkey;
-@property(strong) id contextHotkeyMonitor;
-@property(strong) NSString *currentContextHotkey;
+@property(strong) NSDictionary *taskHotkeyBindings;
 @property(strong) NSString *currentContextPrompt;
+@property(strong) id settingsHotkeyMonitor;
+@property(strong) NSString *capturingHotkeyField;
+@property(assign) NSTextField *capturingHotkeyTextField;
+@property(assign) NSTextField *capturingHotkeyErrorLabel;
+@property(assign) NSWindow *capturingHotkeyWindow;
+@property(assign) NSTextField *latestFrameWarningLabel;
+@property(assign) NSTextField *contextWarningLabel;
+@property(strong) NSString *settingsTaskId;
 @end
 
 @implementation AyesDelegate
@@ -330,6 +336,13 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [alert addButtonWithTitle:@"知道了"];
     [alert runModal];
 }}
+- (void)showVisionHelp:(id)sender {{
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"本地大模型增强帮助";
+    alert.informativeText = @"Ayes 的本地模型增强是可选功能。没有 Ollama 或视觉模型时，监控仍会使用 OCR 和记忆索引正常工作。\\n\\n1. 打开 https://ollama.com 安装 Ollama。\\n2. 启动 Ollama 应用或服务。\\n3. 在终端执行：ollama pull qwen2.5vl:7b\\n4. 回到 Ayes 设置，刷新后从模型列表选择 qwen2.5vl:7b 并勾选本地大模型增强。\\n\\n也可以直接对 agent 说：启用 Ayes 本地模型增强。agent 会按 skill 文档检查 Ollama、拉取默认视觉模型并启用。";
+    [alert addButtonWithTitle:@"知道了"];
+    [alert runModal];
+}}
 - (NSString *)absolutePathForRuntimePath:(NSString *)path {{
     NSString *clean = [self safeText:path fallback:@""];
     if ([clean length] == 0) {{ return @""; }}
@@ -357,14 +370,10 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     }}
 }}
 - (NSString *)configuredHotkey {{
-    NSDictionary *payload = [self jsonForPath:@"/api/control/settings"];
-    NSDictionary *settings = [[payload objectForKey:@"settings"] isKindOfClass:[NSDictionary class]] ? [payload objectForKey:@"settings"] : @{{}};
-    return [self safeText:[settings objectForKey:@"latest_frame_hotkey"] fallback:@""];
+    return @"";
 }}
 - (NSString *)configuredContextHotkey {{
-    NSDictionary *payload = [self jsonForPath:@"/api/control/settings"];
-    NSDictionary *settings = [[payload objectForKey:@"settings"] isKindOfClass:[NSDictionary class]] ? [payload objectForKey:@"settings"] : @{{}};
-    return [self safeText:[settings objectForKey:@"monitor_context_hotkey"] fallback:@""];
+    return @"";
 }}
 - (NSString *)configuredContextPrompt {{
     NSDictionary *payload = [self jsonForPath:@"/api/control/settings"];
@@ -386,45 +395,198 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     if (([parts containsObject:@"ctrl"] || [parts containsObject:@"control"]) && !(flags & NSEventModifierFlagControl)) {{ return NO; }}
     return YES;
 }}
-- (void)refreshHotkeyRegistration {{
-    NSString *hotkey = [self configuredHotkey];
-    if (![(self.currentHotkey ?: @"") isEqualToString:hotkey]) {{
-        if (self.hotkeyMonitor != nil) {{
-            [NSEvent removeMonitor:self.hotkeyMonitor];
-            self.hotkeyMonitor = nil;
-        }}
-        self.currentHotkey = hotkey;
-        if ([hotkey length] > 0) {{
-            __block AyesDelegate *weakSelf = self;
-            self.hotkeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event) {{
-                AyesDelegate *strongSelf = weakSelf;
-                if (strongSelf == nil) {{ return; }}
-                if ([strongSelf event:event matchesHotkey:hotkey]) {{
-                    [strongSelf copyLatestFrameAndPaste:nil];
-                }}
-            }}];
+- (NSString *)recordedHotkeyFromEvent:(NSEvent *)event error:(NSString **)error {{
+    NSString *chars = [event charactersIgnoringModifiers] ?: @"";
+    if ([chars isEqualToString:@"\e"]) {{ return @""; }}
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    NSEventModifierFlags flags = [event modifierFlags];
+    if (flags & NSEventModifierFlagCommand) {{ [parts addObject:@"cmd"]; }}
+    if (flags & NSEventModifierFlagShift) {{ [parts addObject:@"shift"]; }}
+    if (flags & NSEventModifierFlagOption) {{ [parts addObject:@"option"]; }}
+    if (flags & NSEventModifierFlagControl) {{ [parts addObject:@"ctrl"]; }}
+    NSString *key = [[chars lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([key length] == 0) {{
+        if (error != NULL) {{ *error = @"请按下一个完整快捷键"; }}
+        return nil;
+    }}
+    [parts addObject:key];
+    NSString *candidate = [parts componentsJoinedByString:@"+"];
+    @try {{
+        return [self canonicalHotkey:candidate];
+    }} @catch (NSException *exception) {{
+        if (error != NULL) {{ *error = exception.reason ?: @"快捷键无效"; }}
+        return nil;
+    }}
+}}
+- (NSString *)canonicalHotkey:(NSString *)raw {{
+    NSString *text = [[[raw ?: @"" lowercaseString] stringByReplacingOccurrencesOfString:@" " withString:@""] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([text length] == 0) {{ return @""; }}
+    NSArray<NSString *> *parts = [text componentsSeparatedByString:@"+"];
+    NSMutableOrderedSet<NSString *> *modifiers = [NSMutableOrderedSet orderedSet];
+    NSMutableArray<NSString *> *keys = [NSMutableArray array];
+    NSDictionary<NSString *, NSString *> *aliases = @{{@"command": @"cmd", @"cmd": @"cmd", @"⌘": @"cmd", @"shift": @"shift", @"⇧": @"shift", @"option": @"option", @"alt": @"option", @"⌥": @"option", @"ctrl": @"ctrl", @"control": @"ctrl", @"⌃": @"ctrl"}};
+    for (NSString *part in parts) {{
+        if ([part length] == 0) {{ continue; }}
+        NSString *modifier = [aliases objectForKey:part];
+        if (modifier != nil) {{
+            [modifiers addObject:modifier];
+        }} else {{
+            [keys addObject:part];
         }}
     }}
-
-    NSString *contextHotkey = [self configuredContextHotkey];
+    if ([keys count] != 1) {{ @throw [NSException exceptionWithName:@"AyesHotkeyError" reason:@"快捷键必须包含一个普通按键" userInfo:nil]; }}
+    NSString *key = keys.firstObject ?: @"";
+    if (!([key length] == 1 || [key hasPrefix:@"f"])) {{ @throw [NSException exceptionWithName:@"AyesHotkeyError" reason:@"快捷键普通按键只能是单字符或 F1-F20" userInfo:nil]; }}
+    BOOL hasCmd = [modifiers containsObject:@"cmd"];
+    BOOL hasRequired = [modifiers containsObject:@"shift"] || [modifiers containsObject:@"option"] || [modifiers containsObject:@"ctrl"];
+    if (!hasCmd || !hasRequired) {{ @throw [NSException exceptionWithName:@"AyesHotkeyError" reason:@"快捷键必须包含 cmd 以及 shift/option/ctrl 中至少一个" userInfo:nil]; }}
+    NSArray<NSString *> *orderedModifierKeys = @[@"cmd", @"shift", @"option", @"ctrl"];
+    NSMutableArray<NSString *> *ordered = [NSMutableArray array];
+    for (NSString *modifier in orderedModifierKeys) {{
+        if ([modifiers containsObject:modifier]) {{ [ordered addObject:modifier]; }}
+    }}
+    [ordered addObject:key];
+    NSString *canonical = [ordered componentsJoinedByString:@"+"];
+    return canonical;
+}}
+- (NSString *)warningTextFromItems:(id)items {{
+    if (![items isKindOfClass:[NSArray class]]) {{ return @""; }}
+    NSMutableArray<NSString *> *messages = [NSMutableArray array];
+    for (NSDictionary *item in (NSArray *)items) {{
+        if (![item isKindOfClass:[NSDictionary class]]) {{ continue; }}
+        NSString *message = [self safeText:[item objectForKey:@"message"] fallback:@""];
+        if ([message length] > 0) {{ [messages addObject:message]; }}
+    }}
+    return [messages componentsJoinedByString:@"；"];
+}}
+- (void)refreshHotkeyWarningLabelsWithPayload:(NSDictionary *)payload {{
+    NSDictionary *warnings = [[payload objectForKey:@"warnings"] isKindOfClass:[NSDictionary class]] ? [payload objectForKey:@"warnings"] : @{{}};
+    NSString *latestWarning = [self warningTextFromItems:[warnings objectForKey:@"latest_frame_hotkey"]];
+    NSString *contextWarning = [self warningTextFromItems:[warnings objectForKey:@"monitor_context_hotkey"]];
+    if (self.latestFrameWarningLabel != nil) {{
+        self.latestFrameWarningLabel.stringValue = [latestWarning length] > 0 ? [@"! " stringByAppendingString:latestWarning] : @"";
+        self.latestFrameWarningLabel.textColor = [latestWarning length] > 0 ? [NSColor systemOrangeColor] : [NSColor secondaryLabelColor];
+    }}
+    if (self.contextWarningLabel != nil) {{
+        self.contextWarningLabel.stringValue = [contextWarning length] > 0 ? [@"! " stringByAppendingString:contextWarning] : @"";
+        self.contextWarningLabel.textColor = [contextWarning length] > 0 ? [NSColor systemOrangeColor] : [NSColor secondaryLabelColor];
+    }}
+}}
+- (void)stopHotkeyCapture {{
+    if (self.settingsHotkeyMonitor != nil) {{
+        [NSEvent removeMonitor:self.settingsHotkeyMonitor];
+        self.settingsHotkeyMonitor = nil;
+    }}
+    self.capturingHotkeyField = nil;
+    self.capturingHotkeyTextField = nil;
+    self.capturingHotkeyWindow = nil;
+}}
+- (void)beginHotkeyCaptureForFieldName:(NSString *)fieldName textField:(NSTextField *)field errorLabel:(NSTextField *)errorLabel window:(NSWindow *)window {{
+    [self stopHotkeyCapture];
+    self.capturingHotkeyField = fieldName ?: @"";
+    self.capturingHotkeyTextField = field;
+    self.capturingHotkeyErrorLabel = errorLabel;
+    self.capturingHotkeyWindow = window;
+    field.editable = NO;
+    field.selectable = NO;
+    field.stringValue = @"请按快捷键，Esc 清空";
+    errorLabel.stringValue = @"请按快捷键，Esc 清空";
+    errorLabel.textColor = [NSColor secondaryLabelColor];
+    if (window != nil) {{
+        [window makeFirstResponder:nil];
+    }}
+    self.settingsHotkeyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent * _Nullable(NSEvent *event) {{
+        if (self.capturingHotkeyTextField == nil) {{ return event; }}
+        NSString *captureError = nil;
+        NSString *canonical = [self recordedHotkeyFromEvent:event error:&captureError];
+        if (canonical == nil) {{
+            self.capturingHotkeyErrorLabel.stringValue = captureError ?: @"快捷键无效";
+            self.capturingHotkeyErrorLabel.textColor = [NSColor systemRedColor];
+            return nil;
+        }}
+        self.capturingHotkeyTextField.stringValue = canonical;
+        self.capturingHotkeyErrorLabel.stringValue = @"";
+        self.capturingHotkeyErrorLabel.textColor = [NSColor secondaryLabelColor];
+        if ([self.settingsTaskId length] > 0) {{
+            NSString *latestValue = self.capturingHotkeyTextField.tag == 9101 ? canonical : [self safeText:self.latestFrameWarningLabel.objectValue fallback:@""];
+            NSString *contextValue = self.capturingHotkeyTextField.tag == 9102 ? canonical : [self safeText:self.contextWarningLabel.objectValue fallback:@""];
+            latestValue = self.capturingHotkeyTextField.tag == 9101 ? canonical : [self safeText:[(NSTextField *)[[self.capturingHotkeyTextField superview] viewWithTag:9101] stringValue] fallback:@""];
+            contextValue = self.capturingHotkeyTextField.tag == 9102 ? canonical : [self safeText:[(NSTextField *)[[self.capturingHotkeyTextField superview] viewWithTag:9102] stringValue] fallback:@""];
+            NSString *encoded = [self.settingsTaskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+            NSDictionary *preview = [self postJsonSync:@{{@"latest_frame_hotkey": latestValue ?: @"", @"monitor_context_hotkey": contextValue ?: @""}} toPath:[@"/api/tasks/" stringByAppendingFormat:@"%@/hotkey-policy", encoded]];
+            [self refreshHotkeyWarningLabelsWithPayload:preview];
+        }}
+        [self stopHotkeyCapture];
+        return nil;
+    }}];
+}}
+- (void)beginLatestFrameHotkeyCapture:(id)sender {{
+    NSTextField *field = (NSTextField *)sender;
+    NSView *container = (NSView *)[field superview];
+    [self beginHotkeyCaptureForFieldName:@"latest_frame_hotkey" textField:field errorLabel:(NSTextField *)[container viewWithTag:9103] window:[field window]];
+}}
+- (void)beginMonitorContextHotkeyCapture:(id)sender {{
+    NSTextField *field = (NSTextField *)sender;
+    NSView *container = (NSView *)[field superview];
+    [self beginHotkeyCaptureForFieldName:@"monitor_context_hotkey" textField:field errorLabel:(NSTextField *)[container viewWithTag:9103] window:[field window]];
+}}
+- (void)hotkeyFieldClicked:(id)sender {{
+    NSTextField *field = nil;
+    if ([sender isKindOfClass:[NSClickGestureRecognizer class]]) {{
+        NSClickGestureRecognizer *recognizer = (NSClickGestureRecognizer *)sender;
+        field = (NSTextField *)recognizer.view;
+    }} else if ([sender isKindOfClass:[NSTextField class]]) {{
+        field = (NSTextField *)sender;
+    }}
+    if (field == nil) {{ return; }}
+    if (field.tag == 9101) {{
+        [self beginLatestFrameHotkeyCapture:field];
+        return;
+    }}
+    if (field.tag == 9102) {{
+        [self beginMonitorContextHotkeyCapture:field];
+    }}
+}}
+- (void)refreshHotkeyRegistration {{
     NSString *contextPrompt = [self configuredContextPrompt];
-    if (![(self.currentContextHotkey ?: @"") isEqualToString:contextHotkey] || ![(self.currentContextPrompt ?: @"") isEqualToString:contextPrompt]) {{
-        if (self.contextHotkeyMonitor != nil) {{
-            [NSEvent removeMonitor:self.contextHotkeyMonitor];
-            self.contextHotkeyMonitor = nil;
+    NSDictionary *tasksPayload = [self jsonForPath:@"/api/tasks?limit=500"];
+    NSArray *items = [[tasksPayload objectForKey:@"items"] isKindOfClass:[NSArray class]] ? [tasksPayload objectForKey:@"items"] : @[];
+    NSMutableDictionary *bindings = [NSMutableDictionary dictionary];
+    for (NSDictionary *task in items) {{
+        if (![task isKindOfClass:[NSDictionary class]]) {{ continue; }}
+        NSString *taskId = [self safeText:[task objectForKey:@"task_id"] fallback:@""];
+        NSDictionary *hotkeys = [[task objectForKey:@"task_hotkeys"] isKindOfClass:[NSDictionary class]] ? [task objectForKey:@"task_hotkeys"] : @{{}};
+        NSString *latest = [self safeText:[hotkeys objectForKey:@"latest_frame_hotkey"] fallback:@""];
+        NSString *context = [self safeText:[hotkeys objectForKey:@"monitor_context_hotkey"] fallback:@""];
+        if ([latest length] > 0 || [context length] > 0) {{
+            [bindings setObject:@{{@"task_id": taskId, @"latest_frame_hotkey": latest ?: @"", @"monitor_context_hotkey": context ?: @""}} forKey:taskId];
         }}
-        self.currentContextHotkey = contextHotkey;
-        self.currentContextPrompt = contextPrompt;
-        if ([contextHotkey length] > 0) {{
-            __block AyesDelegate *weakSelf = self;
-            self.contextHotkeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event) {{
-                AyesDelegate *strongSelf = weakSelf;
-                if (strongSelf == nil) {{ return; }}
-                if ([strongSelf event:event matchesHotkey:contextHotkey]) {{
-                    [strongSelf pasteMonitorContextPrompt:nil];
+    }}
+    if (self.hotkeyMonitor != nil) {{
+        [NSEvent removeMonitor:self.hotkeyMonitor];
+        self.hotkeyMonitor = nil;
+    }}
+    self.taskHotkeyBindings = bindings;
+    self.currentContextPrompt = contextPrompt;
+    if ([bindings count] > 0) {{
+        __block AyesDelegate *weakSelf = self;
+        self.hotkeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event) {{
+            AyesDelegate *strongSelf = weakSelf;
+            if (strongSelf == nil) {{ return; }}
+            for (NSDictionary *binding in [strongSelf.taskHotkeyBindings allValues]) {{
+                NSString *taskId = [strongSelf safeText:[binding objectForKey:@"task_id"] fallback:@""];
+                NSString *latest = [strongSelf safeText:[binding objectForKey:@"latest_frame_hotkey"] fallback:@""];
+                NSString *context = [strongSelf safeText:[binding objectForKey:@"monitor_context_hotkey"] fallback:@""];
+                if ([latest length] > 0 && [strongSelf event:event matchesHotkey:latest]) {{
+                    [strongSelf copyLatestFrameAndPasteForTaskId:taskId];
+                    return;
                 }}
-            }}];
-        }}
+                if ([context length] > 0 && [strongSelf event:event matchesHotkey:context]) {{
+                    [strongSelf pasteMonitorContextPrompt:nil];
+                    return;
+                }}
+            }}
+        }}];
     }}
 }}
 - (void)copyImageToPasteboard:(NSString *)imagePath {{
@@ -453,7 +615,7 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     CFRelease(keyDown);
     CFRelease(keyUp);
 }}
-- (void)copyLatestFrameAndPaste:(id)sender {{
+- (void)copyLatestFrameAndPasteForTaskId:(NSString *)taskId {{
     NSDictionary *status = [self jsonForPath:@"/api/control/status"];
     BOOL running = [[status objectForKey:@"is_running"] respondsToSelector:@selector(boolValue)] && [[status objectForKey:@"is_running"] boolValue];
     BOOL hasRunner = [[status objectForKey:@"has_runner"] respondsToSelector:@selector(boolValue)] && [[status objectForKey:@"has_runner"] boolValue];
@@ -461,7 +623,7 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
         [self showInfo:@"当前没有正在监控的任务"];
         return;
     }}
-    NSDictionary *snapshot = [self postPathSync:@"/api/hotkey/latest-frame"];
+    NSDictionary *snapshot = [self postJsonSync:@{{@"task_id": taskId ?: @""}} toPath:@"/api/hotkey/latest-frame"];
     NSString *rawPath = [self safeText:[snapshot objectForKey:@"path"] fallback:@""];
     if ([rawPath length] == 0) {{
         [self showInfo:[self safeText:[snapshot objectForKey:@"capture_message"] fallback:@"没有找到最新采样图"]];
@@ -471,6 +633,10 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [self copyImageToPasteboard:imagePath];
     [self pasteClipboardIntoFocusedApp];
     [self logEvent:@"hotkey_fresh_snapshot_pasted"];
+}}
+- (void)copyLatestFrameAndPaste:(id)sender {{
+    NSString *currentTaskId = [self safeText:[[self jsonForPath:@"/api/control/status"] objectForKey:@"task_id"] fallback:@""];
+    [self copyLatestFrameAndPasteForTaskId:currentTaskId];
 }}
 - (void)pasteMonitorContextPrompt:(id)sender {{
     NSString *prompt = self.currentContextPrompt ?: [self configuredContextPrompt];
@@ -535,8 +701,10 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     BOOL disableCleanup = [[memory objectForKey:@"disable_auto_cleanup"] respondsToSelector:@selector(boolValue)] && [[memory objectForKey:@"disable_auto_cleanup"] boolValue];
     BOOL virtualSleep = [[appSettings objectForKey:@"capture_screen_when_display_sleep"] respondsToSelector:@selector(boolValue)] && [[appSettings objectForKey:@"capture_screen_when_display_sleep"] boolValue];
     NSInteger cleanupDays = [[appSettings objectForKey:@"cleanup_reminder_days"] respondsToSelector:@selector(integerValue)] ? [[appSettings objectForKey:@"cleanup_reminder_days"] integerValue] : 7;
-    NSString *hotkey = [appSettings objectForKey:@"latest_frame_hotkey"] ?: @"";
-    NSString *contextHotkey = [appSettings objectForKey:@"monitor_context_hotkey"] ?: @"";
+    id rawTaskHotkeys = [settings objectForKey:@"task_hotkeys"];
+    NSDictionary *taskHotkeys = [rawTaskHotkeys isKindOfClass:[NSDictionary class]] ? rawTaskHotkeys : @{{}};
+    NSString *hotkey = [taskHotkeys objectForKey:@"latest_frame_hotkey"] ?: @"";
+    NSString *contextHotkey = [taskHotkeys objectForKey:@"monitor_context_hotkey"] ?: @"";
     BOOL visionEnabled = [[vision objectForKey:@"enabled"] respondsToSelector:@selector(boolValue)] && [[vision objectForKey:@"enabled"] boolValue];
     NSString *visionModel = [vision objectForKey:@"model"] ?: @"qwen2.5vl:7b";
     NSDictionary *visionModelsPayload = [self jsonForPath:@"/api/vision/models"];
@@ -546,7 +714,7 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
 
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = isTaskSpecificSettings ? [@"Ayes 设置 · " stringByAppendingString:resolvedTaskId] : @"Ayes 设置";
-    alert.informativeText = isTaskSpecificSettings ? @"采样和记忆写入该任务专属配置；增强、快捷键和清理提醒为本机通用配置。" : @"当前为全局设置；不会覆盖任务专属采样和记忆配置。";
+    alert.informativeText = isTaskSpecificSettings ? @"采样、记忆、视觉增强和快捷键都写入该任务专属配置；任务配置优先于全局配置。" : @"当前为全局设置；不会覆盖任务专属采样、记忆和快捷键配置。";
     [alert addButtonWithTitle:@"保存"];
     [alert addButtonWithTitle:@"取消"];
 
@@ -618,19 +786,46 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     self.visionSettingsCheckbox = visionCheckbox;
     self.visionSettingsPopup = visionPopup;
     [self visionSelectionChanged:visionCheckbox];
+    NSButton *visionHelpButton = [[NSButton alloc] initWithFrame:NSMakeRect(262, 94, 20, 20)];
+    [visionHelpButton setTitle:@"i"];
+    [visionHelpButton setBezelStyle:NSBezelStyleCircular];
+    [visionHelpButton setTarget:self];
+    [visionHelpButton setAction:@selector(showVisionHelp:)];
 
     NSTextField *hotkeyLabel = [NSTextField labelWithString:@"截图快捷键"];
     hotkeyLabel.frame = NSMakeRect(0, 68, 120, 22);
     NSTextField *hotkeyField = [[NSTextField alloc] initWithFrame:NSMakeRect(140, 64, 120, 28)];
     hotkeyField.stringValue = hotkey;
+    hotkeyField.editable = NO;
+    hotkeyField.selectable = NO;
+    hotkeyField.tag = 9101;
+    NSClickGestureRecognizer *hotkeyClick = [[NSClickGestureRecognizer alloc] initWithTarget:self action:@selector(hotkeyFieldClicked:)];
+    [hotkeyField addGestureRecognizer:hotkeyClick];
+    NSTextField *latestWarningLabel = [NSTextField labelWithString:@""];
+    latestWarningLabel.frame = NSMakeRect(270, 64, 150, 28);
+    latestWarningLabel.textColor = [NSColor secondaryLabelColor];
+    self.latestFrameWarningLabel = latestWarningLabel;
     NSTextField *contextHotkeyLabel = [NSTextField labelWithString:@"提问快捷键"];
     contextHotkeyLabel.frame = NSMakeRect(0, 28, 120, 22);
     NSTextField *contextHotkeyField = [[NSTextField alloc] initWithFrame:NSMakeRect(140, 24, 120, 28)];
     contextHotkeyField.stringValue = contextHotkey;
+    contextHotkeyField.editable = NO;
+    contextHotkeyField.selectable = NO;
+    contextHotkeyField.tag = 9102;
+    NSClickGestureRecognizer *contextHotkeyClick = [[NSClickGestureRecognizer alloc] initWithTarget:self action:@selector(hotkeyFieldClicked:)];
+    [contextHotkeyField addGestureRecognizer:contextHotkeyClick];
+    NSTextField *contextWarningLabel = [NSTextField labelWithString:@""];
+    contextWarningLabel.frame = NSMakeRect(270, 24, 150, 28);
+    contextWarningLabel.textColor = [NSColor secondaryLabelColor];
+    self.contextWarningLabel = contextWarningLabel;
     NSTextField *cleanupDaysLabel = [NSTextField labelWithString:@"清理提醒（天）"];
     cleanupDaysLabel.frame = NSMakeRect(270, 68, 90, 22);
     NSTextField *cleanupDaysField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 64, 60, 28)];
     cleanupDaysField.stringValue = [NSString stringWithFormat:@"%ld", (long)cleanupDays];
+    NSTextField *hotkeyCaptureLabel = [NSTextField labelWithString:@""];
+    hotkeyCaptureLabel.frame = NSMakeRect(0, 4, 260, 18);
+    hotkeyCaptureLabel.textColor = [NSColor secondaryLabelColor];
+    hotkeyCaptureLabel.tag = 9103;
 
     NSButton *sleepCheckbox = [[NSButton alloc] initWithFrame:NSMakeRect(266, 24, 160, 24)];
     [sleepCheckbox setButtonType:NSSwitchButton];
@@ -649,18 +844,30 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [view addSubview:cleanupCheckbox];
     [view addSubview:visionCheckbox];
     [view addSubview:visionPopup];
-    [view addSubview:hotkeyLabel];
-    [view addSubview:hotkeyField];
-    [view addSubview:contextHotkeyLabel];
-    [view addSubview:contextHotkeyField];
-    [view addSubview:cleanupDaysLabel];
-    [view addSubview:cleanupDaysField];
-    [view addSubview:sleepCheckbox];
+    [view addSubview:visionHelpButton];
+    if (isTaskSpecificSettings) {{
+        [view addSubview:hotkeyLabel];
+        [view addSubview:hotkeyField];
+        [view addSubview:latestWarningLabel];
+        [view addSubview:contextHotkeyLabel];
+        [view addSubview:contextHotkeyField];
+        [view addSubview:contextWarningLabel];
+        [view addSubview:hotkeyCaptureLabel];
+    }}
+    if (!isTaskSpecificSettings) {{
+        [view addSubview:cleanupDaysLabel];
+        [view addSubview:cleanupDaysField];
+        [view addSubview:sleepCheckbox];
+    }}
     alert.accessoryView = view;
+    self.settingsTaskId = resolvedTaskId;
+    [self refreshHotkeyWarningLabelsWithPayload:taskHotkeys];
 
     [NSApp activateIgnoringOtherApps:YES];
     NSModalResponse response = [alert runModal];
+    [self stopHotkeyCapture];
     if (response != NSAlertFirstButtonReturn) {{ return; }}
+    self.settingsTaskId = @"";
     double nextIntervalSec = [intervalField doubleValue];
     if (nextIntervalSec < 0.5) {{ nextIntervalSec = 0.5; }}
     if (nextIntervalSec > 3600.0) {{ nextIntervalSec = 3600.0; }}
@@ -684,33 +891,56 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
             [self showError:[samplingResult objectForKey:@"error"]];
             return;
         }}
-        NSString *encoded = [resolvedTaskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+        NSString *encodedTaskId = [resolvedTaskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
         NSDictionary *memoryResult = [self postJsonSync:@{{
             @"short_term_retain_days": @(shortDaysValue),
             @"long_term_retain_days": @(longDaysValue),
             @"disable_auto_cleanup": cleanupCheckbox.state == NSControlStateValueOn ? @YES : @NO
-        }} toPath:[@"/api/tasks/" stringByAppendingFormat:@"%@/memory-policy", encoded]];
+        }} toPath:[@"/api/tasks/" stringByAppendingFormat:@"%@/memory-policy", encodedTaskId]];
         if ([memoryResult objectForKey:@"error"] != nil) {{
             [self showError:[memoryResult objectForKey:@"error"]];
             return;
         }}
+        NSDictionary *hotkeyResult = [self postJsonSync:@{{
+            @"latest_frame_hotkey": hotkeyField.stringValue ?: @"",
+            @"monitor_context_hotkey": contextHotkeyField.stringValue ?: @""
+        }} toPath:[@"/api/tasks/" stringByAppendingFormat:@"%@/hotkey-policy", encodedTaskId]];
+        if ([hotkeyResult objectForKey:@"error"] != nil) {{
+            [self showError:[hotkeyResult objectForKey:@"error"]];
+            return;
+        }}
+        [self refreshHotkeyWarningLabelsWithPayload:hotkeyResult];
     }}
-    NSDictionary *settingsResult = [self postJsonSync:@{{
-        @"capture_screen_when_display_sleep": sleepCheckbox.state == NSControlStateValueOn ? @YES : @NO,
-        @"cleanup_reminder_days": @(cleanupDaysValue),
-        @"latest_frame_hotkey": hotkeyField.stringValue ?: @"",
-        @"monitor_context_hotkey": contextHotkeyField.stringValue ?: @""
-    }} toPath:@"/api/control/settings"];
-    if ([settingsResult objectForKey:@"error"] != nil) {{
-        [self showError:[settingsResult objectForKey:@"error"]];
-        return;
+    if (!isTaskSpecificSettings) {{
+        NSDictionary *settingsResult = [self postJsonSync:@{{
+            @"capture_screen_when_display_sleep": sleepCheckbox.state == NSControlStateValueOn ? @YES : @NO,
+            @"cleanup_reminder_days": @(cleanupDaysValue),
+            @"monitor_context_prompt": self.currentContextPrompt ?: @"Ayes context mode"
+        }} toPath:@"/api/control/settings"];
+        if ([settingsResult objectForKey:@"error"] != nil) {{
+            [self showError:[settingsResult objectForKey:@"error"]];
+            return;
+        }}
     }}
+    [self refreshStatus:nil];
     if (visionCheckbox.state == NSControlStateValueOn && ![self selectedVisionPopupItemIsVision:visionPopup]) {{
         visionCheckbox.state = NSControlStateValueOff;
         [self showInfo:@"当前选择增强模型为非视觉模型，已关闭本地模型增强。"];
     }}
     NSDictionary *selectedVisionModel = [[visionPopup selectedItem] representedObject] ?: @{{}};
     NSString *selectedVisionModelName = [selectedVisionModel objectForKey:@"name"] ?: @"";
+    if (isTaskSpecificSettings) {{
+        NSString *encodedTaskId = [resolvedTaskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+        NSDictionary *taskVisionResult = [self postJsonSync:@{{
+            @"enabled": visionCheckbox.state == NSControlStateValueOn ? @YES : @NO,
+            @"provider": @"ollama",
+            @"model": selectedVisionModelName
+        }} toPath:[@"/api/tasks/" stringByAppendingFormat:@"%@/vision-policy", encodedTaskId]];
+        if ([taskVisionResult objectForKey:@"error"] != nil) {{
+            [self showError:[taskVisionResult objectForKey:@"error"]];
+            return;
+        }}
+    }}
     NSDictionary *visionResult = [self postJsonSync:@{{
         @"enabled": visionCheckbox.state == NSControlStateValueOn ? @YES : @NO,
         @"provider": @"ollama",
@@ -750,9 +980,11 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
         return @[@"全屏监控", [@"屏幕 " stringByAppendingString:screenId]];
     }}
     if ([targetType isEqualToString:@"process"]) {{
-        NSMutableArray *bits = [NSMutableArray arrayWithObjects:@"进程监控", [self safeText:[target objectForKey:@"process_name"] fallback:@"未知进程"], nil];
+        NSMutableArray *bits = [NSMutableArray arrayWithObject:@"进程监控"];
         NSString *detail = [self targetDetailText:target];
         if ([detail length] > 0) {{ [bits addObject:detail]; }}
+        NSString *processName = [self safeText:[target objectForKey:@"process_name"] fallback:@"未知进程"];
+        if ([processName length] > 0) {{ [bits addObject:processName]; }}
         return bits;
     }}
     if ([targetType isEqualToString:@"window"]) {{
@@ -766,7 +998,9 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
 }}
 - (NSString *)titleForTask:(NSDictionary *)task {{
     if (![task isKindOfClass:[NSDictionary class]]) {{ return @"未知任务"; }}
+    NSString *displayName = [self safeText:[task objectForKey:@"display_name"] fallback:@""];
     NSString *taskId = [self safeText:[task objectForKey:@"task_id"] fallback:@"未知任务"];
+    NSString *taskName = [displayName length] > 0 ? displayName : taskId;
     id rawTarget = [task objectForKey:@"target"];
     if (![rawTarget isKindOfClass:[NSDictionary class]]) {{
         id rawSpec = [task objectForKey:@"spec"];
@@ -774,12 +1008,12 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     }}
     NSArray *targetBits = [self titleBitsForTarget:[rawTarget isKindOfClass:[NSDictionary class]] ? rawTarget : @{{}}];
     if ([targetBits count] > 0) {{
-        NSMutableArray *parts = [NSMutableArray arrayWithObject:taskId];
+        NSMutableArray *parts = [NSMutableArray arrayWithObject:taskName];
         [parts addObjectsFromArray:targetBits];
         return [parts componentsJoinedByString:@" · "];
     }}
     NSString *mode = [self safeText:[task objectForKey:@"mode"] fallback:@""];
-    return [mode length] > 0 ? [NSString stringWithFormat:@"%@ · %@", taskId, mode] : taskId;
+    return [mode length] > 0 ? [NSString stringWithFormat:@"%@ · %@", taskName, mode] : taskName;
 }}
 - (void)addTaskSubmenuWithTask:(NSDictionary *)task toMenu:(NSMenu *)menu allTasks:(NSArray *)allTasks {{
     NSString *taskId = [self safeText:[task objectForKey:@"task_id"] fallback:@""];
@@ -800,6 +1034,17 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
     [settingsItem setTarget:self];
     [settingsItem setRepresentedObject:taskId];
     [submenu addItem:settingsItem];
+    NSDictionary *taskTarget = [[task objectForKey:@"target"] isKindOfClass:[NSDictionary class]] ? [task objectForKey:@"target"] : @{{}};
+    if ([[self safeText:[taskTarget objectForKey:@"type"] fallback:@""] isEqualToString:@"process"]) {{
+        NSMenuItem *bindItem = [[NSMenuItem alloc] initWithTitle:@"绑定进程..." action:@selector(openProcessBindingEditor:) keyEquivalent:@""];
+        [bindItem setTarget:self];
+        [bindItem setRepresentedObject:taskId];
+        [submenu addItem:bindItem];
+    }}
+    NSMenuItem *renameItem = [[NSMenuItem alloc] initWithTitle:@"重命名..." action:@selector(renameTask:) keyEquivalent:@""];
+    [renameItem setTarget:self];
+    [renameItem setRepresentedObject:taskId];
+    [submenu addItem:renameItem];
     BOOL isRoiTask = [[self safeText:[task objectForKey:@"parent_task_id"] fallback:@""] length] > 0;
     if (!isRoiTask) {{
         NSMenuItem *roiEditorItem = [[NSMenuItem alloc] initWithTitle:@"设定 ROI..." action:@selector(openRoiEditor:) keyEquivalent:@""];
@@ -1019,6 +1264,83 @@ def _build_native_menubar_source(*, base_url: str, runtime_dir: Path) -> str:
         [self showError:[exception reason] ?: @"专属设置面板打开失败"];
     }}
 }}
+- (void)renameTask:(NSMenuItem *)sender {{
+    NSString *taskId = [sender representedObject];
+    if (taskId == nil || [taskId length] == 0) {{ return; }}
+    NSDictionary *taskPayload = [self jsonForPath:[@"/api/watch/task/" stringByAppendingString:[taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]]]];
+    NSString *currentName = [self safeText:[taskPayload objectForKey:@"display_name"] fallback:@""];
+    NSTextField *nameField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 320, 28)];
+    [nameField setStringValue:currentName];
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"重命名任务";
+    alert.informativeText = @"这里只修改任务显示名称，不改底层 task_id。";
+    alert.accessoryView = nameField;
+    [alert addButtonWithTitle:@"保存"];
+    [alert addButtonWithTitle:@"取消"];
+    [NSApp activateIgnoringOtherApps:YES];
+    if ([alert runModal] != NSAlertFirstButtonReturn) {{ return; }}
+    NSString *nextName = [self safeText:[nameField stringValue] fallback:@""];
+    if ([nextName length] == 0) {{ [self showError:@"名称不能为空"]; return; }}
+    NSString *renamePath = [@"/api/tasks/" stringByAppendingFormat:@"%@/rename", [taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]]];
+    NSDictionary *result = [self postJsonSync:@{{@"display_name": nextName}} toPath:renamePath];
+    if ([result objectForKey:@"error"] != nil) {{ [self showError:[result objectForKey:@"error"]]; return; }}
+    [self refreshStatus:nil];
+}}
+- (void)openProcessBindingEditor:(NSMenuItem *)sender {{
+    NSString *taskId = [sender representedObject];
+    if (taskId == nil || [taskId length] == 0) {{ return; }}
+    NSString *encodedTaskId = [taskId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+    NSDictionary *payload = [self jsonForPath:[@"/api/tasks/" stringByAppendingFormat:@"%@/process-candidates", encodedTaskId]];
+    NSArray *items = [[payload objectForKey:@"items"] isKindOfClass:[NSArray class]] ? [payload objectForKey:@"items"] : @[];
+    if ([items count] == 0) {{
+        [self showError:@"当前没有找到可绑定的进程窗口候选。"];
+        return;
+    }}
+    NSInteger capturableCount = [[payload objectForKey:@"capturable_count"] respondsToSelector:@selector(integerValue)] ? [[payload objectForKey:@"capturable_count"] integerValue] : 0;
+    if (capturableCount <= 0) {{
+        [self showError:@"已找到候选窗口，但当前都无法直接截图。请先把目标窗口切到前台或切回其所在桌面，再重新绑定。"];
+        return;
+    }}
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"绑定进程";
+    alert.informativeText = @"按分辨率和可截图能力排序，默认建议最上方候选。";
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 420, 28)];
+    for (NSDictionary *item in items) {{
+        if (![[item objectForKey:@"capturable"] boolValue]) {{ continue; }}
+        NSString *title = [NSString stringWithFormat:@"%@ · %ldx%ld · %@",
+            [self safeText:[item objectForKey:@"title"] fallback:[self safeText:[item objectForKey:@"process_name"] fallback:@"未命名窗口"]],
+            (long)[[[item objectForKey:@"bounds"] objectForKey:@"width"] integerValue],
+            (long)[[[item objectForKey:@"bounds"] objectForKey:@"height"] integerValue],
+            [self safeText:[item objectForKey:@"process_name"] fallback:@"未知进程"]
+        ];
+        [popup addItemWithTitle:title];
+    }}
+    if ([popup numberOfItems] == 0) {{
+        [self showError:@"候选列表存在，但当前没有可截图候选。"];
+        return;
+    }}
+    [alert setAccessoryView:popup];
+    [alert addButtonWithTitle:@"绑定"];
+    [alert addButtonWithTitle:@"取消"];
+    [NSApp activateIgnoringOtherApps:YES];
+    if ([alert runModal] != NSAlertFirstButtonReturn) {{ return; }}
+    NSMutableArray *capturableItems = [NSMutableArray array];
+    for (NSDictionary *item in items) {{
+        if ([[item objectForKey:@"capturable"] boolValue]) {{ [capturableItems addObject:item]; }}
+    }}
+    NSInteger selectedIndex = [popup indexOfSelectedItem];
+    if (selectedIndex < 0 || selectedIndex >= (NSInteger)[capturableItems count]) {{ return; }}
+    NSDictionary *selected = [capturableItems objectAtIndex:(NSUInteger)selectedIndex];
+    NSString *path = [@"/api/tasks/" stringByAppendingFormat:@"%@/rebind-process", encodedTaskId];
+    NSDictionary *result = [self postJsonSync:@{{
+        @"process_name": [self safeText:[selected objectForKey:@"process_name"] fallback:@""],
+        @"process_id": [selected objectForKey:@"process_id"] ?: @0,
+        @"window_id": [selected objectForKey:@"window_id"] ?: @0,
+        @"only_observable_windows": @NO
+    }} toPath:path];
+    if ([result objectForKey:@"error"] != nil) {{ [self showError:[result objectForKey:@"error"]]; return; }}
+    [self refreshStatus:nil];
+}}
 @end
 
 int main(int argc, const char * argv[]) {{
@@ -1063,7 +1385,14 @@ def _path_segment(value: Any) -> str:
     return quote(str(value or "").strip(), safe="")
 
 
-def _request_json(base_url: str, path: str, *, method: str = "GET", payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _request_json(
+    base_url: str,
+    path: str,
+    *,
+    method: str = "GET",
+    payload: Optional[Dict[str, Any]] = None,
+    timeout_sec: int = 10,
+) -> Dict[str, Any]:
     normalized_base_url = _normalize_base_url(base_url)
     body = None
     headers = {"Accept": "application/json"}
@@ -1072,7 +1401,7 @@ def _request_json(base_url: str, path: str, *, method: str = "GET", payload: Opt
         headers["Content-Type"] = "application/json; charset=utf-8"
     request = Request(f"{normalized_base_url}{path}", data=body, method=method, headers=headers)
     try:
-        with urlopen(request, timeout=10) as response:
+        with urlopen(request, timeout=timeout_sec) as response:
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -1414,6 +1743,18 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("targets", help="读取目标候选摘要")
     tasks_parser = subparsers.add_parser("tasks", help="读取已持久化任务列表")
     tasks_parser.add_argument("--limit", type=int, default=100)
+    process_candidates_parser = subparsers.add_parser("process-candidates", help="读取某个进程任务的候选窗口，可选先尝试拉到前台")
+    process_candidates_parser.add_argument("--task-id", required=True)
+    process_candidates_parser.add_argument("--auto-focus", action="store_true")
+    rebind_process_parser = subparsers.add_parser("rebind-process", help="为进程任务重绑到指定进程/窗口候选")
+    rebind_process_parser.add_argument("--task-id", required=True)
+    rebind_process_parser.add_argument("--process-name", default=None)
+    rebind_process_parser.add_argument("--process-id", type=int, default=None)
+    rebind_process_parser.add_argument("--window-id", type=int, default=None)
+    rebind_process_parser.add_argument("--only-observable-windows", default=None)
+    rename_task_parser = subparsers.add_parser("rename-task", help="修改任务显示名称，不改 task_id")
+    rename_task_parser.add_argument("--task-id", required=True)
+    rename_task_parser.add_argument("--display-name", required=True)
     roi_parser = subparsers.add_parser("roi", help="读取或修改任务 ROI 子任务")
     roi_subparsers = roi_parser.add_subparsers(dest="roi_command", required=True)
     roi_list_parser = roi_subparsers.add_parser("list", help="列出某个主任务下的 ROI 子任务")
@@ -1638,6 +1979,28 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
     if args.command == "tasks":
         path = _build_query_path("/api/tasks", limit=args.limit)
         return _request_json(base_url, path)
+    if args.command == "process-candidates":
+        path = _build_query_path(
+            f"/api/tasks/{_path_segment(args.task_id)}/process-candidates",
+            auto_focus=True if args.auto_focus else None,
+        )
+        return _request_json(base_url, path)
+    if args.command == "rebind-process":
+        payload = {
+            "process_name": args.process_name,
+            "process_id": args.process_id,
+            "window_id": args.window_id,
+            "only_observable_windows": _parse_optional_bool(args.only_observable_windows),
+        }
+        payload = {key: value for key, value in payload.items() if value is not None}
+        return _request_json(base_url, f"/api/tasks/{_path_segment(args.task_id)}/rebind-process", method="POST", payload=payload)
+    if args.command == "rename-task":
+        return _request_json(
+            base_url,
+            f"/api/tasks/{_path_segment(args.task_id)}/rename",
+            method="POST",
+            payload={"display_name": args.display_name},
+        )
     if args.command == "roi":
         encoded_task_id = _path_segment(args.task_id)
         if args.roi_command == "list":
@@ -1741,7 +2104,10 @@ def _dispatch(args: argparse.Namespace) -> Dict[str, Any]:
             result["menubar"] = ensure_local_menubar_started()
         return result
     if args.command == "run-once":
-        return _request_json(base_url, "/api/watch/run-once", method="POST", payload={})
+        try:
+            return _request_json(base_url, "/api/watch/run-once", method="POST", payload={}, timeout_sec=60)
+        except TypeError:
+            return _request_json(base_url, "/api/watch/run-once", method="POST", payload={})
     if args.command == "stop":
         return _request_json(base_url, "/api/watch/stop", method="POST", payload={})
     if args.command == "task":

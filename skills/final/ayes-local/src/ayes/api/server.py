@@ -277,6 +277,7 @@ def _build_content_query_result_from_short_files(*, task_id: str, minutes: int, 
                 target=EventTarget(type="process"),
                 observability=Observability(True, False, False, True, "summary"),
                 summary=info,
+                region=Region(name=str(payload.get("region") or "")),
             )
             if content_signal_score(event, question=question) > 0:
                 events.append(event)
@@ -523,13 +524,24 @@ def update_control_settings(payload: dict = Body(...)) -> JSONResponse:
         settings = state.update_app_settings(
             capture_screen_when_display_sleep=payload.get("capture_screen_when_display_sleep"),
             cleanup_reminder_days=payload.get("cleanup_reminder_days"),
-            latest_frame_hotkey=payload.get("latest_frame_hotkey"),
-            monitor_context_hotkey=payload.get("monitor_context_hotkey"),
             monitor_context_prompt=payload.get("monitor_context_prompt"),
         )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse({"status": "ok", "settings": settings})
+
+
+@app.post("/api/tasks/{task_id}/hotkey-policy")
+def update_task_hotkey_policy(task_id: str, payload: dict = Body(...)) -> JSONResponse:
+    try:
+        hotkeys = state.update_task_hotkey_policy(
+            task_id=task_id,
+            latest_frame_hotkey=payload.get("latest_frame_hotkey"),
+            monitor_context_hotkey=payload.get("monitor_context_hotkey"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"status": "ok", "hotkeys": hotkeys, "warnings": hotkeys.get("warnings") or {}})
 
 
 @app.get("/api/control/sampling")
@@ -618,6 +630,20 @@ def update_vision_settings(payload: dict = Body(...)) -> JSONResponse:
     return JSONResponse(response_payload)
 
 
+@app.post("/api/tasks/{task_id}/vision-policy")
+def update_task_vision_policy(task_id: str, payload: dict = Body(...)) -> JSONResponse:
+    try:
+        vision = state.update_task_vision_policy(
+            task_id=task_id,
+            enabled=payload.get("enabled"),
+            provider=payload.get("provider"),
+            model=payload.get("model"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    return JSONResponse({"status": "ok", "task_id": task_id, "vision": vision})
+
+
 @app.post("/api/vision/prepare")
 def prepare_vision_enablement(payload: dict = Body(...)) -> JSONResponse:
     requested_by = str(payload.get("requested_by") or "user_enable_local_vision").strip() or "user_enable_local_vision"
@@ -678,6 +704,7 @@ def load_window_watch(window_id: int) -> JSONResponse:
 @app.post("/api/watch/load-configured")
 def load_configured_watch(payload: dict = Body(...)) -> JSONResponse:
     task_id = str(payload.get("task_id") or "task_web").strip() or "task_web"
+    display_name = str(payload.get("display_name") or "").strip()
     spec = WatchSpec.from_dict(
         {
             "spec_version": payload.get("spec_version", "1.0"),
@@ -693,17 +720,20 @@ def load_configured_watch(payload: dict = Body(...)) -> JSONResponse:
         }
     )
     state.set_runner(spec, task_id=task_id)
+    if display_name:
+        state._upsert_task_spec(task_id=task_id, spec=spec, display_name=display_name)
     state.log_store.write(
         category="watch",
         level="info",
         message="已装载配置化监控任务",
         task_id=task_id,
-        metadata={"mode": spec.mode, "target_type": spec.target.type},
+        metadata={"mode": spec.mode, "target_type": spec.target.type, "display_name": display_name},
     )
     return JSONResponse(
         {
             "status": "loaded",
             "task_id": task_id,
+            "display_name": display_name,
             "mode": spec.mode,
             "target": asdict(spec.target),
             "spec": asdict(spec),
@@ -958,8 +988,9 @@ def query_question(
     limit: int = Query(8, ge=1, le=20),
 ) -> JSONResponse:
     resolved_task_id = _resolve_task_id(task_id)
+    vision_effective = state.build_vision_effective_summary()
     if not resolved_task_id:
-        return JSONResponse({"task_id": None, "question": question, "answer": "当前没有监控任务", "items": [], "route": "none", "needs_detail": True})
+        return JSONResponse({"task_id": None, "question": question, "answer": "当前没有监控任务", "items": [], "route": "none", "needs_detail": True, "vision_effective": vision_effective})
     index_payload = state.search_index.query(
         task_id=resolved_task_id,
         question=question,
@@ -972,6 +1003,7 @@ def query_question(
         payload["logs_used"] = False
         payload["raw_events_used"] = False
         payload["screenshot_used"] = False
+        payload["vision_effective"] = vision_effective
         return JSONResponse(payload)
     if _is_content_question(question):
         result = _build_query_result_from_store(
@@ -987,6 +1019,7 @@ def query_question(
         payload["screenshot_used"] = False
         payload["retrieval"] = {"strategy": "ask_compact_fallback", "reason": "memory_index_empty"}
         payload["needs_detail"] = not bool(payload.get("matched_events"))
+        payload["vision_effective"] = vision_effective
         return JSONResponse(payload)
     observed_at = time.time()
     items = state.sqlite_store.query_events(task_id=resolved_task_id, minutes=minutes, limit=20, now=observed_at)
@@ -1005,6 +1038,7 @@ def query_question(
     payload["raw_events_used"] = False
     payload["screenshot_used"] = False
     payload["retrieval"] = {"strategy": "activity_compact_fallback", "reason": "memory_index_empty"}
+    payload["vision_effective"] = vision_effective
     return JSONResponse(payload)
 
 
@@ -1154,8 +1188,8 @@ def capture_task_fresh_screenshot(task_id: str) -> JSONResponse:
 
 
 @app.post("/api/hotkey/latest-frame")
-def capture_hotkey_latest_frame() -> JSONResponse:
-    payload = state.capture_hotkey_latest_frame()
+def capture_hotkey_latest_frame(payload: dict = Body(default={})) -> JSONResponse:
+    payload = state.capture_hotkey_latest_frame(task_id=payload.get("task_id"))
     status_code = 200 if payload.get("capture_status") == "ok" else 409
     return JSONResponse(payload, status_code=status_code)
 
@@ -1231,6 +1265,97 @@ def get_watch_task(task_id: str) -> JSONResponse:
 def list_watch_tasks(limit: int = Query(100, ge=1, le=500)) -> JSONResponse:
     items = state.list_tasks(limit=limit)
     return JSONResponse({"items": items, "count": len(items)})
+
+
+@app.post("/api/tasks/{task_id}/rename")
+def rename_watch_task(task_id: str, payload: dict = Body(...)) -> JSONResponse:
+    try:
+        result = state.rename_task(task_id=task_id, display_name=str(payload.get("display_name") or "").strip())
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400 if "不能为空" in str(exc) else 404)
+    return JSONResponse({"status": "ok", **result})
+
+
+@app.get("/api/tasks/{task_id}/process-candidates")
+def list_task_process_candidates(task_id: str, auto_focus: bool = Query(False)) -> JSONResponse:
+    task = state.sqlite_store.get_task(task_id)
+    if task is None:
+        return JSONResponse({"error": "任务不存在"}, status_code=404)
+    spec = WatchSpec.from_dict(task["spec"])
+    if spec.target.type != "process":
+        return JSONResponse({"error": "只有进程监控任务支持读取候选绑定窗口"}, status_code=400)
+    focus_attempted = False
+    focus_succeeded = False
+    candidates = state.window_discovery.list_windows_for_process(
+        process_name=spec.target.process_name,
+        process_id=spec.target.process_id,
+        only_observable=False,
+    )
+    if auto_focus:
+        focus_attempted = True
+        activate = getattr(state.window_discovery, "activate_process", None)
+        if callable(activate):
+            focus_succeeded = bool(
+                activate(
+                    process_name=spec.target.process_name,
+                    process_id=spec.target.process_id,
+                )
+            )
+            if focus_succeeded:
+                candidates = state.window_discovery.list_windows_for_process(
+                    process_name=spec.target.process_name,
+                    process_id=spec.target.process_id,
+                    only_observable=False,
+                )
+    preview_items = []
+    for candidate in candidates:
+        preview_path = target_preview_service.capture_window_preview(candidate)
+        preview_items.append(
+            {
+                **asdict(candidate),
+                "preview_path": preview_path,
+                "area": candidate.bounds.area,
+                "capturable": bool(preview_path),
+            }
+        )
+    preview_items.sort(
+        key=lambda item: (
+            int(bool(item.get("capturable"))),
+            int(bool((item.get("observability") or {}).get("has_pixels"))),
+            int(bool((item.get("observability") or {}).get("is_recommended"))),
+            int(item.get("area") or 0),
+            int(bool(item.get("is_onscreen"))),
+            len(str(item.get("title") or "").strip()),
+        ),
+        reverse=True,
+    )
+    return JSONResponse(
+        {
+            "task_id": task_id,
+            "items": preview_items,
+            "count": len(preview_items),
+            "capturable_count": sum(1 for item in preview_items if item.get("capturable")),
+            "focus_attempted": focus_attempted,
+            "focus_succeeded": focus_succeeded,
+        }
+    )
+
+
+@app.post("/api/tasks/{task_id}/rebind-process")
+def rebind_watch_process(task_id: str, payload: dict = Body(...)) -> JSONResponse:
+    try:
+        result = state.rebind_process_task(
+            task_id=task_id,
+            process_name=payload.get("process_name"),
+            process_id=payload.get("process_id"),
+            window_id=payload.get("window_id"),
+            only_observable_windows=payload.get("only_observable_windows"),
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 400 if ("只有进程监控任务" in message or "不能为空" in message) else 404
+        return JSONResponse({"error": message}, status_code=status_code)
+    return JSONResponse({"status": "ok", **result})
 
 
 @app.get("/api/tasks/{task_id}/roi")

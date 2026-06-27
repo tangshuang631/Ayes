@@ -11,15 +11,21 @@ If the user message contains the short prompt `Ayes context mode`, treat the nex
 
 ## Default Decision Tree
 
-1. Ensure the service is available only when needed:
+1. In a fresh window, start with the canonical wrapper plus `query`, not with `status`, `ensure-service`, and PATH hunting:
+
+```bash
+$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local query --minutes 240 --question "用户的问题"
+```
+
+Treat `$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local` as the canonical entrypoint. Do not spend time searching `PATH` first. Do not start with `status`, `ensure-service`, and PATH hunting unless the query or task-control path actually needs it.
+
+2. Ensure the service is available only when needed:
 
 ```bash
 $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local ensure-service
 ```
 
-Treat `$HOME/.codex/skills/ayes-local/scripts/ayes-agent-local` as the canonical entrypoint. Do not spend time searching `PATH` first.
-
-2. For normal recall questions, use `query` first:
+3. For normal recall questions, use `query` first:
 
 ```bash
 $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local query --minutes 240 --question "用户的问题"
@@ -27,7 +33,7 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local query --minutes 240 --qu
 
 Use this for questions like “最近在干什么”, “刚刚发生了什么”, “刚刚看的内容是什么”, “页面里有什么”, “这个任务现在怎么样”. `query` does routing, memory-index lookup, rerank, and compact output. Answer from its `answer/items/retrieval/needs_detail` fields when sufficient.
 
-3. If the user asks for more detail, add compact memory only:
+4. If the user asks for more detail, add compact memory only:
 
 ```bash
 $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local memory-items --limit 5
@@ -35,20 +41,20 @@ $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local memory-items --limit 5
 
 Do not request raw memory unless the user explicitly asks for raw evidence or debugging.
 
-4. If the user asks for visual evidence or a screenshot, use screenshot:
+5. If the user asks for visual evidence or a screenshot, use screenshot:
 
 ```bash
 $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local screenshot
 $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local screenshot --fresh --task-id <task_id>
 ```
 
-5. If the user asks about notifications, use alerts first:
+6. If the user asks about notifications, use alerts first:
 
 ```bash
 $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local alerts --minutes 15 --limit 20
 ```
 
-6. If the user explicitly asks for logs or debugging, then use logs:
+7. If the user explicitly asks for logs or debugging, then use logs:
 
 ```bash
 $HOME/.codex/skills/ayes-local/scripts/ayes-agent-local logs --minutes 15

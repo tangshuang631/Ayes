@@ -66,6 +66,7 @@ def build_preview_overlay(event: Dict[str, Any]) -> Dict[str, Any]:
 def build_task_payload(*, task_id: str, spec: WatchSpec, extra: Dict[str, Any] | None = None) -> Dict[str, Any]:
     payload = {
         "task_id": task_id,
+        "display_name": "",
         "mode": spec.mode,
         "target": asdict(spec.target),
         "spec": asdict(spec),
@@ -82,6 +83,7 @@ def build_task_payload(*, task_id: str, spec: WatchSpec, extra: Dict[str, Any] |
 def build_query_result_payload(*, result: QueryResult, minutes: int, task_id: str, question: str) -> Dict[str, Any]:
     raw_matched_events = [asdict(event) for event in result.matched_events]
     matched_events = [_compact_query_event(event) for event in raw_matched_events]
+    matched_events = sorted(matched_events, key=_compact_event_spatial_sort_key)
     structured_observations: List[Dict[str, Any]] = []
     for event, raw_event in zip(matched_events, raw_matched_events):
         event["location_summary"] = describe_location_summary(event)
@@ -302,6 +304,7 @@ def build_activity_payload(
     has_screenshot_evidence: bool,
 ) -> Dict[str, Any]:
     compact_items = [_compact_event_payload(item) for item in items]
+    compact_items = sorted(compact_items, key=_compact_event_spatial_sort_key)
     timestamps = [item.get("timestamp") for item in compact_items if item.get("timestamp") is not None]
     keyword_items = [item for item in compact_items if not _is_activity_audit_summary(item) and not _is_low_quality_ocr_summary(item)]
     keywords = _dedupe_keywords(keyword for item in keyword_items for keyword in item.get("keywords", []))[:12]
@@ -336,6 +339,8 @@ def _compact_event_payload(event: Dict[str, Any]) -> Dict[str, Any]:
         summary = f"{summary}；{visual_summary}" if summary else visual_summary
     text_payload = event.get("text") or {}
     text = str(text_payload.get("normalized_text") or text_payload.get("ocr_text") or "").strip()
+    blocks = [block for block in (text_payload.get("blocks") or []) if isinstance(block, dict)]
+    first_rect_norm = (blocks[0].get("rect_norm") or {}) if blocks else {}
     attributes = visual.get("attributes") or {}
     attention = attributes.get("attention") or (attributes.get("structured_observation") or {}).get("attention") or {}
     text_quality = None
@@ -381,6 +386,9 @@ def _compact_event_payload(event: Dict[str, Any]) -> Dict[str, Any]:
         "attention_primary": attention.get("primary"),
         "attention_weight": attention.get("weight"),
         "priority": event.get("priority"),
+        "spatial_rank": _spatial_rank_from_region(region.get("name") or region.get("region_id") or ""),
+        "spatial_y": _rect_center_y(first_rect_norm),
+        "spatial_x": _rect_center_x(first_rect_norm),
     }
 
 
@@ -439,7 +447,36 @@ def _activity_summary_rank(item: Dict[str, Any]) -> float:
         score += float(item.get("timestamp") or 0.0) / 1_000_000_000
     except (TypeError, ValueError):
         pass
+    try:
+        score -= float(item.get("spatial_rank") or 99.0) * 0.01
+    except (TypeError, ValueError):
+        pass
     return score
+
+
+def _compact_event_spatial_sort_key(item: Dict[str, Any]) -> tuple:
+    rank = _safe_float(item.get("spatial_rank"), default=99.0)
+    y = _safe_float(item.get("spatial_y"), default=9.0)
+    x = _safe_float(item.get("spatial_x"), default=9.0)
+    timestamp = _safe_float(item.get("timestamp"), default=0.0)
+    return (rank, y, x, -timestamp)
+
+
+def _spatial_rank_from_region(region_name: str) -> float:
+    label = str(region_name or "")
+    if "主内容" in label:
+        return 0.0
+    if "顶部" in label:
+        return 1.0
+    if "左侧" in label:
+        return 2.0
+    if "右侧" in label:
+        return 3.0
+    if "底部" in label:
+        return 4.0
+    if "全目标" in label:
+        return 5.0
+    return 9.0
 
 
 def _is_low_quality_ocr_summary(item: Dict[str, Any], *, has_primary_visual: bool = False) -> bool:
@@ -492,6 +529,25 @@ def _average_confidence(items: List[Dict[str, Any]]) -> float:
     if not values:
         return 0.0 if not items else 0.6
     return round(sum(values) / len(values), 3)
+
+
+def _safe_float(value: Any, *, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _rect_center_x(rect_norm: Dict[str, Any]) -> float:
+    if not isinstance(rect_norm, dict) or not rect_norm:
+        return 9.0
+    return _safe_float(rect_norm.get("x"), default=0.0) + (_safe_float(rect_norm.get("w"), default=0.0) / 2.0)
+
+
+def _rect_center_y(rect_norm: Dict[str, Any]) -> float:
+    if not isinstance(rect_norm, dict) or not rect_norm:
+        return 9.0
+    return _safe_float(rect_norm.get("y"), default=0.0) + (_safe_float(rect_norm.get("h"), default=0.0) / 2.0)
 
 
 def _extract_keywords(text: str) -> List[str]:
@@ -1151,11 +1207,18 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
             "request": {
                 "capture_screen_when_display_sleep": "可选",
                 "cleanup_reminder_days": "可选",
-                "latest_frame_hotkey": "可选，例如 cmd+shift+9；留空关闭",
-                "monitor_context_hotkey": "可选，例如 cmd+shift+8；留空关闭",
                 "monitor_context_prompt": "可选，默认 Ayes context mode，最多 64 字符",
             },
             "response_keys": ["status", "settings"],
+        },
+        "tasks.hotkey_policy": {
+            "method": "POST",
+            "path": "/api/tasks/{task_id}/hotkey-policy",
+            "request": {
+                "latest_frame_hotkey": "可选，例如 cmd+shift+9；留空关闭",
+                "monitor_context_hotkey": "可选，例如 cmd+shift+8；留空关闭",
+            },
+            "response_keys": ["status", "hotkeys", "warnings"],
         },
         "vision.models": {
             "method": "GET",

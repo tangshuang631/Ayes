@@ -515,6 +515,7 @@ class WatchSpec:
     alert: AlertConfig
     actions: ActionsConfig
     roi: Dict[str, Any] = field(default_factory=dict)
+    task_hotkeys: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WatchSpec":
@@ -533,4 +534,5 @@ class WatchSpec:
             alert=AlertConfig.from_dict(data.get("alert", {})),
             actions=ActionsConfig.from_dict(data.get("actions", {})),
             roi=dict(data.get("roi", {})) if isinstance(data.get("roi", {}), dict) else {},
+            task_hotkeys=dict(data.get("task_hotkeys", {})) if isinstance(data.get("task_hotkeys", {}), dict) else {},
         )

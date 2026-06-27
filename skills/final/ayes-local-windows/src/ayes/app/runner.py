@@ -24,7 +24,7 @@ from ayes.detect.diff import ByteDiffDetector
 from ayes.events.factory import build_event
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, WatchMatch
 from ayes.memory.short_term import QueryResult, ShortTermMemoryStore
-from ayes.observation.attention import AttentionRegion, build_default_attention_regions
+from ayes.observation.attention import AttentionRegion, apply_attention_text_boost, build_default_attention_regions
 from ayes.observation.fusion import build_structured_observation, merge_vision_observation
 from ayes.observation.text_quality import score_ocr_text
 from ayes.ocr.models import ImageInput
@@ -76,6 +76,154 @@ class WatchRunner:
         self._last_evidence_cleanup_at: Optional[float] = None
         self._last_process_window_signature: Optional[tuple[int, str]] = None
         self._alert_notifier = WebhookNotifier()
+
+    def _rank_process_window_candidate(self, candidate) -> tuple:
+        title = str(getattr(candidate, "title", "") or "").strip()
+        observability = getattr(candidate, "observability", None)
+        bounds = getattr(candidate, "bounds", None)
+        area = int(getattr(bounds, "area", 0) or 0)
+        has_pixels = bool(getattr(observability, "has_pixels", False))
+        is_recommended = bool(getattr(observability, "is_recommended", False))
+        is_onscreen = bool(getattr(candidate, "is_onscreen", False))
+        is_business = bool(getattr(candidate, "is_business_candidate", False))
+        layer = int(getattr(candidate, "layer", 0) or 0)
+        preferred_window_id = getattr(self.spec.target, "window_id", None)
+        return (
+            int(preferred_window_id is not None and getattr(candidate, "window_id", None) == preferred_window_id),
+            int(has_pixels),
+            int(is_recommended),
+            int(is_business),
+            area,
+            int(is_onscreen),
+            int(bool(title)),
+            -layer,
+        )
+
+    def _ordered_process_candidates(self) -> list:
+        candidates = []
+        list_method = getattr(self.discovery, "list_windows_for_process", None)
+        get_primary_method = getattr(self.discovery, "get_primary_window_for_process", None)
+        if callable(list_method):
+            candidates.extend(
+                list_method(
+                    process_name=self.spec.target.process_name,
+                    process_id=self.spec.target.process_id,
+                    only_observable=self.spec.target.only_observable_windows,
+                )
+                or []
+            )
+            if self.spec.target.only_observable_windows:
+                candidates.extend(
+                    list_method(
+                        process_name=self.spec.target.process_name,
+                        process_id=self.spec.target.process_id,
+                        only_observable=False,
+                    )
+                    or []
+                )
+        elif callable(get_primary_method):
+            primary = get_primary_method(
+                process_name=self.spec.target.process_name,
+                process_id=self.spec.target.process_id,
+                only_observable=self.spec.target.only_observable_windows,
+            )
+            if primary is not None:
+                candidates.append(primary)
+            if self.spec.target.only_observable_windows:
+                fallback = get_primary_method(
+                    process_name=self.spec.target.process_name,
+                    process_id=self.spec.target.process_id,
+                    only_observable=False,
+                )
+                if fallback is not None:
+                    candidates.append(fallback)
+        deduped = []
+        seen_window_ids = set()
+        for item in sorted(candidates, key=self._rank_process_window_candidate, reverse=True):
+            window_id = getattr(item, "window_id", None)
+            if window_id in seen_window_ids:
+                continue
+            seen_window_ids.add(window_id)
+            deduped.append(item)
+        return deduped
+
+    def _frontmost_process_matches_target(self) -> bool:
+        resolver = getattr(self.discovery, "get_frontmost_process_name", None)
+        if not callable(resolver):
+            return False
+        frontmost = str(resolver() or "").strip()
+        target = str(self.spec.target.process_name or "").strip()
+        if not frontmost or not target:
+            return False
+        normalize = lambda value: re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(value or "").casefold())
+        front = normalize(frontmost)
+        want = normalize(target)
+        alias_map = {
+            "微信": ["wechat", "weixin", "wechatappex"],
+            "wechat": ["微信", "weixin", "wechatappex"],
+            "weixin": ["微信", "wechat", "wechatappex"],
+            "哔哩哔哩": ["bilibili", "b站"],
+            "bilibili": ["哔哩哔哩", "b站"],
+            "chrome": ["googlechrome", "谷歌浏览器"],
+            "谷歌浏览器": ["chrome", "googlechrome"],
+        }
+        want_aliases = {want}
+        for item in alias_map.get(target, []) + alias_map.get(want, []):
+            normalized = normalize(item)
+            if normalized:
+                want_aliases.add(normalized)
+        return bool(front and any(front == alias or front in alias or alias in front for alias in want_aliases))
+
+    def _capture_process_via_display_crop(self, candidate, *, now: float) -> CaptureResult:
+        display_result = self.capture.capture_main_display(timestamp=now)
+        if not display_result.ok or display_result.frame is None:
+            return display_result
+        frame = display_result.frame
+        try:
+            image = Image.open(BytesIO(frame.image_bytes))
+        except Exception:
+            return CaptureResult(ok=False, status="failed", message="主屏截图解码失败")
+        left = max(int(candidate.bounds.x), 0)
+        top = max(int(candidate.bounds.y), 0)
+        right = min(left + int(candidate.bounds.width), image.width)
+        bottom = min(top + int(candidate.bounds.height), image.height)
+        if right <= left or bottom <= top:
+            return CaptureResult(ok=False, status="no_pixels", message=f"窗口 {candidate.window_id} 裁剪边界无效")
+        cropped = image.crop((left, top, right, bottom))
+        buffer = BytesIO()
+        cropped.save(buffer, format="PNG")
+        cropped_frame = CaptureFrame(
+            frame_id=f"process_display_crop_{uuid4().hex}",
+            timestamp=now,
+            target_type="window",
+            target_id=str(candidate.window_id),
+            width=cropped.width,
+            height=cropped.height,
+            image_bytes=buffer.getvalue(),
+            metadata={
+                **(frame.metadata or {}),
+                "capture_backend": "display_crop_fallback",
+                "process_id": candidate.process_id,
+                "process_name": candidate.process_name,
+                "window_id": candidate.window_id,
+                "window_title": candidate.title,
+                "window_state": "cropped_from_display",
+                "screen_id": self.spec.target.screen_id,
+            },
+        )
+        return CaptureResult(ok=True, status="ok", frame=cropped_frame, message="display_crop_fallback")
+
+    def _capture_process_candidates_once(self, candidates, *, now: float) -> tuple[Optional[CaptureResult], Optional[object]]:
+        last_result: Optional[CaptureResult] = None
+        last_candidate = None
+        for item in candidates:
+            last_candidate = item
+            last_result = self._capture_window_candidate(item, now=now)
+            if last_result.ok:
+                return last_result, item
+            if last_result.status not in {"no_pixels", "failed"}:
+                return last_result, item
+        return last_result, last_candidate
 
     @property
     def events(self):
@@ -153,6 +301,7 @@ class WatchRunner:
             for region in regions:
                 attention = self._attention_for_region(region, frame)
                 cropped = self._crop_frame_to_region(frame, region)
+                ocr_options = {"selection_mode": "quality"} if attention is not None and attention.primary else None
                 ocr_result = self.ocr.recognize(
                     ImageInput(
                         image_bytes=cropped.image_bytes,
@@ -161,8 +310,11 @@ class WatchRunner:
                         source="screen_capture",
                         timestamp=now,
                         region_id=region.region_id if region else None,
-                    )
+                    ),
+                    options=ocr_options,
                 )
+                if attention is not None:
+                    attention = apply_attention_text_boost(attention, ocr_result.full_text)
                 event = self._build_ocr_event(
                     now,
                     cropped,
@@ -280,19 +432,43 @@ class WatchRunner:
                 )
             return self._capture_window_candidate(candidate, now=now)
         if self.spec.target.type == "process":
-            candidate = self.discovery.get_primary_window_for_process(
-                process_name=self.spec.target.process_name,
-                process_id=self.spec.target.process_id,
-                only_observable=self.spec.target.only_observable_windows,
-            )
-            if candidate is None:
+            candidates = self._ordered_process_candidates()
+            if not candidates:
                 process_label = self.spec.target.process_name or str(self.spec.target.process_id)
                 return CaptureResult(
                     ok=False,
                     status="process_window_not_found",
                     message=f"进程 {process_label} 当前未找到可采集业务窗口",
                 )
-            return self._capture_window_candidate(candidate, now=now)
+            last_result, last_candidate = self._capture_process_candidates_once(candidates, now=now)
+            if last_result is not None and last_result.ok:
+                return last_result
+            if last_result is not None and last_result.status not in {"no_pixels", "failed"}:
+                return last_result
+            activated = False
+            activate_method = getattr(self.discovery, "activate_process", None)
+            if callable(activate_method):
+                activated = bool(
+                    activate_method(
+                        process_name=self.spec.target.process_name,
+                        process_id=self.spec.target.process_id,
+                    )
+                )
+            if activated:
+                retry_candidates = self._ordered_process_candidates()
+                if retry_candidates:
+                    last_result, last_candidate = self._capture_process_candidates_once(retry_candidates, now=now)
+                    if last_result is not None and last_result.ok:
+                        return last_result
+                    if last_result is not None and last_result.status not in {"no_pixels", "failed"}:
+                        return last_result
+                    candidates = retry_candidates
+            if candidates and self._frontmost_process_matches_target():
+                fallback_candidate = candidates[0]
+                cropped_result = self._capture_process_via_display_crop(fallback_candidate, now=now)
+                if cropped_result.ok:
+                    return cropped_result
+            return last_result or CaptureResult(ok=False, status="process_window_not_found", message="未找到可采集业务窗口")
         result = self.capture.capture_main_display(timestamp=now)
         if result.ok and result.frame is not None:
             frame = replace(
@@ -554,6 +730,7 @@ class WatchRunner:
             "weight": attention.weight,
             "primary": attention.primary,
             "reason": attention.reason,
+            "abnormal_keyword_boosted": attention.abnormal_keyword_boosted,
         }
 
     def _crop_frame_to_region(self, frame: CaptureFrame, region: Optional[TargetRegion]) -> CaptureFrame:

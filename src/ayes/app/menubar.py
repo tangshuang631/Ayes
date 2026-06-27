@@ -228,19 +228,19 @@ def _post_json(base_url: str, path: str, payload: dict[str, Any]) -> dict:
 
 
 def _recent_task_title(task: dict[str, Any]) -> str:
-    task_id = _safe_text(task.get("task_id"), "未知任务")
+    task_name = _safe_text(task.get("display_name"), "") or _safe_text(task.get("task_id"), "未知任务")
     roi = task.get("roi") if isinstance(task.get("roi"), dict) else {}
     roi_name = _safe_text(roi.get("roi_name"), "") if roi else ""
     if roi_name:
-        return f"{task_id} · ROI · {roi_name}"
+        return f"{task_name} · ROI · {roi_name}"
     target = task.get("target") if isinstance(task.get("target"), dict) else {}
     target_bits = _task_target_title_bits(target)
     if target_bits:
-        return " · ".join([task_id] + target_bits)
+        return " · ".join([task_name] + target_bits)
     mode = _safe_text(task.get("mode"), "")
     if mode:
-        return f"{task_id} · {mode}"
-    return task_id
+        return f"{task_name} · {mode}"
+    return task_name
 
 
 def _task_target_title_bits(target: dict[str, Any]) -> list[str]:
@@ -248,7 +248,10 @@ def _task_target_title_bits(target: dict[str, Any]) -> list[str]:
     if target_type == "screen":
         return ["全屏监控", f"屏幕 {_safe_text(target.get('screen_id'), '默认')}"]
     if target_type == "process":
-        bits = ["进程监控", _safe_text(target.get("process_name"), "未知进程")]
+        bits = ["进程监控"]
+        process_name = _safe_text(target.get("process_name"), "未知进程")
+        if process_name:
+            bits.append(process_name)
         detail = _target_detail_text(target)
         if detail:
             bits.append(detail)
@@ -396,6 +399,30 @@ def _make_text_field(text: str, *, x: int, y: int, w: int, h: int = 28):  # prag
     return field
 
 
+def _render_recorded_hotkey_label(value: str) -> str:
+    return str(value or "").strip()
+
+
+def _record_hotkey_from_event(event: Any) -> str:
+    chars = str(event.charactersIgnoringModifiers() or "")
+    if chars == "\x1b":
+        return ""
+    flags = int(event.modifierFlags())
+    parts: list[str] = []
+    if flags & int(NSCommandKeyMask):
+        parts.append("cmd")
+    if flags & int(NSShiftKeyMask):
+        parts.append("shift")
+    if flags & int(NSAlternateKeyMask):
+        parts.append("option")
+    if flags & int(NSControlKeyMask):
+        parts.append("ctrl")
+    key = chars.lower().strip()
+    if not key:
+        raise ValueError("请按下一个完整快捷键")
+    return parse_hotkey("+".join([*parts, key])).canonical
+
+
 def _make_button(text: str, *, x: int, y: int, w: int, h: int = 30):  # pragma: no cover - UI runtime
     button = NSButton.alloc().initWithFrame_(NSMakeRect(x, y, w, h))
     button.setTitle_(text)
@@ -486,6 +513,8 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         self.settings_context_hotkey_field = None
         self.settings_memory_compact_field = None
         self.settings_error_label = None
+        self.settings_capturing_hotkey = None
+        self.settings_hotkey_capture_monitor = None
         self.hotkey_monitor = None
         self.current_hotkey = None
         self.context_hotkey_monitor = None
@@ -796,6 +825,60 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
             error="",
         )
 
+    def _set_hotkey_capture_mode(self, field_name: str | None) -> None:
+        if self.settings_hotkey_capture_monitor is not None:
+            NSEvent.removeMonitor_(self.settings_hotkey_capture_monitor)
+            self.settings_hotkey_capture_monitor = None
+        self.settings_capturing_hotkey = field_name
+        capture_text = "请按快捷键，Esc 清空"
+        if self.settings_error_label is not None:
+            self.settings_error_label.setStringValue_(capture_text if field_name else "")
+            self.settings_error_label.setTextColor_(NSColor.grayColor())
+        mapping = {
+            "latest_frame_hotkey": self.settings_hotkey_field,
+            "monitor_context_hotkey": self.settings_context_hotkey_field,
+        }
+        for key, field in mapping.items():
+            if field is None:
+                continue
+            field.setEditable_(False)
+            field.setSelectable_(False)
+            if field_name == key:
+                field.setStringValue_(capture_text)
+        if field_name:
+            def _capture_handler(event):
+                self._handle_settings_hotkey_capture(event)
+                return None
+
+            self.settings_hotkey_capture_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSKeyDownMask, _capture_handler)
+
+    def beginHotkeyCapture_(self, sender):
+        field_name = str(sender.representedObject() or "")
+        if field_name not in {"latest_frame_hotkey", "monitor_context_hotkey"}:
+            return
+        self._set_hotkey_capture_mode(field_name)
+
+    def _apply_recorded_hotkey(self, field_name: str, value: str) -> None:
+        field = self.settings_hotkey_field if field_name == "latest_frame_hotkey" else self.settings_context_hotkey_field
+        if field is None:
+            return
+        field.setStringValue_(_render_recorded_hotkey_label(value))
+        self._set_hotkey_capture_mode(None)
+
+    def _handle_settings_hotkey_capture(self, event: Any) -> bool:
+        field_name = str(self.settings_capturing_hotkey or "")
+        if not field_name:
+            return False
+        try:
+            canonical = _record_hotkey_from_event(event)
+        except Exception as exc:
+            if self.settings_error_label is not None:
+                self.settings_error_label.setStringValue_(str(exc))
+                self.settings_error_label.setTextColor_(NSColor.systemRedColor())
+            return True
+        self._apply_recorded_hotkey(field_name, canonical)
+        return True
+
     def _show_settings_panel(
         self,
         *,
@@ -859,12 +942,26 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
 
         content.addSubview_(_make_label("截图快捷键", x=24, y=120, w=100, bold=True))
         self.settings_hotkey_field = _make_text_field(latest_frame_hotkey, x=124, y=116, w=150)
+        self.settings_hotkey_field.setEditable_(False)
+        self.settings_hotkey_field.setSelectable_(False)
         content.addSubview_(self.settings_hotkey_field)
+        hotkey_record_button = _make_button("录制", x=284, y=116, w=54, h=28)
+        hotkey_record_button.setTarget_(self)
+        hotkey_record_button.setAction_("beginHotkeyCapture:")
+        hotkey_record_button.setRepresentedObject_("latest_frame_hotkey")
+        content.addSubview_(hotkey_record_button)
         content.addSubview_(_make_muted_label("例：cmd+shift+9。仅菜单栏运行且监控中生效；留空关闭。", x=24, y=90, w=430))
 
         content.addSubview_(_make_label("提问快捷键", x=24, y=58, w=100, bold=True))
         self.settings_context_hotkey_field = _make_text_field(monitor_context_hotkey, x=124, y=54, w=150)
+        self.settings_context_hotkey_field.setEditable_(False)
+        self.settings_context_hotkey_field.setSelectable_(False)
         content.addSubview_(self.settings_context_hotkey_field)
+        context_record_button = _make_button("录制", x=284, y=54, w=54, h=28)
+        context_record_button.setTarget_(self)
+        context_record_button.setAction_("beginHotkeyCapture:")
+        context_record_button.setRepresentedObject_("monitor_context_hotkey")
+        content.addSubview_(context_record_button)
         content.addSubview_(_make_muted_label("例：cmd+shift+8。粘贴短提示：Ayes context mode。", x=24, y=28, w=430))
 
         self.settings_error_label = _make_muted_label(error, x=24, y=6, w=280)
@@ -884,6 +981,7 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         content.addSubview_(save_button)
 
         self.settings_panel = panel
+        panel.setInitialFirstResponder_(self.settings_interval_field)
         NSApp.activateIgnoringOtherApps_(True)
         panel.center()
         panel.makeKeyAndOrderFront_(None)
@@ -892,11 +990,17 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         if self.settings_panel is not None:
             self.settings_panel.close()
         self.settings_panel = None
+        self.settings_capturing_hotkey = None
+        if self.settings_hotkey_capture_monitor is not None:
+            NSEvent.removeMonitor_(self.settings_hotkey_capture_monitor)
+            self.settings_hotkey_capture_monitor = None
 
     def saveSettings_(self, sender):
         if self.settings_interval_field is None:
             return
         try:
+            if self.settings_capturing_hotkey:
+                raise ValueError("请先完成快捷键录制")
             interval_ms = _parse_interval_seconds(self.settings_interval_field.stringValue())
             latest_frame_hotkey = str(self.settings_hotkey_field.stringValue() if self.settings_hotkey_field is not None else "")
             monitor_context_hotkey = str(self.settings_context_hotkey_field.stringValue() if self.settings_context_hotkey_field is not None else "")
@@ -925,6 +1029,10 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         if self.settings_panel is not None:
             self.settings_panel.close()
         self.settings_panel = None
+        self.settings_capturing_hotkey = None
+        if self.settings_hotkey_capture_monitor is not None:
+            NSEvent.removeMonitor_(self.settings_hotkey_capture_monitor)
+            self.settings_hotkey_capture_monitor = None
         self._refresh_hotkey_registration()
         self.refreshStatus_(None)
 

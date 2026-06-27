@@ -48,6 +48,7 @@ class MemorySearchIndex:
             "source": "long_term",
             "event_type": "long_term_summary",
             "info": self._trim(info, 240),
+            "code": "",
             "region": "",
             "target": "",
             "tags": ["long_term"],
@@ -95,7 +96,7 @@ class MemorySearchIndex:
         ranked = self._rank_candidates(candidates, question=question, since_timestamp=since_timestamp)[:limit]
         if _is_content_identity_question(question):
             ranked = self._prefer_title_facts(ranked)
-        if not _is_content_identity_question(question):
+        if not _is_content_identity_question(question) and not _question_prefers_alert_or_status(question):
             ranked = sorted(ranked, key=lambda item: float(item.get("timestamp") or 0.0))
         return {
             "task_id": task_id,
@@ -161,6 +162,8 @@ class MemorySearchIndex:
     def _chunk_from_event(self, event: TimelineEvent) -> Optional[dict]:
         if event.event_type in {"vision_skipped", "vision_triggered"}:
             return None
+        if self._is_no_change_chunk({"source": event.source, "event_type": event.event_type, "info": event.summary}):
+            return None
         payload = asdict(event)
         info = self._best_info(payload)
         if not info:
@@ -173,6 +176,7 @@ class MemorySearchIndex:
             "source": event.source,
             "event_type": event.event_type,
             "info": self._trim(info, 220),
+            "code": "",
             "region": ((payload.get("region") or {}).get("name") or (payload.get("region") or {}).get("region_id") or ""),
             "target": self._target_label(payload.get("target") or {}),
             "tags": list(payload.get("tags") or []),
@@ -198,6 +202,8 @@ class MemorySearchIndex:
 
     def _normalize_chunk(self, chunk: Dict[str, Any]) -> dict:
         timestamp = float(chunk.get("timestamp") or 0.0)
+        code = clean_memory_summary(str(chunk.get("code") or ""))
+        code_fields = _parse_code_fields(code)
         return {
             "chunk_id": str(chunk.get("chunk_id") or f"chunk:{int(timestamp)}"),
             "task_id": str(chunk.get("task_id") or ""),
@@ -207,6 +213,12 @@ class MemorySearchIndex:
             "source": str(chunk.get("source") or ""),
             "event_type": str(chunk.get("event_type") or ""),
             "info": self._trim(clean_memory_summary(str(chunk.get("info") or "")), 240),
+            "code": code,
+            "scene": clean_memory_summary(str(chunk.get("scene") or code_fields["scene"] or "")),
+            "region_slot": clean_memory_summary(str(chunk.get("region_slot") or code_fields["region_slot"] or "")),
+            "k1": clean_memory_summary(str(chunk.get("k1") or code_fields["k1"] or "")),
+            "k2": clean_memory_summary(str(chunk.get("k2") or code_fields["k2"] or "")),
+            "k3": clean_memory_summary(str(chunk.get("k3") or code_fields["k3"] or "")),
             "region": clean_memory_summary(str(chunk.get("region") or "")),
             "target": clean_memory_summary(str(chunk.get("target") or "")),
             "tags": [str(tag) for tag in (chunk.get("tags") or [])][:8],
@@ -250,8 +262,8 @@ class MemorySearchIndex:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO memory_chunks
-                (chunk_id, task_id, timestamp, layer, source, event_type, info, region, target, tags_json, confidence, payload_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (chunk_id, task_id, timestamp, layer, source, event_type, info, code, scene, region_slot, k1, k2, k3, region, target, tags_json, confidence, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk["chunk_id"],
@@ -261,6 +273,12 @@ class MemorySearchIndex:
                     chunk["source"],
                     chunk["event_type"],
                     chunk["info"],
+                    chunk["code"],
+                    chunk["scene"],
+                    chunk["region_slot"],
+                    chunk["k1"],
+                    chunk["k2"],
+                    chunk["k3"],
                     chunk["region"],
                     chunk["target"],
                     json.dumps(chunk["tags"], ensure_ascii=False),
@@ -272,10 +290,22 @@ class MemorySearchIndex:
                 connection.execute(
                     """
                     INSERT OR REPLACE INTO memory_chunks_fts
-                    (chunk_id, task_id, info, region, target, tags)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (chunk_id, task_id, info, scene, region_slot, k1, k2, k3, region, target, tags)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (chunk["chunk_id"], chunk["task_id"], chunk["info"], chunk["region"], chunk["target"], " ".join(chunk["tags"])),
+                    (
+                        chunk["chunk_id"],
+                        chunk["task_id"],
+                        chunk["info"],
+                        chunk["scene"],
+                        chunk["region_slot"],
+                        chunk["k1"],
+                        chunk["k2"],
+                        chunk["k3"],
+                        chunk["region"],
+                        chunk["target"],
+                        " ".join(chunk["tags"]),
+                    ),
                 )
             except sqlite3.OperationalError:
                 pass
@@ -292,6 +322,12 @@ class MemorySearchIndex:
                 source TEXT NOT NULL,
                 event_type TEXT NOT NULL,
                 info TEXT NOT NULL,
+                code TEXT NOT NULL,
+                scene TEXT NOT NULL,
+                region_slot TEXT NOT NULL,
+                k1 TEXT NOT NULL,
+                k2 TEXT NOT NULL,
+                k3 TEXT NOT NULL,
                 region TEXT NOT NULL,
                 target TEXT NOT NULL,
                 tags_json TEXT NOT NULL,
@@ -304,9 +340,16 @@ class MemorySearchIndex:
             connection.execute(
                 """
                 CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts
-                USING fts5(chunk_id UNINDEXED, task_id UNINDEXED, info, region, target, tags)
+                USING fts5(chunk_id UNINDEXED, task_id UNINDEXED, info, scene, region_slot, k1, k2, k3, region, target, tags)
                 """
             )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            columns = [row[1] for row in connection.execute("PRAGMA table_info(memory_chunks)").fetchall()]
+            for name in ["code", "scene", "region_slot", "k1", "k2", "k3"]:
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE memory_chunks ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass
 
@@ -331,7 +374,7 @@ class MemorySearchIndex:
                         (task_id, since_timestamp, fts_query, limit),
                     ).fetchall()
                     if rows:
-                        return [json.loads(row[0]) for row in rows]
+                        return [self._normalize_chunk(json.loads(row[0])) for row in rows]
                 except sqlite3.OperationalError:
                     pass
             rows = connection.execute(
@@ -343,7 +386,7 @@ class MemorySearchIndex:
                 """,
                 (task_id, since_timestamp, limit),
             ).fetchall()
-        return [json.loads(row[0]) for row in rows]
+        return [self._normalize_chunk(json.loads(row[0])) for row in rows]
 
     def _query_chunk_files(self, *, task_id: str, since_timestamp: float) -> list[dict]:
         chunks: list[dict] = []
@@ -361,7 +404,7 @@ class MemorySearchIndex:
                 except json.JSONDecodeError:
                     continue
                 if float(payload.get("timestamp") or 0.0) >= since_timestamp:
-                    chunks.append(payload)
+                    chunks.append(self._normalize_chunk(payload))
         return chunks
 
     def _existing_task_index_dirs(self, task_id: str) -> list[Path]:
@@ -414,7 +457,8 @@ class MemorySearchIndex:
                     "source": "file_memory_compact",
                     "event_type": "compact_memory_segment",
                     "info": info,
-                    "region": "",
+                    "code": clean_memory_summary(str(payload.get("code") or "")),
+                    "region": clean_memory_summary(str(payload.get("region") or "")),
                     "target": "",
                     "tags": ["compact_memory"],
                     "confidence": 0.86,
@@ -429,7 +473,7 @@ class MemorySearchIndex:
             if timestamp < since_timestamp:
                 continue
             info = clean_memory_summary(str(payload.get("info") or ""))
-            if not info:
+            if not info or _is_empty_long_summary_placeholder(info):
                 continue
             chunks.append(
                 {
@@ -440,8 +484,9 @@ class MemorySearchIndex:
                     "source": "file_memory",
                     "event_type": "compact_short_memory",
                     "info": info,
-                    "region": "",
-                    "target": "",
+                    "code": clean_memory_summary(str(payload.get("code") or "")),
+                    "region": clean_memory_summary(str(payload.get("region") or "")),
+                    "target": clean_memory_summary(str(payload.get("target") or "")),
                     "tags": ["short_memory"],
                     "confidence": 0.84,
                 }
@@ -466,6 +511,7 @@ class MemorySearchIndex:
                     "source": "long_term",
                     "event_type": "long_term_summary",
                     "info": info,
+                    "code": clean_memory_summary(str(payload.get("code") or "")),
                     "region": "",
                     "target": "",
                     "tags": ["long_term"],
@@ -492,6 +538,7 @@ class MemorySearchIndex:
     def _rank_candidates(self, candidates: list[dict], *, question: str, since_timestamp: float) -> list[dict]:
         seen: set[str] = set()
         unique: list[dict] = []
+        content_seen: set[str] = set()
         for item in candidates:
             key = str(item.get("chunk_id") or "")
             if key in seen:
@@ -500,10 +547,19 @@ class MemorySearchIndex:
             if float(item.get("timestamp") or 0.0) < since_timestamp:
                 continue
             payload = dict(item)
+            if self._is_no_change_chunk(payload):
+                continue
+            if _is_empty_long_summary_placeholder(str(payload.get("info") or "")):
+                continue
             if _is_content_identity_question(question) and self._should_drop_content_candidate(payload):
                 continue
             payload["score"] = round(self._score(payload, question=question), 4)
             if payload["score"] >= self._minimum_score(question=question):
+                content_key = self._normalized_content_key(payload)
+                if content_key and content_key in content_seen:
+                    continue
+                if content_key:
+                    content_seen.add(content_key)
                 unique.append(payload)
         unique.sort(key=lambda item: (float(item.get("score") or 0.0), float(item.get("timestamp") or 0.0)), reverse=True)
         return unique
@@ -512,19 +568,57 @@ class MemorySearchIndex:
         info = str(item.get("info") or "")
         score = float(item.get("confidence") or 0.0)
         content_identity_question = _is_content_identity_question(question)
+        status_question = _question_prefers_alert_or_status(question)
+        region = str(item.get("region") or "")
+        region_slot = str(item.get("region_slot") or "")
+        fact_kind = _fact_kind(info)
+        structured_values = [str(item.get("k1") or ""), str(item.get("k2") or ""), str(item.get("k3") or "")]
+        structured_text = " ".join(value for value in structured_values if value)
         if item.get("event_type") in {"target_window_changed", "window_title_changed", "compact_short_memory"}:
             score += 2.0
+        if item.get("event_type") == "compact_memory_segment":
+            score += 2.2
         if item.get("source") == "file_memory":
             score += 1.2
+        if item.get("source") == "file_memory_compact":
+            score += 1.8
+        if item.get("layer") == "compact":
+            score += 1.4
         if item.get("layer") == "long":
             score += 0.4
+            if content_identity_question:
+                score += 0.9
+        if "主内容" in region:
+            score += 2.4
+        elif "全目标" in region:
+            score += 0.8
+        elif any(label in region for label in ["顶部", "底部", "左侧", "右侧"]):
+            score += 0.5
         if _contains_title_like_text(info):
             score += 1.0
         if _is_generic_visual(info) and content_identity_question:
             score -= 4.0
+        if fact_kind:
+            score += 1.6
+        if status_question and fact_kind == "状态":
+            score += 3.2
+        if status_question and _is_generic_visual(info):
+            score -= 2.2
+        if _question_prefers_content(question) and fact_kind in {"内容", "页面", "画面", "表单", "图表", "表格", "卡片"}:
+            score += 2.0
+        if content_identity_question and _structured_detail_match(item=item, question=question):
+            score += 4.2
+        combined = f"{structured_text} {info}".lower()
         for token in self._semantic_tokens(question):
-            if token in info.lower():
+            if _structured_field_contains(item=item, token=token, fields=("k2", "k3")):
+                score += 1.6
+            elif _structured_field_contains(item=item, token=token, fields=("k1", "scene", "region_slot")):
+                score += 1.0
+            elif token in combined:
                 score += 0.6
+        score += _structured_semantic_bonus(item=item, question=question)
+        if status_question and region_slot in {"top", "right"}:
+            score += 0.8
         if _looks_noisy(info):
             score -= 2.5
         if content_identity_question and _is_low_value_content_identity(info):
@@ -544,6 +638,10 @@ class MemorySearchIndex:
     def _should_drop_content_candidate(self, item: dict) -> bool:
         info = str(item.get("info") or "")
         return _looks_noisy(info) or _is_low_value_content_identity(info) or _is_short_non_title_fragment(info)
+
+    def _is_no_change_chunk(self, item: dict) -> bool:
+        info = clean_memory_summary(str(item.get("info") or ""))
+        return (item.get("source") == "diff" or item.get("event_type") == "visual_change") and info.startswith("未检测到显著变化")
 
     def _prefer_title_facts(self, ranked: list[dict]) -> list[dict]:
         title_facts = [item for item in ranked if _is_title_fact(str(item.get("info") or ""))]
@@ -576,7 +674,15 @@ class MemorySearchIndex:
     def _build_answer(self, items: list[dict], *, minutes: int) -> str:
         if not items:
             return f"最近 {minutes} 分钟内未在轻量索引中找到足够相关的记忆。"
-        return "；".join(f"{item.get('info')}@{self._format_clock(float(item.get('timestamp') or 0.0))}" for item in items[:5])
+        return "；".join(f"{self._answer_item_text(item)}@{self._format_clock(float(item.get('timestamp') or 0.0))}" for item in items[:3])
+
+    def _answer_item_text(self, item: dict) -> str:
+        info = clean_memory_summary(str(item.get("info") or ""))
+        region = clean_memory_summary(str(item.get("region") or ""))
+        info = self._augment_info_with_code_details(item=item, info=info)
+        if region and not info.startswith(f"{region}："):
+            return f"{region}：{info}"
+        return info
 
     def _target_label(self, target: dict) -> str:
         return clean_memory_summary(str(target.get("window_title") or target.get("process_name") or target.get("screen_id") or target.get("type") or ""))
@@ -584,6 +690,33 @@ class MemorySearchIndex:
     def _trim(self, value: str, limit: int) -> str:
         text = clean_memory_summary(value)
         return text if len(text) <= limit else text[: limit - 3] + "..."
+
+    def _normalized_content_key(self, item: dict) -> str:
+        info = clean_memory_summary(str(item.get("info") or ""))
+        region = clean_memory_summary(str(item.get("region") or ""))
+        code_bits = [
+            clean_memory_summary(str(item.get("scene") or "")),
+            clean_memory_summary(str(item.get("region_slot") or "")),
+            clean_memory_summary(str(item.get("k1") or "")),
+            clean_memory_summary(str(item.get("k2") or "")),
+            clean_memory_summary(str(item.get("k3") or "")),
+        ]
+        code_key = "|".join(bit for bit in code_bits if bit)
+        if not info and not code_key:
+            return ""
+        return f"{region}|{code_key}|{info}".lower()
+
+    def _augment_info_with_code_details(self, *, item: dict, info: str) -> str:
+        values = [str(item.get("k1") or ""), str(item.get("k2") or ""), str(item.get("k3") or "")]
+        values = [value for value in values if value]
+        if not values or len(info) >= 18:
+            return info
+        extra = [value for value in values[1:3] if value and value not in info]
+        if not extra:
+            return info
+        if "：" in info:
+            return f"{info}，{'，'.join(extra[:2])}"
+        return f"{info} {' '.join(extra[:2])}"
 
     def _format_timestamp(self, timestamp: float) -> str:
         return datetime.fromtimestamp(timestamp, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -613,7 +746,25 @@ def _is_generic_visual(text: str) -> bool:
 
 def _is_content_identity_question(question: str) -> bool:
     value = str(question or "")
-    return any(marker in value for marker in ["看了什么", "看的什么", "视频是什么", "文档是什么", "打开了什么", "具体内容", "页面内容"])
+    return any(marker in value for marker in ["看了什么", "看的什么", "视频是什么", "文档是什么", "打开了什么", "具体内容", "页面内容", "主要内容", "画面内容", "内容是什么", "内容是什", "内容如何", "项目内容"])
+
+
+def _question_prefers_content(question: str) -> bool:
+    value = str(question or "")
+    return any(marker in value for marker in ["内容", "页面", "画面", "文档", "视频", "图表", "表格", "卡片", "主要"])
+
+
+def _question_prefers_alert_or_status(question: str) -> bool:
+    value = str(question or "")
+    return any(marker in value for marker in ["异常", "错误", "告警", "提示", "报警", "状态"])
+
+
+def _fact_kind(text: str) -> str:
+    value = str(text or "").strip()
+    for prefix in ["页面", "弹窗", "图表", "表格", "列表", "内容", "画面", "卡片", "表单", "导航", "状态"]:
+        if value.startswith(f"{prefix}："):
+            return prefix
+    return ""
 
 
 def _looks_noisy(text: str) -> bool:
@@ -655,6 +806,11 @@ def _is_low_value_content_identity(text: str) -> bool:
     return any(marker in value for marker in markers)
 
 
+def _is_empty_long_summary_placeholder(text: str) -> bool:
+    value = str(text or "").strip()
+    return not value or value in {"该时间段内无高价值摘要", "无高价值摘要"} or "无高价值摘要" in value
+
+
 def _is_short_non_title_fragment(text: str) -> bool:
     value = str(text or "").strip()
     if not value:
@@ -664,6 +820,84 @@ def _is_short_non_title_fragment(text: str) -> bool:
         return False
     alnum_count = sum(1 for char in value if char.isalnum())
     return len(value) <= 24 or alnum_count <= 12
+
+
+def _parse_code_fields(code: str) -> dict[str, str]:
+    fields = {"scene": "", "region_slot": "", "k1": "", "k2": "", "k3": ""}
+    key_map = {"scn": "scene", "reg": "region_slot", "k1": "k1", "k2": "k2", "k3": "k3"}
+    for part in str(code or "").split("|"):
+        if "=" not in part:
+            continue
+        key, raw = part.split("=", 1)
+        target_key = key_map.get(key.strip())
+        if not target_key:
+            continue
+        fields[target_key] = clean_memory_summary(raw.strip())
+    return fields
+
+
+def _structured_field_contains(*, item: dict, token: str, fields: tuple[str, ...]) -> bool:
+    token_value = str(token or "").lower()
+    if not token_value:
+        return False
+    for field in fields:
+        value = str(item.get(field) or "").lower()
+        if token_value and token_value in value:
+            return True
+        normalized = _normalize_slot_value(value).lower()
+        if token_value and token_value in normalized:
+            return True
+    return False
+
+
+def _structured_semantic_bonus(*, item: dict, question: str) -> float:
+    bonus = 0.0
+    tokens = re.split(r"\s+|[，。！？、,.!?：:【】\[\]()（）/]+", str(question or "").lower())
+    for token in tokens:
+        token = token.strip()
+        if len(token) < 2:
+            continue
+        if _structured_field_contains(item=item, token=token, fields=("k2", "k3")):
+            bonus += 1.4
+        elif _structured_field_contains(item=item, token=token, fields=("k1",)):
+            bonus += 0.9
+    condensed = re.sub(r"\s+", "", str(question or "").lower())
+    for slot_value in _structured_slot_values(item):
+        if len(slot_value) >= 3 and slot_value in condensed:
+            bonus += 1.6
+    return bonus
+
+
+def _structured_detail_match(*, item: dict, question: str) -> bool:
+    condensed = re.sub(r"\s+", "", str(question or "").lower())
+    for slot_value in _structured_slot_values(item):
+        if len(slot_value) < 3:
+            continue
+        if slot_value in condensed and (item.get("k2") or item.get("k3")):
+            return True
+    return False
+
+
+def _structured_slot_values(item: dict) -> list[str]:
+    values: list[str] = []
+    for key in ("k1", "k2", "k3"):
+        raw = str(item.get(key) or "").strip()
+        if not raw:
+            continue
+        values.append(raw)
+        normalized = _normalize_slot_value(raw)
+        if normalized and normalized != raw:
+            values.append(normalized)
+    return values
+
+
+def _normalize_slot_value(value: str) -> str:
+    text = str(value or "").strip()
+    if "：" in text:
+        text = text.split("：", 1)[1].strip()
+    elif ":" in text:
+        text = text.split(":", 1)[1].strip()
+    return text
 
 
 def _parse_memory_time(value: object) -> float:

@@ -13,7 +13,7 @@ from ayes.app.runner import WatchRunner
 from ayes.app.paths import runtime_root
 from ayes.app.task_paths import roi_runtime_paths, roi_task_segment, task_runtime_paths
 from ayes.api.contracts import _describe_direction, build_task_payload, describe_location_summary
-from ayes.app.hotkeys import parse_hotkey
+from ayes.app.hotkeys import is_system_common_hotkey, parse_hotkey
 from ayes.config.models import (
     DEFAULT_SAMPLING_INTERVAL_MS,
     MAX_SAMPLING_INTERVAL_MS,
@@ -81,12 +81,32 @@ class AppState:
             raise ValueError("任务不存在")
         return WatchSpec.from_dict(task["spec"])
 
-    def _upsert_task_spec(self, *, task_id: str, spec: WatchSpec, created_at: Optional[float] = None) -> dict:
+    def _resolve_display_name(self, *, task_id: str, spec: WatchSpec, explicit_display_name: Optional[str] = None) -> str:
+        preferred = str(explicit_display_name or "").strip()
+        if preferred:
+            return preferred
+        existing = self.sqlite_store.get_task(task_id)
+        existing_name = str((existing or {}).get("display_name") or "").strip()
+        if existing_name:
+            return existing_name
+        roi = self.sqlite_store.get_task_roi(task_id)
+        if roi is not None:
+            roi_name = str(roi.get("roi_name") or "").strip()
+            if roi_name:
+                return roi_name
+        process_name = str(spec.target.process_name or "").strip()
+        if process_name:
+            return process_name
+        return str(task_id or "").strip()
+
+    def _upsert_task_spec(self, *, task_id: str, spec: WatchSpec, created_at: Optional[float] = None, display_name: Optional[str] = None) -> dict:
         existing = self.sqlite_store.get_task(task_id)
         task_payload = build_task_payload(task_id=task_id, spec=spec)
+        task_payload["display_name"] = self._resolve_display_name(task_id=task_id, spec=spec, explicit_display_name=display_name)
         self.sqlite_store.upsert_task(
             task_id=task_id,
             mode=task_payload["mode"],
+            display_name=task_payload["display_name"],
             target=task_payload["target"],
             spec=task_payload["spec"],
             created_at=float(created_at if created_at is not None else ((existing or {}).get("created_at") or task_payload["created_at"])),
@@ -134,6 +154,31 @@ class AppState:
             "disable_auto_cleanup": self.current_spec.memory.disable_auto_cleanup,
             "memory_compact_every_n_events": self.current_spec.memory.memory_compact_every_n_events,
             "roi": dict(self.current_spec.roi) if hasattr(self.current_spec, "roi") and isinstance(self.current_spec.roi, dict) else {},
+        }
+
+    def build_vision_effective_summary(self) -> dict:
+        if self.current_spec is None:
+            return {
+                "enabled": False,
+                "provider": "",
+                "model": "",
+                "source": "no_task",
+                "label": "当前无任务，视觉增强未生效",
+            }
+        vision = self.current_spec.vision
+        enabled = bool(vision.enabled)
+        provider = str(vision.provider or "")
+        model = str(vision.model or "")
+        if enabled:
+            label = f"当前任务视觉增强实际开启（{provider or 'unknown'} / {model or '未指定模型'}）"
+        else:
+            label = "当前任务视觉增强实际关闭"
+        return {
+            "enabled": enabled,
+            "provider": provider,
+            "model": model,
+            "source": "task_spec",
+            "label": label,
         }
 
     def _sampling_policy_from_spec(self, *, spec: Optional[WatchSpec], task_id: Optional[str] = None) -> dict:
@@ -503,9 +548,11 @@ class AppState:
         memory_policy = self._ensure_task_memory_policy(task_id=task_id, spec=spec)
         roi_payload = self._normalize_roi(getattr(spec, "roi", {}))
         task_payload = build_task_payload(task_id=task_id, spec=spec, extra={"roi": roi_payload} if roi_payload else None)
+        task_payload["display_name"] = self._resolve_display_name(task_id=task_id, spec=spec)
         self.sqlite_store.upsert_task(
             task_id=task_payload["task_id"],
             mode=task_payload["mode"],
+            display_name=task_payload["display_name"],
             target=task_payload["target"],
             spec=task_payload["spec"],
             created_at=task_payload["created_at"],
@@ -713,6 +760,83 @@ class AppState:
         )
         return {"alert": updated_alert, "task": updated_task, "task_paths": self.current_task_paths(task_id=task_id)}
 
+    def rename_task(self, *, task_id: str, display_name: str) -> dict:
+        task = self.sqlite_store.get_task(task_id)
+        if task is None:
+            raise ValueError("任务不存在")
+        next_name = str(display_name or "").strip()
+        if not next_name:
+            raise ValueError("display_name 不能为空")
+        spec = WatchSpec.from_dict(task["spec"])
+        updated_task = self._upsert_task_spec(
+            task_id=task_id,
+            spec=spec,
+            created_at=float(task.get("created_at") or time.time()),
+            display_name=next_name,
+        )
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="任务显示名称已更新",
+            task_id=task_id,
+            metadata={
+                "changed_keys": ["display_name"],
+                "changes": {"display_name": {"from": str(task.get("display_name") or ""), "to": next_name}},
+                "config_path": str(self._task_paths(task_id)["config_dir"] / "task-settings.json"),
+            },
+        )
+        return {"task": updated_task, "task_paths": self.current_task_paths(task_id=task_id)}
+
+    def rebind_process_task(
+        self,
+        *,
+        task_id: str,
+        process_name: Optional[str] = None,
+        process_id: Optional[int] = None,
+        window_id: Optional[int] = None,
+        only_observable_windows: Optional[bool] = None,
+    ) -> dict:
+        task = self.sqlite_store.get_task(task_id)
+        if task is None:
+            raise ValueError("任务不存在")
+        spec = WatchSpec.from_dict(task["spec"])
+        if spec.target.type != "process":
+            raise ValueError("只有进程监控任务支持重新绑定进程")
+        updated_target = replace(
+            spec.target,
+            process_name=str(process_name or spec.target.process_name or "").strip() or spec.target.process_name,
+            process_id=int(process_id) if process_id is not None else spec.target.process_id,
+            window_id=int(window_id) if window_id is not None else None,
+            only_observable_windows=(
+                bool(only_observable_windows)
+                if only_observable_windows is not None
+                else spec.target.only_observable_windows
+            ),
+        )
+        updated_spec = replace(spec, target=updated_target)
+        updated_task = self._upsert_task_spec(
+            task_id=task_id,
+            spec=updated_spec,
+            created_at=float(task.get("created_at") or time.time()),
+        )
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="进程监控绑定已更新",
+            task_id=task_id,
+            metadata={
+                "changed_keys": ["process_name", "process_id", "window_id", "only_observable_windows"],
+                "binding": {
+                    "process_name": updated_target.process_name,
+                    "process_id": updated_target.process_id,
+                    "window_id": updated_target.window_id,
+                    "only_observable_windows": updated_target.only_observable_windows,
+                },
+                "config_path": str(self._task_paths(task_id)["config_dir"] / "task-settings.json"),
+            },
+        )
+        return {"task": updated_task, "task_paths": self.current_task_paths(task_id=task_id)}
+
     def set_region_binding_context(self, context: Optional[dict]) -> None:
         self._last_region_binding_context = context
 
@@ -797,9 +921,11 @@ class AppState:
         normalized = []
         for item in items:
             payload = dict(item)
+            payload["display_name"] = str(payload.get("display_name") or "").strip()
             payload["is_current"] = payload["task_id"] == current_task_id
             payload["is_last_active"] = payload["task_id"] == last_task_id
             payload["memory_policy"] = self.get_task_memory_policy(payload["task_id"])
+            payload["task_hotkeys"] = self.get_task_hotkey_policy(payload["task_id"])
             roi_meta = self.sqlite_store.get_task_roi(payload["task_id"])
             if roi_meta is not None:
                 payload["roi"] = roi_meta
@@ -926,7 +1052,23 @@ class AppState:
 
     def task_settings_snapshot(self, *, task_id: Optional[str] = None) -> dict:
         resolved_task_id = task_id or self.current_task_id or self.last_task_id
+        task = self.sqlite_store.get_task(resolved_task_id) if resolved_task_id else None
+        task_spec = WatchSpec.from_dict(task["spec"]) if task is not None else None
         memory_policy = self.get_task_memory_policy(resolved_task_id) if resolved_task_id else None
+        hotkeys = self.get_task_hotkey_policy(resolved_task_id) if resolved_task_id else self._default_task_hotkeys(None)
+        effective_vision = None
+        if task_spec is not None:
+            effective_vision = {
+                "enabled": bool(task_spec.vision.enabled),
+                "provider": str(task_spec.vision.provider or ""),
+                "model": str(task_spec.vision.model or ""),
+                "source": "task_spec",
+                "label": (
+                    f"当前任务视觉增强实际开启（{task_spec.vision.provider or 'unknown'} / {task_spec.vision.model or '未指定模型'}）"
+                    if task_spec.vision.enabled
+                    else "当前任务视觉增强实际关闭"
+                ),
+            }
         return {
             "task_id": resolved_task_id,
             "is_current": bool(resolved_task_id and resolved_task_id == self.current_task_id),
@@ -934,7 +1076,9 @@ class AppState:
             "sampling": self.get_sampling_policy(task_id=resolved_task_id) if resolved_task_id else self.get_sampling_policy(),
             "memory_policy": memory_policy,
             "app_settings": self.get_app_settings(),
-            "vision_settings": self.get_vision_enhancement_settings(),
+            "task_hotkeys": hotkeys,
+            "vision_settings": asdict(task_spec.vision) if task_spec is not None else self.get_vision_enhancement_settings(),
+            "vision_effective": effective_vision or self.build_vision_effective_summary(),
             "tasks": self.list_tasks(limit=10),
         }
 
@@ -958,9 +1102,11 @@ class AppState:
         config_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "task_id": task_id,
+            "display_name": str(task.get("display_name") or "").strip() if task is not None else "",
             "updated_at": time.time(),
             "sampling": asdict(target_spec.sampling),
             "memory_policy": memory_policy or self.get_task_memory_policy(task_id),
+            "task_hotkeys": self.get_task_hotkey_policy(task_id),
             "vision": asdict(target_spec.vision),
             "target": asdict(target_spec.target),
             "spec": asdict(target_spec),
@@ -1066,10 +1212,11 @@ class AppState:
             "capture_target": self._capture_target_payload_from_frame(result.frame),
         }
 
-    def capture_hotkey_latest_frame(self) -> dict:
-        if not self.is_background_running() or self.current_runner is None or self.current_task_id is None:
+    def capture_hotkey_latest_frame(self, *, task_id: Optional[str] = None) -> dict:
+        resolved_task_id = str(task_id or self.current_task_id or "").strip()
+        if not self.is_background_running() or self.current_runner is None or not resolved_task_id:
             return {
-                "task_id": self.current_task_id or self.last_task_id,
+                "task_id": resolved_task_id or self.current_task_id or self.last_task_id,
                 "path": None,
                 "image_width": None,
                 "image_height": None,
@@ -1077,7 +1224,7 @@ class AppState:
                 "capture_message": "当前没有正在监控的任务",
                 "hotkey_action": "not_running",
             }
-        payload = self.capture_task_screenshot(task_id=self.current_task_id)
+        payload = self.capture_task_screenshot(task_id=resolved_task_id)
         payload["hotkey_action"] = "fresh_sample"
         return payload
 
@@ -1247,12 +1394,41 @@ class AppState:
         )
         return self.get_vision_enhancement_settings()
 
+    def update_task_vision_policy(
+        self,
+        *,
+        task_id: str,
+        enabled: Optional[bool] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> dict:
+        spec = self._load_task_spec(task_id)
+        updated_vision = replace(
+            spec.vision,
+            enabled=bool(enabled) if enabled is not None else bool(spec.vision.enabled),
+            provider=str(provider or spec.vision.provider or "ollama"),
+            model=str(model or spec.vision.model or "qwen2.5vl:7b"),
+        )
+        updated_spec = replace(spec, vision=updated_vision)
+        self._upsert_task_spec(task_id=task_id, spec=updated_spec)
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="任务视觉增强策略已更新",
+            task_id=task_id,
+            metadata={
+                "enabled": updated_vision.enabled,
+                "provider": updated_vision.provider,
+                "model": updated_vision.model,
+                "config_path": str(self._task_paths(task_id)["config_dir"] / "task-settings.json"),
+            },
+        )
+        return asdict(updated_vision)
+
     def _default_app_settings(self) -> dict:
         return {
             "capture_screen_when_display_sleep": False,
             "cleanup_reminder_days": 7,
-            "latest_frame_hotkey": "",
-            "monitor_context_hotkey": "",
             "monitor_context_prompt": "Ayes context mode",
             "capture_sleep_note": "进程或窗口监控优先使用窗口捕获；整屏熄屏监控依赖 macOS 是否仍提供可读显示帧，不可用时会建议切换到进程监控。",
         }
@@ -1268,7 +1444,7 @@ class AppState:
             self._ensure_app_settings_defaults()
             payload = self.sqlite_store.get_app_settings() or {}
         defaults = self._default_app_settings()
-        merged = {**defaults, **payload}
+        merged = {key: payload.get(key, value) for key, value in defaults.items()}
         return merged
 
     def update_app_settings(
@@ -1276,8 +1452,6 @@ class AppState:
         *,
         capture_screen_when_display_sleep: Optional[bool] = None,
         cleanup_reminder_days: Optional[int] = None,
-        latest_frame_hotkey: Optional[str] = None,
-        monitor_context_hotkey: Optional[str] = None,
         monitor_context_prompt: Optional[str] = None,
     ) -> dict:
         current = self.get_app_settings()
@@ -1287,23 +1461,11 @@ class AppState:
         if cleanup_reminder_days is not None:
             next_payload["cleanup_reminder_days"] = max(int(cleanup_reminder_days), 1)
             self.update_cleanup_reminder(next_check_after_days=next_payload["cleanup_reminder_days"])
-        if latest_frame_hotkey is not None:
-            parsed_hotkey = parse_hotkey(latest_frame_hotkey)
-            next_payload["latest_frame_hotkey"] = parsed_hotkey.canonical if parsed_hotkey is not None else ""
-        if monitor_context_hotkey is not None:
-            parsed_hotkey = parse_hotkey(monitor_context_hotkey)
-            next_payload["monitor_context_hotkey"] = parsed_hotkey.canonical if parsed_hotkey is not None else ""
         if monitor_context_prompt is not None:
             prompt = str(monitor_context_prompt).strip() or "Ayes context mode"
             if len(prompt) > 64:
                 raise ValueError("监控提问提示不能超过 64 个字符")
             next_payload["monitor_context_prompt"] = prompt
-        if (
-            next_payload.get("latest_frame_hotkey")
-            and next_payload.get("monitor_context_hotkey")
-            and next_payload.get("latest_frame_hotkey") == next_payload.get("monitor_context_hotkey")
-        ):
-            raise ValueError("截图快捷键和监控提问快捷键不能相同")
         self.sqlite_store.upsert_app_settings(next_payload)
         changed_keys = [key for key in sorted(next_payload.keys()) if current.get(key) != next_payload.get(key)]
         changes = {key: {"from": current.get(key), "to": next_payload.get(key)} for key in changed_keys}
@@ -1315,6 +1477,119 @@ class AppState:
             metadata={"changed_keys": changed_keys, "changes": changes},
         )
         return self.get_app_settings()
+
+    def _default_task_hotkeys(self, task_id: Optional[str]) -> dict:
+        return {
+            "task_id": task_id,
+            "latest_frame_hotkey": "",
+            "monitor_context_hotkey": "",
+            "warnings": {"latest_frame_hotkey": [], "monitor_context_hotkey": []},
+        }
+
+    def _build_hotkey_warning(self, *, code: str, message: str, conflict_task_id: Optional[str] = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"code": code, "message": message}
+        if conflict_task_id:
+            payload["conflict_task_id"] = conflict_task_id
+        return payload
+
+    def _classify_task_hotkey_conflicts(self, *, task_id: str, latest_frame_hotkey: str, monitor_context_hotkey: str) -> dict[str, list[dict[str, Any]]]:
+        warnings = {"latest_frame_hotkey": [], "monitor_context_hotkey": []}
+        if latest_frame_hotkey and is_system_common_hotkey(latest_frame_hotkey):
+            warnings["latest_frame_hotkey"].append(
+                self._build_hotkey_warning(code="system_common", message="该快捷键与系统常用快捷键冲突，可能无法稳定触发。")
+            )
+        if monitor_context_hotkey and is_system_common_hotkey(monitor_context_hotkey):
+            warnings["monitor_context_hotkey"].append(
+                self._build_hotkey_warning(code="system_common", message="该快捷键与系统常用快捷键冲突，可能无法稳定触发。")
+            )
+        if latest_frame_hotkey and monitor_context_hotkey and latest_frame_hotkey == monitor_context_hotkey:
+            warning = self._build_hotkey_warning(code="duplicate_same_task", message="当前任务的截图快捷键和提问快捷键相同。")
+            warnings["latest_frame_hotkey"].append(warning)
+            warnings["monitor_context_hotkey"].append(warning)
+        for item in self.sqlite_store.list_tasks(limit=1000):
+            other_task_id = str(item.get("task_id") or "").strip()
+            if not other_task_id or other_task_id == task_id:
+                continue
+            other_spec = item.get("spec") if isinstance(item.get("spec"), dict) else {}
+            other_policy = other_spec.get("task_hotkeys") if isinstance(other_spec, dict) else {}
+            other_policy = other_policy if isinstance(other_policy, dict) else {}
+            other_latest = str(other_policy.get("latest_frame_hotkey") or "").strip()
+            other_context = str(other_policy.get("monitor_context_hotkey") or "").strip()
+            if latest_frame_hotkey and latest_frame_hotkey in {other_latest, other_context}:
+                warnings["latest_frame_hotkey"].append(
+                    self._build_hotkey_warning(code="duplicate_other_task", message="该快捷键与其他任务快捷键重复。", conflict_task_id=other_task_id)
+                )
+            if monitor_context_hotkey and monitor_context_hotkey in {other_latest, other_context}:
+                warnings["monitor_context_hotkey"].append(
+                    self._build_hotkey_warning(code="duplicate_other_task", message="该快捷键与其他任务快捷键重复。", conflict_task_id=other_task_id)
+                )
+        return warnings
+
+    def get_task_hotkey_policy(self, task_id: Optional[str]) -> dict:
+        resolved_task_id = str(task_id or "").strip()
+        if not resolved_task_id:
+            return self._default_task_hotkeys(None)
+        task = self.sqlite_store.get_task(resolved_task_id)
+        if task is None:
+            return self._default_task_hotkeys(resolved_task_id)
+        spec = task.get("spec") or {}
+        raw_policy = spec.get("task_hotkeys") if isinstance(spec, dict) else {}
+        policy = raw_policy if isinstance(raw_policy, dict) else {}
+        latest = str(policy.get("latest_frame_hotkey") or "").strip()
+        context = str(policy.get("monitor_context_hotkey") or "").strip()
+        return {
+            "task_id": resolved_task_id,
+            "latest_frame_hotkey": latest,
+            "monitor_context_hotkey": context,
+            "warnings": self._classify_task_hotkey_conflicts(task_id=resolved_task_id, latest_frame_hotkey=latest, monitor_context_hotkey=context),
+        }
+
+    def update_task_hotkey_policy(
+        self,
+        *,
+        task_id: str,
+        latest_frame_hotkey: Optional[str] = None,
+        monitor_context_hotkey: Optional[str] = None,
+    ) -> dict:
+        spec = self._load_task_spec(task_id)
+        current_policy = self.get_task_hotkey_policy(task_id)
+        next_latest = current_policy.get("latest_frame_hotkey") or ""
+        next_context = current_policy.get("monitor_context_hotkey") or ""
+        if latest_frame_hotkey is not None:
+            parsed = parse_hotkey(latest_frame_hotkey)
+            next_latest = parsed.canonical if parsed is not None else ""
+        if monitor_context_hotkey is not None:
+            parsed = parse_hotkey(monitor_context_hotkey)
+            next_context = parsed.canonical if parsed is not None else ""
+        next_hotkeys = {
+            "latest_frame_hotkey": next_latest,
+            "monitor_context_hotkey": next_context,
+        }
+        next_spec = WatchSpec.from_dict({**asdict(spec), "task_hotkeys": next_hotkeys})
+        self._upsert_task_spec(task_id=task_id, spec=next_spec)
+        warnings = self._classify_task_hotkey_conflicts(task_id=task_id, latest_frame_hotkey=next_latest, monitor_context_hotkey=next_context)
+        changed_keys = []
+        if current_policy.get("latest_frame_hotkey") != next_latest:
+            changed_keys.append("latest_frame_hotkey")
+        if current_policy.get("monitor_context_hotkey") != next_context:
+            changed_keys.append("monitor_context_hotkey")
+        self.log_store.write(
+            category="control",
+            level="info",
+            message="任务快捷键策略已更新",
+            task_id=task_id,
+            metadata={
+                "changed_keys": changed_keys,
+                "warnings": warnings,
+                "config_path": str(self._task_paths(task_id)["config_dir"] / "task-settings.json"),
+            },
+        )
+        return {
+            "task_id": task_id,
+            "latest_frame_hotkey": next_latest,
+            "monitor_context_hotkey": next_context,
+            "warnings": warnings,
+        }
 
     def _replace_current_regions(self, regions: list[TargetRegion]) -> dict:
         if self.current_spec is None or self.current_task_id is None:
@@ -1378,6 +1653,7 @@ class AppState:
             data_dir=str(current.get("data_dir") or (self._runtime_root() / "archive")),
             next_check_after_days=int(next_check_after_days if next_check_after_days is not None else (current.get("next_check_after_days") or 7)),
         )
+        self._last_cleanup_reminder_check_at = None
         return self.get_cleanup_reminder()
 
     def check_cleanup_reminder_due(self, *, now: Optional[float] = None) -> dict:
@@ -1637,10 +1913,14 @@ class AppState:
                 {
                     "task_id": item["task_id"],
                     "mode": item["mode"],
+                    "display_name": item.get("display_name") or "",
                     "target": item["target"],
                     "created_at": item["created_at"],
                     "is_current": item["is_current"],
                     "is_last_active": item["is_last_active"],
+                    "task_hotkeys": item.get("task_hotkeys") or self._default_task_hotkeys(item["task_id"]),
+                    "parent_task_id": item.get("parent_task_id"),
+                    "roi": item.get("roi"),
                 }
                 for item in self.list_tasks(limit=5)
             ],
@@ -1672,6 +1952,7 @@ class AppState:
             "recent_ocr_read": recent_ocr_read,
             "activity_status": activity_status,
             "task_snapshot": self._build_task_snapshot(),
+            "vision_effective": self.build_vision_effective_summary(),
             "task_context": task_context,
             "health_summary": health_summary,
             "last_error": self.last_error,

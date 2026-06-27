@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the Windows ayes-local skill into a target skill root."""
+"""Install the ayes-local skill into a target skill root."""
 
 from __future__ import annotations
 
@@ -18,13 +18,13 @@ class InstallPaths:
     target_skill_dir: Path
     target_scripts_dir: Path
     agent_wrapper_path: Path
-    tray_wrapper_path: Path
+    menubar_wrapper_path: Path
 
 
 def build_install_paths(*, repo_root: Path, skill_root: Path) -> InstallPaths:
     resolved_repo_root = repo_root.resolve()
     resolved_skill_root = skill_root.resolve()
-    bundled_skill_dir = resolved_repo_root / "skills" / "final" / "ayes-local-windows"
+    bundled_skill_dir = resolved_repo_root / "skills" / "final" / "ayes-local"
     standalone_skill_dir = resolved_repo_root
     source_skill_dir = bundled_skill_dir if bundled_skill_dir.exists() else (standalone_skill_dir if (standalone_skill_dir / "SKILL.md").exists() else bundled_skill_dir)
     target_skill_dir = resolved_skill_root / "ayes-local"
@@ -35,29 +35,57 @@ def build_install_paths(*, repo_root: Path, skill_root: Path) -> InstallPaths:
         source_skill_dir=source_skill_dir,
         target_skill_dir=target_skill_dir,
         target_scripts_dir=target_scripts_dir,
-        agent_wrapper_path=target_scripts_dir / "ayes-agent-local.ps1",
-        tray_wrapper_path=target_scripts_dir / "ayes-tray-local.ps1",
+        agent_wrapper_path=target_scripts_dir / "ayes-agent-local",
+        menubar_wrapper_path=target_scripts_dir / "ayes-menubar-local",
     )
 
 
-def build_powershell_wrapper(*, python_bin: str, module: str) -> str:
-    python_literal = python_bin.replace("'", "''")
-    module_literal = module.replace("'", "''")
+def build_wrapper_script(*, repo_root: Path, python_bin: str, module: str) -> str:
+    repo_root_posix = repo_root.resolve().as_posix().replace('"', '\\"')
     return (
-        "$ErrorActionPreference = 'Stop'\n"
-        "$SkillDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)\n"
-        "$SrcDir = Join-Path $SkillDir 'src'\n"
-        "$env:PYTHONPATH = $SrcDir\n"
-        "$env:AYES_RUNTIME_DIR = Join-Path $SkillDir 'runtime'\n"
-        f"& '{python_literal}' -m '{module_literal}' @args\n"
-        "exit $LASTEXITCODE\n"
+        "#!/bin/zsh\n"
+        "set -euo pipefail\n"
+        'SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"\n'
+        f'REPO_ROOT="{repo_root_posix}"\n'
+        f'PYTHON_BIN="{python_bin}"\n'
+        'if [ -d "$SKILL_DIR/src" ]; then\n'
+        '  export PYTHONPATH="$SKILL_DIR/src"\n'
+        "else\n"
+        '  export PYTHONPATH="$REPO_ROOT/src"\n'
+        "fi\n"
+        'export AYES_RUNTIME_DIR="$SKILL_DIR/runtime"\n'
+        'exec "$PYTHON_BIN" -m ' + module + ' "$@"\n'
     )
 
 
-def install_skill(*, repo_root: Path, skill_root: Path, python_bin: str = sys.executable) -> InstallPaths:
+def build_menubar_wrapper_script(*, repo_root: Path, python_bin: str) -> str:
+    repo_root_posix = repo_root.resolve().as_posix().replace('"', '\\"')
+    return (
+        "#!/bin/zsh\n"
+        "set -euo pipefail\n"
+        'SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"\n'
+        f'REPO_ROOT="{repo_root_posix}"\n'
+        f'PYTHON_BIN="{python_bin}"\n'
+        'if [ -d "$SKILL_DIR/src" ]; then\n'
+        '  export PYTHONPATH="$SKILL_DIR/src"\n'
+        "else\n"
+        '  export PYTHONPATH="$REPO_ROOT/src"\n'
+        "fi\n"
+        'export AYES_RUNTIME_DIR="$SKILL_DIR/runtime"\n'
+        'exec "$PYTHON_BIN" -m ayes.cli.agent_tool control menubar "$@"\n'
+    )
+
+
+def install_skill(
+    *,
+    repo_root: Path,
+    skill_root: Path,
+    python_bin: str = sys.executable,
+    module: str = "ayes.cli.agent_tool",
+) -> InstallPaths:
     paths = build_install_paths(repo_root=repo_root, skill_root=skill_root)
     if not paths.source_skill_dir.exists():
-        raise FileNotFoundError(f"未找到 Windows skill 模板目录: {paths.source_skill_dir}")
+        raise FileNotFoundError(f"未找到 skill 模板目录: {paths.source_skill_dir}")
     paths.skill_root.mkdir(parents=True, exist_ok=True)
     runtime_backup = None
     if paths.target_skill_dir.exists():
@@ -72,25 +100,58 @@ def install_skill(*, repo_root: Path, skill_root: Path, python_bin: str = sys.ex
     if runtime_backup is not None and runtime_backup.exists():
         shutil.move(str(runtime_backup), str(paths.target_skill_dir / "runtime"))
     paths.target_scripts_dir.mkdir(parents=True, exist_ok=True)
-    paths.agent_wrapper_path.write_text(build_powershell_wrapper(python_bin=python_bin, module="ayes.cli.agent_tool"), encoding="utf-8")
-    paths.tray_wrapper_path.write_text(build_powershell_wrapper(python_bin=python_bin, module="ayes.cli.windows_tray"), encoding="utf-8")
+    agent_wrapper = build_wrapper_script(repo_root=paths.repo_root, python_bin=python_bin, module=module)
+    menubar_wrapper = build_menubar_wrapper_script(repo_root=paths.repo_root, python_bin=python_bin)
+    paths.agent_wrapper_path.write_text(agent_wrapper, encoding="utf-8")
+    paths.agent_wrapper_path.chmod(0o755)
+    paths.menubar_wrapper_path.write_text(menubar_wrapper, encoding="utf-8")
+    paths.menubar_wrapper_path.chmod(0o755)
+    _install_local_bin_symlink(link_name="ayes-agent-local", target=paths.agent_wrapper_path)
+    _install_local_bin_symlink(link_name="ayes-menubar-local", target=paths.menubar_wrapper_path)
     return paths
 
 
+def _install_local_bin_symlink(*, link_name: str, target: Path) -> None:
+    local_bin = Path.home() / ".local" / "bin"
+    try:
+        local_bin.mkdir(parents=True, exist_ok=True)
+        link_path = local_bin / link_name
+        if link_path.exists() or link_path.is_symlink():
+            if link_path.is_symlink() and link_path.resolve() == target.resolve():
+                return
+            if not link_path.is_symlink():
+                return
+            link_path.unlink()
+        link_path.symlink_to(target)
+    except OSError:
+        return
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="安装 Windows ayes-local skill 到本地智能体 skill 目录")
+    parser = argparse.ArgumentParser(description="安装 ayes-local skill 到本地智能体 skill 目录")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--skill-root", default=str(Path.home() / ".codex" / "skills"))
     parser.add_argument("--python-bin", default=sys.executable)
+    parser.add_argument("--module", default="ayes.cli.agent_tool")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    paths = install_skill(repo_root=Path(args.repo_root), skill_root=Path(args.skill_root), python_bin=args.python_bin)
-    print(f"已安装 Windows ayes-local skill: {paths.target_skill_dir}")
+    paths = install_skill(
+        repo_root=Path(args.repo_root),
+        skill_root=Path(args.skill_root),
+        python_bin=args.python_bin,
+        module=args.module,
+    )
+    print(f"已安装 ayes-local skill: {paths.target_skill_dir}")
     print(f"本地 agent 包装命令: {paths.agent_wrapper_path}")
-    print(f"本地 tray 包装命令: {paths.tray_wrapper_path}")
+    print(f"本地 menubar 包装命令: {paths.menubar_wrapper_path}")
+    print("安装后建议验证：")
+    print(f"  {paths.agent_wrapper_path} ensure-service")
+    print(f"  {paths.agent_wrapper_path} contracts")
+    print(f"  {paths.agent_wrapper_path} status")
+    print(f"  {paths.menubar_wrapper_path}")
     return 0
 
 

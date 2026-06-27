@@ -15,6 +15,7 @@ class AttentionRegion:
     role: str
     reason: str
     primary: bool = False
+    abnormal_keyword_boosted: bool = False
 
 
 def build_default_attention_regions(*, width: int, height: int) -> List[AttentionRegion]:
@@ -90,3 +91,41 @@ def build_default_attention_regions(*, width: int, height: int) -> List[Attentio
     ]
     return regions
 
+
+ABNORMAL_ATTENTION_KEYWORDS = (
+    "error",
+    "failed",
+    "failure",
+    "crash",
+    "alert",
+    "warning",
+    "异常",
+    "错误",
+    "失败",
+    "告警",
+    "警告",
+    "登录",
+    "弹窗",
+    "支付",
+    "价格",
+    "库存",
+    "按钮",
+)
+
+
+def apply_attention_text_boost(attention: AttentionRegion, text: str) -> AttentionRegion:
+    """Raise useful edge-region context without letting it dominate main content."""
+    if attention.primary:
+        return attention
+    haystack = str(text or "").lower()
+    if not any(keyword.lower() in haystack for keyword in ABNORMAL_ATTENTION_KEYWORDS):
+        return attention
+    boosted_weight = min(max(attention.weight + 0.22, attention.weight), 0.86)
+    return AttentionRegion(
+        region=attention.region,
+        weight=round(boosted_weight, 4),
+        role=attention.role,
+        reason=f"{attention.reason} 检测到异常关键词，提升为可记录上下文但不覆盖主内容。",
+        primary=attention.primary,
+        abnormal_keyword_boosted=True,
+    )

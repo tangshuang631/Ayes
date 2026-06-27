@@ -43,11 +43,18 @@ class SQLiteStore:
                 CREATE TABLE IF NOT EXISTS watch_tasks (
                     task_id TEXT PRIMARY KEY,
                     mode TEXT NOT NULL,
+                    display_name TEXT NOT NULL DEFAULT '',
                     target_json TEXT NOT NULL,
                     spec_json TEXT NOT NULL,
                     created_at REAL NOT NULL
                 )
                 """
+            )
+            self._ensure_column(
+                connection,
+                table_name="watch_tasks",
+                column_name="display_name",
+                definition="TEXT NOT NULL DEFAULT ''",
             )
             connection.execute(
                 """
@@ -273,18 +280,19 @@ class SQLiteStore:
             return None
         return json.loads(row[0])
 
-    def upsert_task(self, *, task_id: str, mode: str, target: dict, spec: dict, created_at: float) -> None:
+    def upsert_task(self, *, task_id: str, mode: str, display_name: str = "", target: dict, spec: dict, created_at: float) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO watch_tasks (task_id, mode, target_json, spec_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO watch_tasks (task_id, mode, display_name, target_json, spec_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                   mode=excluded.mode,
+                  display_name=excluded.display_name,
                   target_json=excluded.target_json,
                   spec_json=excluded.spec_json
                 """,
-                (task_id, mode, json.dumps(target, ensure_ascii=False), json.dumps(spec, ensure_ascii=False), created_at),
+                (task_id, mode, str(display_name or "").strip(), json.dumps(target, ensure_ascii=False), json.dumps(spec, ensure_ascii=False), created_at),
             )
             connection.commit()
 
@@ -548,15 +556,33 @@ class SQLiteStore:
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT task_id, mode, target_json, spec_json, created_at FROM watch_tasks WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
+            columns = [row[1] for row in connection.execute("PRAGMA table_info(watch_tasks)").fetchall()]
+            has_display_name = "display_name" in columns
+            if has_display_name:
+                row = connection.execute(
+                    "SELECT task_id, mode, display_name, target_json, spec_json, created_at FROM watch_tasks WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT task_id, mode, target_json, spec_json, created_at FROM watch_tasks WHERE task_id = ?",
+                    (task_id,),
+                ).fetchone()
         if row is None:
             return None
+        if has_display_name:
+            return {
+                "task_id": row[0],
+                "mode": row[1],
+                "display_name": str(row[2] or "").strip(),
+                "target": json.loads(row[3]),
+                "spec": json.loads(row[4]),
+                "created_at": row[5],
+            }
         return {
             "task_id": row[0],
             "mode": row[1],
+            "display_name": "",
             "target": json.loads(row[2]),
             "spec": json.loads(row[3]),
             "created_at": row[4],
@@ -564,19 +590,45 @@ class SQLiteStore:
 
     def list_tasks(self, *, limit: int = 100) -> List[Dict[str, Any]]:
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT task_id, mode, target_json, spec_json, created_at
-                FROM watch_tasks
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            columns = [row[1] for row in connection.execute("PRAGMA table_info(watch_tasks)").fetchall()]
+            has_display_name = "display_name" in columns
+            if has_display_name:
+                rows = connection.execute(
+                    """
+                    SELECT task_id, mode, display_name, target_json, spec_json, created_at
+                    FROM watch_tasks
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT task_id, mode, target_json, spec_json, created_at
+                    FROM watch_tasks
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        if has_display_name:
+            return [
+                {
+                    "task_id": row[0],
+                    "mode": row[1],
+                    "display_name": str(row[2] or "").strip(),
+                    "target": json.loads(row[3]),
+                    "spec": json.loads(row[4]),
+                    "created_at": row[5],
+                }
+                for row in rows
+            ]
         return [
             {
                 "task_id": row[0],
                 "mode": row[1],
+                "display_name": "",
                 "target": json.loads(row[2]),
                 "spec": json.loads(row[3]),
                 "created_at": row[4],
