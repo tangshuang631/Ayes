@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import time
 from dataclasses import asdict
 from typing import Any, Dict, List
@@ -10,6 +9,7 @@ from typing import Any, Dict, List
 from ayes.config.models import WatchSpec
 from ayes.memory.short_term import QueryResult
 from ayes.observation.text_quality import score_ocr_text
+from ayes.time_utils import format_local_clock
 
 
 def extract_structured_observation(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -295,6 +295,18 @@ def build_memory_items_payload(*, items: List[Dict[str, Any]], task_id: str, min
     }
 
 
+def build_memory_items_payload_from_fact_rows(*, items: List[Dict[str, Any]], task_id: str, minutes: int, limit: int) -> Dict[str, Any]:
+    normalized = [_compact_fact_row(item) for item in items if _compact_fact_row(item) is not None]
+    return {
+        "task_id": task_id,
+        "minutes": minutes,
+        "limit": limit,
+        "compact": True,
+        "count": len(normalized),
+        "items": normalized,
+    }
+
+
 def build_activity_payload(
     *,
     items: List[Dict[str, Any]],
@@ -308,6 +320,40 @@ def build_activity_payload(
     timestamps = [item.get("timestamp") for item in compact_items if item.get("timestamp") is not None]
     keyword_items = [item for item in compact_items if not _is_activity_audit_summary(item) and not _is_low_quality_ocr_summary(item)]
     keywords = _dedupe_keywords(keyword for item in keyword_items for keyword in item.get("keywords", []))[:12]
+    primary_summary = _build_primary_activity_summary(compact_items)
+    confidence = _average_confidence(compact_items)
+    return {
+        "schema_version": "1.0",
+        "task_id": task_id,
+        "observed_at": observed_at,
+        "time_scope": {
+            "minutes": minutes,
+            "from": observed_at - (minutes * 60),
+            "to": observed_at,
+            "evidence_from": min(timestamps) if timestamps else None,
+            "evidence_to": max(timestamps) if timestamps else None,
+        },
+        "primary_summary": primary_summary,
+        "timeline": compact_items[:8],
+        "keywords": keywords,
+        "confidence": confidence,
+        "has_screenshot_evidence": has_screenshot_evidence,
+        "needs_detail_followup": len(compact_items) > 8 or confidence < 0.65,
+    }
+
+
+def build_activity_payload_from_fact_rows(
+    *,
+    items: List[Dict[str, Any]],
+    task_id: str,
+    minutes: int,
+    observed_at: float,
+    has_screenshot_evidence: bool,
+) -> Dict[str, Any]:
+    compact_items = [_compact_fact_row(item) for item in items if _compact_fact_row(item) is not None]
+    compact_items = sorted(compact_items, key=_compact_event_spatial_sort_key)
+    timestamps = [item.get("timestamp") for item in compact_items if item.get("timestamp") is not None]
+    keywords = _dedupe_keywords(keyword for item in compact_items for keyword in item.get("keywords", []))[:12]
     primary_summary = _build_primary_activity_summary(compact_items)
     confidence = _average_confidence(compact_items)
     return {
@@ -392,6 +438,47 @@ def _compact_event_payload(event: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _compact_fact_row(row: Dict[str, Any]) -> Dict[str, Any] | None:
+    summary = str(row.get("info") or "").strip()
+    if not summary:
+        return None
+    region = str(row.get("region") or "").strip()
+    code = str(row.get("code") or "").strip()
+    parsed = _parse_fact_code(code)
+    keywords = _dedupe_keywords(
+        _extract_keywords(summary)
+        + _extract_keywords(parsed.get("k1") or "")
+        + _extract_keywords(parsed.get("k2") or "")
+        + _extract_keywords(parsed.get("k3") or "")
+    )
+    spatial_rank = _spatial_rank_from_region(region or _region_name_from_slot(parsed.get("reg") or ""))
+    return {
+        "event_id": f"fact:{row.get('time') or row.get('timestamp') or ''}:{summary[:16]}",
+        "timestamp": row.get("timestamp"),
+        "time_text": _format_time_text(row.get("timestamp")),
+        "source": "short_term_file",
+        "event_type": "compact_short_memory",
+        "summary": summary,
+        "region_name": region,
+        "location_summary": region,
+        "keywords": keywords[:8],
+        "confidence": 0.9,
+        "text_quality_score": 1.0,
+        "text_quality_noisy": False,
+        "attention_primary": spatial_rank == 0.0,
+        "attention_weight": 1.0 if spatial_rank == 0.0 else 0.7,
+        "priority": "medium",
+        "spatial_rank": spatial_rank,
+        "spatial_y": _slot_spatial_y(parsed.get("reg") or ""),
+        "spatial_x": _slot_spatial_x(parsed.get("reg") or ""),
+        "code": code,
+        "scene": parsed.get("scn") or "",
+        "k1": parsed.get("k1") or "",
+        "k2": parsed.get("k2") or "",
+        "k3": parsed.get("k3") or "",
+    }
+
+
 def _build_primary_activity_summary(items: List[Dict[str, Any]]) -> str:
     if not items:
         return "最近时间窗内未发现可摘要的监控事件。"
@@ -439,6 +526,8 @@ def _activity_summary_rank(item: Dict[str, Any]) -> float:
         pass
     if any(keyword in summary for keyword in ["错误", "异常", "弹窗", "登录", "价格", "按钮", "告警"]):
         score += 2.0
+    if any(summary.startswith(prefix) for prefix in ["页面：", "表单：", "状态：", "内容：", "图表：", "表格：", "聊天：", "PPT："]):
+        score += 2.6
     try:
         score += float(item.get("confidence") or 0.0)
     except (TypeError, ValueError):
@@ -460,6 +549,52 @@ def _compact_event_spatial_sort_key(item: Dict[str, Any]) -> tuple:
     x = _safe_float(item.get("spatial_x"), default=9.0)
     timestamp = _safe_float(item.get("timestamp"), default=0.0)
     return (rank, y, x, -timestamp)
+
+
+def _parse_fact_code(code: str) -> Dict[str, str]:
+    fields = {"scn": "", "reg": "", "k1": "", "k2": "", "k3": ""}
+    for part in str(code or "").split("|"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip()
+        if key in fields:
+            fields[key] = str(value or "").strip()
+    return fields
+
+
+def _region_name_from_slot(slot: str) -> str:
+    mapping = {
+        "main": "自动主内容区",
+        "top": "自动顶部栏",
+        "left": "自动左侧栏",
+        "right": "自动右侧栏",
+        "bottom": "自动底部栏",
+        "full": "自动全目标",
+    }
+    return mapping.get(str(slot or "").strip(), "")
+
+
+def _slot_spatial_y(slot: str) -> float:
+    return {
+        "top": 0.1,
+        "main": 0.5,
+        "left": 0.5,
+        "right": 0.5,
+        "bottom": 0.9,
+        "full": 0.5,
+    }.get(str(slot or "").strip(), 0.5)
+
+
+def _slot_spatial_x(slot: str) -> float:
+    return {
+        "top": 0.5,
+        "main": 0.5,
+        "left": 0.15,
+        "right": 0.85,
+        "bottom": 0.5,
+        "full": 0.5,
+    }.get(str(slot or "").strip(), 0.5)
 
 
 def _spatial_rank_from_region(region_name: str) -> float:
@@ -837,13 +972,7 @@ def _build_region_binding_context(context: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _format_time_text(timestamp: Any) -> str:
-    if timestamp in {None, ""}:
-        return ""
-    try:
-        numeric = float(timestamp)
-    except (TypeError, ValueError):
-        return str(timestamp)
-    return datetime.fromtimestamp(numeric, tz=timezone.utc).strftime("%H:%M:%S")
+    return format_local_clock(timestamp)
 
 
 def _describe_direction(rect_norm: Dict[str, Any]) -> str:
@@ -1036,6 +1165,7 @@ def build_agent_contract_payload() -> Dict[str, Dict[str, Any]]:
                 "logs": "可选，清理任务日志目录",
                 "memory": "可选，显式清理任务记忆；不会被 --all 隐式启用",
                 "index": "可选，清理任务检索索引",
+                "empty_evidence": "可选，只删除空的 screenshots/evidence 目录，不删除 latest 或证据文件",
                 "legacy": "可选，清理 runtime 根目录旧遗留文件",
                 "vacuum": "可选，执行 SQLite VACUUM",
                 "rebuild_index": "可选，从 compact/short/long 记忆重建索引",

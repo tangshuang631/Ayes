@@ -39,7 +39,9 @@ def test_memory_search_index_writes_fts_and_compact_chunks(tmp_path) -> None:
     assert (index_dir / "fts.sqlite").exists()
     chunk_path = index_dir / "chunks" / "2026-10-25-16.jsonl"
     payload = json.loads(chunk_path.read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "Apifox 登录页"
+    assert payload["info"] == "页面：Apifox 登录页"
+    assert payload["scene"] == "pg"
+    assert payload["k1"] == "Apifox 登录页"
     encoded = json.dumps(payload, ensure_ascii=False)
     assert "blocks" not in encoded
     assert "bbox" not in encoded
@@ -628,6 +630,80 @@ def test_memory_search_index_persists_structured_code_fields_in_sqlite(tmp_path)
     assert row == ("cnt", "main", "文档页面", "标题：项目进展汇报", "三条要点说明")
 
 
+def test_memory_search_index_persists_position_and_subject_code_fields(tmp_path) -> None:
+    index = MemorySearchIndex(runtime_dir=tmp_path)
+
+    index.index_chunk(
+        {
+            "chunk_id": "spatial_fact",
+            "task_id": "task_general",
+            "timestamp": 1792944000.0,
+            "layer": "compact",
+            "source": "file_memory_compact",
+            "event_type": "compact_memory_segment",
+            "info": "弹窗：正在等待连接",
+            "code": "scene=dlg|reg=main|pos=center|subj=正在等待连接|ctx=双角色对峙|bg=观众席",
+            "region": "自动主内容区",
+            "tags": ["compact_memory", "fact_dialog"],
+            "confidence": 0.9,
+        }
+    )
+
+    db_path = tmp_path / "tasks" / "2026-10-25" / "task_general" / "index" / "fts.sqlite"
+    with sqlite3.connect(str(db_path)) as connection:
+        columns = [row[1] for row in connection.execute("PRAGMA table_info(memory_chunks)").fetchall()]
+        row = connection.execute(
+            "SELECT scene, region_slot, pos, subj, ctx, bg FROM memory_chunks WHERE chunk_id = ?",
+            ("spatial_fact",),
+        ).fetchone()
+
+    assert "pos" in columns
+    assert "subj" in columns
+    assert "ctx" in columns
+    assert "bg" in columns
+    assert row == ("dlg", "main", "center", "正在等待连接", "双角色对峙", "观众席")
+
+
+def test_memory_search_index_reranks_by_position_and_subject_fields(tmp_path) -> None:
+    index = MemorySearchIndex(runtime_dir=tmp_path)
+    base = 1792944000.0
+    index.index_chunk(
+        {
+            "chunk_id": "center_dialog",
+            "task_id": "task_general",
+            "timestamp": base,
+            "layer": "compact",
+            "source": "file_memory_compact",
+            "event_type": "compact_memory_segment",
+            "info": "弹窗：正在等待连接",
+            "code": "scene=dlg|reg=main|pos=center|subj=正在等待连接|ctx=双角色对峙|bg=观众席",
+            "region": "自动主内容区",
+            "tags": ["compact_memory"],
+            "confidence": 0.9,
+        }
+    )
+    index.index_chunk(
+        {
+            "chunk_id": "top_nav",
+            "task_id": "task_general",
+            "timestamp": base + 1,
+            "layer": "compact",
+            "source": "file_memory_compact",
+            "event_type": "compact_memory_segment",
+            "info": "导航：设置页签",
+            "code": "scene=nav|reg=top|pos=top|subj=设置页签",
+            "region": "自动顶部栏",
+            "tags": ["compact_memory"],
+            "confidence": 0.92,
+        }
+    )
+
+    result = index.query(task_id="task_general", question="中间等待连接的弹窗是什么", minutes=240, now=base + 60)
+
+    assert result["items"][0]["chunk_id"] == "center_dialog"
+    assert "正在等待连接" in result["answer"]
+
+
 def test_memory_search_index_prefers_status_fact_from_edge_over_generic_main_noise(tmp_path) -> None:
     index = MemorySearchIndex(runtime_dir=tmp_path)
     base = 1792944000.0
@@ -727,3 +803,35 @@ def test_memory_search_index_prefers_top_before_bottom_within_same_region_priori
 
     assert result["items"][0]["chunk_id"] in {"upper_main", "lower_main"}
     assert "内容：" in result["answer"]
+
+
+def test_memory_search_index_query_returns_token_compact_items(tmp_path) -> None:
+    index = MemorySearchIndex(runtime_dir=tmp_path)
+    index.index_chunk(
+        {
+            "chunk_id": "coded_fact",
+            "task_id": "task_compact_query",
+            "timestamp": 1792944000.0,
+            "layer": "compact",
+            "source": "file_memory_compact",
+            "event_type": "compact_memory_segment",
+            "info": "内容：文档页面",
+            "code": "scene=cnt|reg=main|pos=center|subj=文档页面|ctx=项目进展汇报|bg=三条要点说明",
+            "region": "自动主内容区",
+            "tags": ["compact_memory", "fact_content"],
+            "confidence": 0.9,
+        }
+    )
+
+    result = index.query(task_id="task_compact_query", question="项目进展汇报是什么", minutes=240, now=1792944300.0, compact_items=True)
+
+    item = result["items"][0]
+    assert item == {
+        "id": "coded_fact",
+        "t": "2026-10-25T16:00:00Z",
+        "info": "内容：文档页面",
+        "code": "scene=cnt|reg=main|pos=center|subj=文档页面|ctx=项目进展汇报|bg=三条要点说明",
+        "reg": "自动主内容区",
+        "score": item["score"],
+    }
+    assert set(item) == {"id", "t", "info", "code", "reg", "score"}

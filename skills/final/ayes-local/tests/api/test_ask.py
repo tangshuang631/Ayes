@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 
 from ayes.api.server import app, state
 from ayes.config.models import WatchSpec
@@ -9,6 +10,10 @@ from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisu
 
 
 client = TestClient(app)
+
+
+def _iso_utc(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def test_ask_endpoint_uses_recent_summary_for_generic_question() -> None:
@@ -591,3 +596,111 @@ def test_query_endpoint_returns_compact_reranked_answer_without_raw_payload() ->
     assert '"items":' in encoded
     assert '"logs":' not in encoded
     assert len(encoded) < 8000
+
+
+def test_memory_items_prefers_short_fact_files_over_raw_sqlite_events() -> None:
+    task_id = "task_memory_items_short_fact"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "process", "process_name": "Chrome"},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    state.set_runner(spec, task_id=task_id)
+    state.clear_runner()
+    now = time.time()
+    memory_path = state.memory_file_store.short_event_path(task_id=task_id, timestamp=now)
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    memory_path.write_text(
+        f'{{"time":"{_iso_utc(now - 30)}","info":"页面：Apifox 登录页","code":"scn=pg|reg=main|k1=Apifox|k2=登录页"}}\n',
+        encoding="utf-8",
+    )
+    noisy = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=now,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.31,
+        target=EventTarget(type="process", process_name="Chrome"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="0OCg0,、KIkIl￿8YeSJX",
+    )
+    state.sqlite_store.insert_event(noisy)
+
+    response = client.get("/api/memory/items", params={"task_id": task_id, "minutes": 60, "limit": 5, "compact": 1})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] >= 1
+    assert payload["items"][0]["summary"] == "页面：Apifox 登录页"
+    assert "KIkIl" not in response.text
+
+
+def test_activity_prefers_short_fact_files_before_raw_sqlite_activity() -> None:
+    task_id = "task_activity_short_fact"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    state.set_runner(spec, task_id=task_id)
+    state.clear_runner()
+    now = time.time()
+    memory_path = state.memory_file_store.short_event_path(task_id=task_id, timestamp=now)
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    memory_path.write_text(
+        f'{{"time":"{_iso_utc(now - 30)}","info":"表单：手机号输入框，确认按钮","code":"scn=frm|reg=main|k1=手机号输入框|k2=确认按钮"}}\n',
+        encoding="utf-8",
+    )
+    for index in range(3):
+        noisy = build_event(
+            task_id=task_id,
+            spec_version="1.0",
+            task_mode="observe",
+            timestamp=now - index,
+            source="ocr",
+            event_type="text_change",
+            priority="medium",
+            confidence=0.28,
+            target=EventTarget(type="screen", screen_id=1),
+            observability=Observability(True, True, True, True, "ok"),
+            summary="OCR 未识别到文本 (vision)",
+        )
+        state.sqlite_store.insert_event(noisy)
+
+    response = client.get("/api/activity", params={"task_id": task_id, "minutes": 60})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "手机号输入框" in payload["primary_summary"]
+    assert "OCR 未识别到文本" not in payload["primary_summary"]
+
+
+def test_long_term_summary_is_built_from_short_fact_rows_not_raw_event_noise() -> None:
+    task_id = "task_long_term_from_short_rows"
+    now = time.time()
+    short_rows = [
+        {"time": "2026-06-27T10:20:03Z", "info": "页面：Apifox 登录页", "code": "scn=pg|reg=main|k1=Apifox|k2=登录页"},
+        {"time": "2026-06-27T10:21:03Z", "info": "表单：手机号输入框，确认按钮", "code": "scn=frm|reg=main|k1=手机号输入框|k2=确认按钮"},
+        {"time": "2026-06-27T10:22:03Z", "info": "状态：登录弹窗", "code": "scn=sts|reg=main|k1=登录弹窗"},
+    ]
+
+    summary = __import__("ayes.memory.long_term", fromlist=["build_long_term_summary_from_short_rows"]).build_long_term_summary_from_short_rows(
+        task_id=task_id,
+        rows=short_rows,
+        window_start=now - 180,
+        window_end=now,
+    )
+
+    assert "Apifox 登录页" in summary["summary"]
+    assert "手机号输入框" in summary["summary"]
+    assert "KIkIl" not in summary["summary"]
+    assert summary["event_count"] == 3

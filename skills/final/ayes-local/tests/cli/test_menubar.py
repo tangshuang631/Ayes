@@ -35,6 +35,72 @@ def test_agent_tool_sampling_command_posts_interval_seconds(monkeypatch) -> None
     assert recorded["payload"] == {"interval_ms": 2500.0}
 
 
+def test_python_menubar_builds_task_specific_sampling_payload_without_touching_global() -> None:
+    payload = menubar_app._build_settings_save_payloads(
+        task_id="task_demo",
+        interval_ms=15000,
+        quality="standard",
+        save_ocr_screenshots=False,
+        latest_frame_hotkey="cmd+shift+9",
+        monitor_context_hotkey="cmd+shift+8",
+        memory_compact_every_n_events=800,
+        alert_enabled=True,
+        alert_webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
+        alert_message_template="任务 {task_id} 命中：{summary}",
+        is_task_specific=True,
+    )
+
+    assert payload["sampling"] == {
+        "path": "/api/control/sampling",
+        "body": {
+            "task_id": "task_demo",
+            "interval_ms": 15000,
+            "quality": "standard",
+            "save_ocr_screenshots": False,
+        },
+    }
+    assert payload["app_settings"] is None
+    assert payload["memory_policy"] == {
+        "path": "/api/tasks/task_demo/memory-policy",
+        "body": {"memory_compact_every_n_events": 800},
+    }
+    assert payload["task_alert"] == {
+        "path": "/api/tasks/task_demo/alert",
+        "body": {
+            "enabled": True,
+            "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test",
+            "message_template": "任务 {task_id} 命中：{summary}",
+        },
+    }
+
+
+def test_python_menubar_builds_global_sampling_payload_without_task_id() -> None:
+    payload = menubar_app._build_settings_save_payloads(
+        task_id="task_demo",
+        interval_ms=6000,
+        quality="space_saver",
+        save_ocr_screenshots=False,
+        latest_frame_hotkey="",
+        monitor_context_hotkey="",
+        memory_compact_every_n_events=500,
+        alert_enabled=False,
+        alert_webhook_url="",
+        alert_message_template="",
+        is_task_specific=False,
+    )
+
+    assert payload["sampling"] == {
+        "path": "/api/control/sampling",
+        "body": {
+            "interval_ms": 6000,
+            "quality": "space_saver",
+            "save_ocr_screenshots": False,
+        },
+    }
+    assert payload["memory_policy"] is None
+    assert payload["task_alert"] is None
+
+
 def test_build_menu_bar_summary_for_idle_state() -> None:
     summary = menubar_app.build_menu_bar_summary(
         {
@@ -202,6 +268,18 @@ def test_native_menubar_source_exposes_roi_tree_and_task_start_actions() -> None
     assert "/api/tasks/\" stringByAppendingFormat:@\"%@/roi\"" in source
 
 
+def test_native_menubar_roi_selection_view_captures_drag_instead_of_moving_window() -> None:
+    source = agent_tool._build_native_menubar_source(
+        base_url="http://127.0.0.1:8770",
+        runtime_dir=Path("/tmp/ayes-runtime"),
+    )
+
+    assert "- (BOOL)mouseDownCanMoveWindow" in source
+    assert "return NO;" in source
+    assert "- (BOOL)acceptsFirstMouse:(NSEvent *)event" in source
+    assert "return YES;" in source
+
+
 def test_native_menubar_source_uses_system_menu_and_logs_open() -> None:
     source = agent_tool._build_native_menubar_source(
         base_url="http://127.0.0.1:8770",
@@ -221,6 +299,64 @@ def test_native_menubar_source_uses_system_menu_and_logs_open() -> None:
     assert '@"menu_will_open"' in source
 
 
+def test_native_menubar_continue_last_task_starts_when_not_running() -> None:
+    source = agent_tool._build_native_menubar_source(
+        base_url="http://127.0.0.1:8770",
+        runtime_dir=Path("/tmp/ayes-runtime"),
+    )
+
+    assert "startLastTask:" in source
+    assert 'action:(paused ? @selector(resume:) : (running ? @selector(pause:) : @selector(startLastTask:)))' in source
+
+
+def test_native_menubar_hotkeys_use_local_and_global_monitors_and_refresh_after_save() -> None:
+    source = agent_tool._build_native_menubar_source(
+        base_url="http://127.0.0.1:8770",
+        runtime_dir=Path("/tmp/ayes-runtime"),
+    )
+
+    assert "@property(strong) id localHotkeyMonitor;" in source
+    assert "addGlobalMonitorForEventsMatchingMask" in source
+    assert "addLocalMonitorForEventsMatchingMask" in source
+    assert "RegisterEventHotKey" in source
+    assert "UnregisterEventHotKey" in source
+    assert "InstallApplicationEventHandler" in source
+    assert '[delegate logEvent:@"carbon_callback_received"];' in source
+    assert '[self logEvent:@"carbon_hotkey_pressed"];' in source
+    assert '[self logEvent:@"hotkey_registered"];' in source
+    save_block = source.split("NSDictionary *hotkeyResult = [self postJsonSync:", 1)[1].split("if (!isTaskSpecificSettings)", 1)[0]
+    assert "[self refreshHotkeyRegistration];" in save_block
+
+
+def test_native_menubar_requests_accessibility_permission_for_paste_not_hotkey_registration() -> None:
+    source = agent_tool._build_native_menubar_source(
+        base_url="http://127.0.0.1:8770",
+        runtime_dir=Path("/tmp/ayes-runtime"),
+    )
+
+    assert "AXIsProcessTrustedWithOptions" in source
+    assert "kAXTrustedCheckOptionPrompt" in source
+    assert "ensureAccessibilityTrustedWithPrompt:" in source
+    hotkey_block = source.split("- (void)refreshHotkeyRegistration", 1)[1].split("- (void)copyImageToPasteboard", 1)[0]
+    assert "[self ensureAccessibilityTrustedWithPrompt:YES]" not in hotkey_block
+    paste_block = source.split("- (void)pasteClipboardIntoFocusedApp", 1)[1].split("- (void)copyLatestFrameAndPasteForTaskId", 1)[0]
+    assert "[self ensureAccessibilityTrustedWithPrompt:prompt]" in paste_block
+    assert "BOOL prompt = !self.accessibilityPromptShown;" in paste_block
+    assert "if (prompt) {" in paste_block
+
+
+def test_native_menubar_hotkey_matching_uses_keycode_fallback_and_logs_matches() -> None:
+    source = agent_tool._build_native_menubar_source(
+        base_url="http://127.0.0.1:8770",
+        runtime_dir=Path("/tmp/ayes-runtime"),
+    )
+
+    assert "keyForKeyCode:" in source
+    assert "[self keyForKeyCode:[event keyCode]]" in source
+    assert '[strongSelf logEvent:@"hotkey_matched_latest"];' in source
+    assert '[strongSelf logEvent:@"hotkey_matched_context"];' in source
+
+
 def test_native_menubar_source_handles_null_current_task_id() -> None:
     source = agent_tool._build_native_menubar_source(
         base_url="http://127.0.0.1:8770",
@@ -230,6 +366,22 @@ def test_native_menubar_source_handles_null_current_task_id() -> None:
     assert 'NSString *currentTaskId = [self safeText:[statusPayload objectForKey:@"task_id"] fallback:@""];' in source
     assert 'NSString *currentTaskId = [statusPayload objectForKey:@"task_id"];' not in source
     assert 'currentTaskId != nil && [currentTaskId length] > 0' not in source
+
+
+def test_native_menubar_task_settings_exposes_webhook_and_message_template_only_for_task() -> None:
+    source = agent_tool._build_native_menubar_source(
+        base_url="http://127.0.0.1:8770",
+        runtime_dir=Path("/tmp/ayes-runtime"),
+    )
+
+    assert '@"/api/tasks/" stringByAppendingFormat:@"%@/alert", encodedTaskId' in source
+    assert "企业微信 Webhook" in source
+    assert "启用任务通知" in source
+    assert "通知提示语" in source
+    assert "message_template" in source
+    assert "webhook_url" in source
+    specific_block = source.split("if (isTaskSpecificSettings) {", 1)[1].split("if (!isTaskSpecificSettings)", 1)[0]
+    assert "[view addSubview:webhookLabel];" in specific_block
 
 
 def test_python_menubar_uses_continue_last_monitor_label() -> None:

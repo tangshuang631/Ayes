@@ -426,7 +426,8 @@ def test_task_memory_file_store_prefers_dialog_fact_for_visual_summary(tmp_path)
     path = store.append_short_event(event)
 
     payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "弹窗：中央登录弹窗，手机号输入框，确认按钮"
+    assert payload["info"] == "弹窗：中央登录弹窗"
+    assert payload["code"] == "scene=dlg|reg=main|pos=center|subj=中央登录弹窗|ctx=手机号输入框|bg=确认按钮"
 
 
 def test_task_memory_file_store_prefers_chart_fact_for_visual_summary(tmp_path) -> None:
@@ -458,7 +459,8 @@ def test_task_memory_file_store_prefers_chart_fact_for_visual_summary(tmp_path) 
     path = store.append_short_event(event)
 
     payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "图表：中部折线图，走势下降，右上红色告警"
+    assert payload["info"] == "图表：中部折线图"
+    assert payload["code"] == "scene=cht|reg=main|pos=center|subj=中部折线图|ctx=走势下降|bg=右上红色告警"
 
 
 def test_task_memory_file_store_prefers_table_fact_for_visual_summary(tmp_path) -> None:
@@ -490,7 +492,8 @@ def test_task_memory_file_store_prefers_table_fact_for_visual_summary(tmp_path) 
     path = store.append_short_event(event)
 
     payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "表格：价格列，库存列，多行商品数据"
+    assert payload["info"] == "表格：价格列"
+    assert payload["code"] == "scene=tbl|reg=main|pos=center|subj=价格列|ctx=库存列|bg=多行商品数据"
 
 
 def test_task_memory_file_store_prefers_spatial_list_fact_for_sidebar_lists(tmp_path) -> None:
@@ -578,7 +581,8 @@ def test_task_memory_file_store_extracts_content_fact_for_document_like_scene(tm
 
     path = store.append_short_event(event)
     payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "内容：文档页面，标题：项目进展汇报，三条要点说明"
+    assert payload["info"] == "内容：文档页面"
+    assert payload["code"] == "scene=cnt|reg=main|pos=center|subj=文档页面|ctx=项目进展汇报|bg=三条要点说明"
 
 
 def test_task_memory_file_store_extracts_visual_scene_fact_for_video_like_scene(tmp_path) -> None:
@@ -609,7 +613,8 @@ def test_task_memory_file_store_extracts_visual_scene_fact_for_video_like_scene(
 
     path = store.append_short_event(event)
     payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "画面：视频主画面，人物近景，底部字幕"
+    assert payload["info"] == "画面：视频主画面"
+    assert payload["code"] == "scene=vis|reg=main|pos=center|subj=视频主画面|ctx=人物近景|bg=底部字幕"
 
 
 def test_task_memory_file_store_omits_classified_scene_with_only_subtitle_fragments(tmp_path) -> None:
@@ -672,7 +677,8 @@ def test_task_memory_file_store_keeps_classified_scene_with_meaningful_primary_d
     path = store.append_short_event(event)
 
     payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "画面：视频主画面，人物近景"
+    assert payload["info"] == "画面：视频主画面"
+    assert payload["code"] == "scene=vis|reg=main|pos=center|subj=视频主画面|ctx=人物近景"
 
 
 def test_task_memory_file_store_extracts_card_fact_for_recommendation_cards(tmp_path) -> None:
@@ -703,7 +709,8 @@ def test_task_memory_file_store_extracts_card_fact_for_recommendation_cards(tmp_
 
     path = store.append_short_event(event)
     payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "卡片：推荐卡片列表，商品缩略图，标题和价格"
+    assert payload["info"] == "卡片：推荐卡片列表"
+    assert payload["code"] == "scene=crd|reg=right|pos=right|subj=推荐卡片列表|ctx=商品缩略图|bg=标题和价格"
 
 
 def test_task_memory_file_store_extracts_status_fact_for_error_banner(tmp_path) -> None:
@@ -734,7 +741,8 @@ def test_task_memory_file_store_extracts_status_fact_for_error_banner(tmp_path) 
 
     path = store.append_short_event(event)
     payload = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "状态：右上错误提示，请重新登录"
+    assert payload["info"] == "状态：右上错误提示"
+    assert payload["code"] == "scene=sts|reg=right|pos=right|subj=右上错误提示|ctx=请重新登录"
 
 
 def test_task_memory_file_store_extracts_form_fact_for_login_area(tmp_path) -> None:
@@ -761,7 +769,8 @@ def test_task_memory_file_store_extracts_form_fact_for_login_area(tmp_path) -> N
     )
 
     payload = json.loads(store.append_short_event(event).read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "表单：登录表单，手机号输入框，获取验证码按钮"
+    assert payload["info"] == "表单：登录表单"
+    assert payload["code"] == "scene=frm|reg=main|pos=center|subj=登录表单|ctx=手机号输入框|bg=获取验证码按钮"
 
 
 def test_task_memory_file_store_extracts_navigation_fact_for_tab_area(tmp_path) -> None:
@@ -788,7 +797,8 @@ def test_task_memory_file_store_extracts_navigation_fact_for_tab_area(tmp_path) 
     )
 
     payload = json.loads(store.append_short_event(event).read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "导航：标签导航，当前选中设置页签"
+    assert payload["info"] == "导航：标签导航"
+    assert payload["code"] == "scene=nav|reg=top|pos=top|subj=标签导航|ctx=当前选中设置页签"
 
 
 def test_task_memory_file_store_extracts_control_fact_for_button_group(tmp_path) -> None:
@@ -815,7 +825,8 @@ def test_task_memory_file_store_extracts_control_fact_for_button_group(tmp_path)
     )
 
     payload = json.loads(store.append_short_event(event).read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "控件：保存按钮，取消按钮"
+    assert payload["info"] == "控件：保存按钮"
+    assert payload["code"] == "scene=ctl|reg=bottom|pos=bottom|subj=保存按钮|ctx=取消按钮"
 
 
 def test_task_memory_file_store_extracts_slide_fact_for_ppt_page(tmp_path) -> None:
@@ -842,7 +853,8 @@ def test_task_memory_file_store_extracts_slide_fact_for_ppt_page(tmp_path) -> No
     )
 
     payload = json.loads(store.append_short_event(event).read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "PPT：PPT 页面，标题：系统架构，左侧缩略图列表"
+    assert payload["info"] == "PPT：PPT 页面"
+    assert payload["code"] == "scene=ppt|reg=main|pos=center|subj=PPT 页面|ctx=系统架构|bg=左侧缩略图列表"
 
 
 def test_task_memory_file_store_extracts_chat_fact_for_chat_page(tmp_path) -> None:
@@ -869,7 +881,8 @@ def test_task_memory_file_store_extracts_chat_fact_for_chat_page(tmp_path) -> No
     )
 
     payload = json.loads(store.append_short_event(event).read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "聊天：聊天页面，上方联系人名，下方输入框"
+    assert payload["info"] == "聊天：聊天页面"
+    assert payload["code"] == "scene=chat|reg=main|pos=top|subj=聊天页面|ctx=上方联系人名|bg=下方输入框"
 
 
 def test_task_memory_file_store_extracts_subject_fact_for_image_subject(tmp_path) -> None:
@@ -896,7 +909,8 @@ def test_task_memory_file_store_extracts_subject_fact_for_image_subject(tmp_path
     )
 
     payload = json.loads(store.append_short_event(event).read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "主体：图像主体，猫的近景，浅色背景"
+    assert payload["info"] == "主体：图像主体"
+    assert payload["code"] == "scene=subj|reg=main|pos=center|subj=图像主体|ctx=猫的近景|bg=浅色背景"
 
 
 def test_task_memory_file_store_compact_short_event_writes_ai_friendly_code(tmp_path) -> None:
@@ -923,8 +937,71 @@ def test_task_memory_file_store_compact_short_event_writes_ai_friendly_code(tmp_
     )
 
     payload = json.loads(store.append_short_event(event).read_text(encoding="utf-8").splitlines()[0])
-    assert payload["info"] == "PPT：PPT 页面，标题：系统架构，左侧缩略图列表"
-    assert payload["code"] == "scn=ppt|reg=main|k1=PPT 页面|k2=标题：系统架构|k3=左侧缩略图列表"
+    assert payload["info"] == "PPT：PPT 页面"
+    assert payload["code"] == "scene=ppt|reg=main|pos=center|subj=PPT 页面|ctx=系统架构|bg=左侧缩略图列表"
+
+
+def test_task_memory_file_store_omits_position_slots_when_position_is_unknown(tmp_path) -> None:
+    store = TaskMemoryFileStore(runtime_dir=tmp_path)
+    event = build_event(
+        task_id="task_compact_code",
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=1792944000.0,
+        source="vision",
+        event_type="visual_summary",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="process", process_name="Chrome", window_title="页面"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="主内容是文档页面，标题为项目进展汇报",
+    )
+    event = event.__class__(
+        **{
+            **event.__dict__,
+            "region": Region(region_id="custom_roi", name="价格区域"),
+            "visual": EventVisual(attributes={"structured_observation": {"detail_lines": ["文档页面", "标题：项目进展汇报"]}}),
+        }
+    )
+
+    payload = json.loads(store.append_short_event(event).read_text(encoding="utf-8").splitlines()[0])
+
+    assert payload["info"] == "内容：文档页面"
+    assert "pos=" not in payload["code"]
+    assert "sub=" not in payload["code"]
+    assert payload["code"] == "scene=cnt|reg=roi|subj=文档页面|ctx=项目进展汇报"
+
+
+def test_task_memory_file_store_premerges_adjacent_same_spatial_fact_without_extra_write(tmp_path) -> None:
+    store = TaskMemoryFileStore(runtime_dir=tmp_path)
+    base_event = build_event(
+        task_id="task_dialog",
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=1792944000.0,
+        source="vision",
+        event_type="visual_summary",
+        priority="medium",
+        confidence=0.9,
+        target=EventTarget(type="process", process_name="Chrome"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="中央出现正在等待连接弹窗，背景是观众席",
+    )
+    first = base_event.__class__(
+        **{
+            **base_event.__dict__,
+            "region": Region(region_id="auto_center_main", name="自动主内容区"),
+            "visual": EventVisual(attributes={"structured_observation": {"detail_lines": ["正在等待连接", "双角色对峙", "观众席"]}}),
+        }
+    )
+    second = first.__class__(**{**first.__dict__, "timestamp": 1792944030.0, "summary": "中央弹窗仍在等待连接，背景是观众席"})
+
+    path = store.append_short_event(first)
+    store.append_short_event(second)
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["code"] == "scene=dlg|reg=main|pos=center|subj=正在等待连接|ctx=双角色对峙|bg=观众席"
 
 
 def test_task_memory_file_store_compacts_adjacent_duplicate_segments(tmp_path) -> None:

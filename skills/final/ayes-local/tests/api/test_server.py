@@ -314,6 +314,59 @@ def test_task_specific_settings_are_persisted_to_config_snapshot() -> None:
     assert config_payload["sampling"]["quality"] == "ultra_saver"
 
 
+def test_task_specific_sampling_update_does_not_overwrite_global_task_sampling() -> None:
+    current_task_id = f"task_global_{uuid4().hex}"
+    specific_task_id = f"task_specific_{uuid4().hex}"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": current_task_id,
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 6000,
+                "ocr_interval_ms": 6000,
+                "change_detection_interval_ms": 6000,
+                "quality": "standard",
+                "save_ocr_screenshots": False,
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": specific_task_id,
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "sampling": {
+                "screenshot_interval_ms": 6000,
+                "ocr_interval_ms": 6000,
+                "change_detection_interval_ms": 6000,
+                "quality": "standard",
+                "save_ocr_screenshots": False,
+            },
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post("/api/watch/switch-task", json={"task_id": current_task_id})
+
+    response = client.post(
+        "/api/control/sampling",
+        json={"task_id": specific_task_id, "interval_ms": 15000, "quality": "space_saver", "save_ocr_screenshots": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["sampling"]["task_id"] == specific_task_id
+    assert response.json()["sampling"]["interval_ms"] == 15000
+    global_sampling = client.get("/api/control/sampling", params={"task_id": current_task_id}).json()["sampling"]
+    specific_sampling = client.get("/api/control/sampling", params={"task_id": specific_task_id}).json()["sampling"]
+    assert global_sampling["interval_ms"] == 6000
+    assert global_sampling["quality"] == "standard"
+    assert specific_sampling["interval_ms"] == 15000
+    assert specific_sampling["quality"] == "space_saver"
+
+
 def test_task_settings_snapshot_prefers_task_specific_sampling_and_vision() -> None:
     task_id = "2026-06-27_task_settings_override"
     client.post(
@@ -360,6 +413,35 @@ def test_task_settings_snapshot_prefers_task_specific_sampling_and_vision() -> N
     assert response.status_code == 200
     settings = response.json()["settings"]
     assert settings["sampling"]["task_id"] == task_id
+
+
+def test_task_settings_snapshot_includes_task_alert_for_specialized_settings() -> None:
+    task_id = "2026-06-27_task_settings_alert"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": task_id,
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        },
+    )
+    client.post(
+        f"/api/tasks/{task_id}/alert",
+        json={
+            "enabled": True,
+            "webhook_url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=task",
+            "message_template": "任务 {task_id} 命中：{summary}",
+        },
+    )
+
+    response = client.get("/api/control/task-settings", params={"task_id": task_id})
+
+    assert response.status_code == 200
+    alert = response.json()["settings"]["alert"]
+    assert alert["enabled"] is True
+    assert alert["webhook_url"].endswith("key=task")
+    assert alert["message_template"] == "任务 {task_id} 命中：{summary}"
 
 
 def test_load_configured_task_persists_display_name() -> None:
@@ -2848,3 +2930,28 @@ def test_storage_cleanup_removes_selected_categories_and_rebuilds_index() -> Non
     assert not (task_dir / "screenshots" / "evidence" / "old.png").exists()
     assert not (task_dir / "logs" / "task.log").exists()
     assert (task_dir / "memory" / "compact" / "segments.jsonl").exists()
+
+
+def test_storage_cleanup_can_remove_empty_evidence_dir_without_deleting_screenshots() -> None:
+    task_id = f"2026-06-26_empty_evidence_cleanup_{uuid4().hex}"
+    client.post(
+        "/api/watch/load-configured",
+        json={
+            "task_id": task_id,
+            "target": {"type": "screen", "screen_id": 1},
+        },
+    )
+    task_dir = Path(state.current_task_paths(task_id=task_id)["task_dir"])
+    evidence_dir = task_dir / "screenshots" / "evidence"
+    latest_dir = task_dir / "screenshots" / "latest"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    (latest_dir / "latest-frame-test.png").write_bytes(b"latest")
+
+    response = client.post("/api/storage/cleanup", json={"task_id": task_id, "empty_evidence": True})
+
+    assert response.status_code == 200
+    cleanup = response.json()["cleanup"]
+    assert cleanup["empty_evidence"]["deleted_paths"] == 1
+    assert not evidence_dir.exists()
+    assert (latest_dir / "latest-frame-test.png").exists()

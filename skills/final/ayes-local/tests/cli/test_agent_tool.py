@@ -2,6 +2,8 @@ from ayes.cli import agent_tool
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 
 
 def test_agent_tool_ensure_service_uses_local_helper(monkeypatch, capsys) -> None:
@@ -308,6 +310,7 @@ def test_agent_tool_storage_cleanup_posts_selected_flags(monkeypatch, capsys) ->
             "--screenshots",
             "--logs",
             "--index",
+            "--empty-evidence",
             "--rebuild-index",
             "--vacuum",
         ]
@@ -322,6 +325,7 @@ def test_agent_tool_storage_cleanup_posts_selected_flags(monkeypatch, capsys) ->
         "logs": True,
         "memory": False,
         "index": True,
+        "empty_evidence": True,
         "legacy": False,
         "vacuum": True,
         "rebuild_index": True,
@@ -943,6 +947,68 @@ def test_build_menubar_app_bundle_uses_openable_app_layout(tmp_path: Path) -> No
     assert "/api/control/task-settings" in source.read_text(encoding="utf-8")
 
 
+def test_build_menubar_app_bundle_codesigns_app(monkeypatch, tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    def fake_which(name):
+        if name == "clang":
+            return "/usr/bin/clang"
+        if name == "codesign":
+            return "/usr/bin/codesign"
+        return shutil.which(name)
+
+    def fake_run(args, *run_args, **run_kwargs):
+        calls.append(list(args))
+        if args and args[0] == "/usr/bin/clang":
+            Path(args[-1]).write_text("#!/bin/sh\n", encoding="utf-8")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(agent_tool.shutil, "which", fake_which)
+    monkeypatch.setattr(agent_tool.subprocess, "run", fake_run)
+
+    app_path = agent_tool.build_menubar_app_bundle(
+        root_dir=tmp_path,
+        runtime_dir=tmp_path / "runtime",
+        python_bin="/usr/bin/python3",
+        base_url="http://127.0.0.1:8770",
+    )
+
+    assert ["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(app_path)] in calls
+    assert not (app_path / "Contents" / "MacOS" / ".codesign-warning").exists()
+
+
+def test_build_menubar_app_bundle_reuses_existing_signed_app_when_source_unchanged(monkeypatch, tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_which(name):
+        if name == "clang":
+            return "/usr/bin/clang"
+        if name == "codesign":
+            return "/usr/bin/codesign"
+        return shutil.which(name)
+
+    def fake_run(args, *run_args, **run_kwargs):
+        calls.append(list(args))
+        if args and args[0] == "/usr/bin/clang":
+            Path(args[-1]).write_text("#!/bin/sh\n", encoding="utf-8")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(agent_tool.shutil, "which", fake_which)
+    monkeypatch.setattr(agent_tool.subprocess, "run", fake_run)
+
+    kwargs = {
+        "root_dir": tmp_path,
+        "runtime_dir": tmp_path / "runtime",
+        "python_bin": "/usr/bin/python3",
+        "base_url": "http://127.0.0.1:8770",
+    }
+    first_app_path = agent_tool.build_menubar_app_bundle(**kwargs)
+    second_app_path = agent_tool.build_menubar_app_bundle(**kwargs)
+
+    assert first_app_path == second_app_path
+    assert sum(1 for call in calls if call and call[0] == "/usr/bin/clang") == 1
+    assert sum(1 for call in calls if call and call[0] == "/usr/bin/codesign") == 1
+
+
 def test_build_menubar_settings_uses_ollama_model_dropdown(tmp_path: Path) -> None:
     app_path = agent_tool.build_menubar_app_bundle(
         root_dir=tmp_path,
@@ -969,7 +1035,7 @@ def test_build_menubar_settings_includes_ollama_help(tmp_path: Path) -> None:
 
     source = (app_path / "Contents" / "MacOS" / "AyesMenubar.m").read_text(encoding="utf-8")
     assert "setAction:@selector(showVisionHelp:)" in source
-    assert 'NSButton *visionHelpButton = [[NSButton alloc] initWithFrame:NSMakeRect(262, 94, 20, 20)];' in source
+    assert "NSButton *visionHelpButton = [[NSButton alloc] initWithFrame:NSMakeRect(262, 94 + yOffset, 20, 20)];" in source
     assert '[visionHelpButton setTitle:@"i"];' in source
     assert '[visionHelpButton setBezelStyle:NSBezelStyleCircular];' in source
     assert '[visionHelpButton setTitle:@"帮助"];' not in source
@@ -1017,7 +1083,7 @@ def test_build_menubar_native_host_prioritizes_paused_state(tmp_path: Path) -> N
     assert 'BOOL paused = [self statusBoolForKey:@"is_paused"];' in source
     assert 'paused ? @"Ayes 已暂停" : (running ? @"Ayes 监控中" : @"Ayes 未监控")' in source
     assert 'paused ? @"继续上次的监控" : (running ? @"暂停监控" : @"继续上次的监控")' in source
-    assert 'paused ? @selector(resume:) : (running ? @selector(pause:) : @selector(resume:))' in source
+    assert 'paused ? @selector(resume:) : (running ? @selector(pause:) : @selector(startLastTask:))' in source
     assert 'paused ? @"Ayes ◐" : (running ? @"Ayes ◉" : @"Ayes ○")' in source
 
 
@@ -1082,6 +1148,12 @@ def test_build_menubar_hotkey_uses_fresh_snapshot_endpoint(tmp_path: Path) -> No
     assert '@"/api/screenshot"' not in source
     assert "toPath:roiPath" in source
     assert "当前任务 ROI 子任务数" not in source
+
+
+def test_build_menubar_app_links_carbon_for_system_hotkeys() -> None:
+    source = Path(agent_tool.__file__).read_text(encoding="utf-8")
+
+    assert '"-framework", "Carbon"' in source
 
 
 def test_build_menubar_context_hotkey_pastes_short_ayes_prompt(tmp_path: Path) -> None:

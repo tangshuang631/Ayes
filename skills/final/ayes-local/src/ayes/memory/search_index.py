@@ -14,12 +14,14 @@ from typing import Any, Dict, List, Optional
 from ayes.app.task_paths import date_from_timestamp, safe_task_segment, task_runtime_paths
 from ayes.events.models import TimelineEvent
 from ayes.memory.content_signal import clean_memory_summary
+from ayes.memory.facts import MemoryFact, MemoryFactExtractor
 
 
 class MemorySearchIndex:
     def __init__(self, *, runtime_dir: Path, task_path_resolver=None) -> None:
         self.runtime_dir = Path(runtime_dir).resolve()
         self.task_path_resolver = task_path_resolver
+        self.fact_extractor = MemoryFactExtractor()
 
     def task_index_dir(self, task_id: str, *, timestamp: float | None = None) -> Path:
         if self.task_path_resolver is not None:
@@ -28,9 +30,15 @@ class MemorySearchIndex:
         return task_runtime_paths(self.runtime_dir, task_id, timestamp=timestamp)["task_dir"] / "index"
 
     def index_event(self, event: TimelineEvent) -> Optional[dict]:
-        chunk = self._chunk_from_event(event)
+        fact = self.fact_extractor.extract(event)
+        chunk = fact.to_index_chunk() if fact is not None else None
         if chunk is None:
             return None
+        self.index_chunk(chunk)
+        return chunk
+
+    def index_fact(self, fact: MemoryFact) -> Optional[dict]:
+        chunk = fact.to_index_chunk()
         self.index_chunk(chunk)
         return chunk
 
@@ -76,6 +84,7 @@ class MemorySearchIndex:
         minutes: int = 240,
         now: float | None = None,
         limit: int = 8,
+        compact_items: bool = False,
     ) -> Dict[str, Any]:
         current_now = now if now is not None else datetime.now(timezone.utc).timestamp()
         since_timestamp = current_now - (minutes * 60)
@@ -98,12 +107,13 @@ class MemorySearchIndex:
             ranked = self._prefer_title_facts(ranked)
         if not _is_content_identity_question(question) and not _question_prefers_alert_or_status(question):
             ranked = sorted(ranked, key=lambda item: float(item.get("timestamp") or 0.0))
+        return_items = [self._compact_query_item(item) for item in ranked] if compact_items else ranked
         return {
             "task_id": task_id,
             "question": question,
             "minutes": minutes,
             "answer": self._build_answer(ranked, minutes=minutes),
-            "items": ranked,
+            "items": return_items,
             "count": len(ranked),
             "retrieval": {
                 "strategy": "fts_chunk_rerank",
@@ -219,6 +229,11 @@ class MemorySearchIndex:
             "k1": clean_memory_summary(str(chunk.get("k1") or code_fields["k1"] or "")),
             "k2": clean_memory_summary(str(chunk.get("k2") or code_fields["k2"] or "")),
             "k3": clean_memory_summary(str(chunk.get("k3") or code_fields["k3"] or "")),
+            "pos": clean_memory_summary(str(chunk.get("pos") or code_fields["pos"] or "")),
+            "sub": clean_memory_summary(str(chunk.get("sub") or code_fields["sub"] or "")),
+            "subj": clean_memory_summary(str(chunk.get("subj") or code_fields["subj"] or "")),
+            "ctx": clean_memory_summary(str(chunk.get("ctx") or code_fields["ctx"] or "")),
+            "bg": clean_memory_summary(str(chunk.get("bg") or code_fields["bg"] or "")),
             "region": clean_memory_summary(str(chunk.get("region") or "")),
             "target": clean_memory_summary(str(chunk.get("target") or "")),
             "tags": [str(tag) for tag in (chunk.get("tags") or [])][:8],
@@ -262,8 +277,8 @@ class MemorySearchIndex:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO memory_chunks
-                (chunk_id, task_id, timestamp, layer, source, event_type, info, code, scene, region_slot, k1, k2, k3, region, target, tags_json, confidence, payload_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (chunk_id, task_id, timestamp, layer, source, event_type, info, code, scene, region_slot, k1, k2, k3, pos, sub, subj, ctx, bg, region, target, tags_json, confidence, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk["chunk_id"],
@@ -279,6 +294,11 @@ class MemorySearchIndex:
                     chunk["k1"],
                     chunk["k2"],
                     chunk["k3"],
+                    chunk["pos"],
+                    chunk["sub"],
+                    chunk["subj"],
+                    chunk["ctx"],
+                    chunk["bg"],
                     chunk["region"],
                     chunk["target"],
                     json.dumps(chunk["tags"], ensure_ascii=False),
@@ -290,8 +310,8 @@ class MemorySearchIndex:
                 connection.execute(
                     """
                     INSERT OR REPLACE INTO memory_chunks_fts
-                    (chunk_id, task_id, info, scene, region_slot, k1, k2, k3, region, target, tags)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (chunk_id, task_id, info, scene, region_slot, k1, k2, k3, pos, sub, subj, ctx, bg, region, target, tags)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         chunk["chunk_id"],
@@ -302,6 +322,11 @@ class MemorySearchIndex:
                         chunk["k1"],
                         chunk["k2"],
                         chunk["k3"],
+                        chunk["pos"],
+                        chunk["sub"],
+                        chunk["subj"],
+                        chunk["ctx"],
+                        chunk["bg"],
                         chunk["region"],
                         chunk["target"],
                         " ".join(chunk["tags"]),
@@ -328,6 +353,11 @@ class MemorySearchIndex:
                 k1 TEXT NOT NULL,
                 k2 TEXT NOT NULL,
                 k3 TEXT NOT NULL,
+                pos TEXT NOT NULL,
+                sub TEXT NOT NULL,
+                subj TEXT NOT NULL,
+                ctx TEXT NOT NULL,
+                bg TEXT NOT NULL,
                 region TEXT NOT NULL,
                 target TEXT NOT NULL,
                 tags_json TEXT NOT NULL,
@@ -340,14 +370,14 @@ class MemorySearchIndex:
             connection.execute(
                 """
                 CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts
-                USING fts5(chunk_id UNINDEXED, task_id UNINDEXED, info, scene, region_slot, k1, k2, k3, region, target, tags)
+                USING fts5(chunk_id UNINDEXED, task_id UNINDEXED, info, scene, region_slot, k1, k2, k3, pos, sub, subj, ctx, bg, region, target, tags)
                 """
             )
         except sqlite3.OperationalError:
             pass
         try:
             columns = [row[1] for row in connection.execute("PRAGMA table_info(memory_chunks)").fetchall()]
-            for name in ["code", "scene", "region_slot", "k1", "k2", "k3"]:
+            for name in ["code", "scene", "region_slot", "k1", "k2", "k3", "pos", "sub", "subj", "ctx", "bg"]:
                 if name not in columns:
                     connection.execute(f"ALTER TABLE memory_chunks ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
@@ -572,7 +602,14 @@ class MemorySearchIndex:
         region = str(item.get("region") or "")
         region_slot = str(item.get("region_slot") or "")
         fact_kind = _fact_kind(info)
-        structured_values = [str(item.get("k1") or ""), str(item.get("k2") or ""), str(item.get("k3") or "")]
+        structured_values = [
+            str(item.get("k1") or ""),
+            str(item.get("k2") or ""),
+            str(item.get("k3") or ""),
+            str(item.get("subj") or ""),
+            str(item.get("ctx") or ""),
+            str(item.get("bg") or ""),
+        ]
         structured_text = " ".join(value for value in structured_values if value)
         if item.get("event_type") in {"target_window_changed", "window_title_changed", "compact_short_memory"}:
             score += 2.0
@@ -610,9 +647,11 @@ class MemorySearchIndex:
             score += 4.2
         combined = f"{structured_text} {info}".lower()
         for token in self._semantic_tokens(question):
-            if _structured_field_contains(item=item, token=token, fields=("k2", "k3")):
+            if _structured_field_contains(item=item, token=token, fields=("subj", "ctx", "bg")):
+                score += 2.0
+            elif _structured_field_contains(item=item, token=token, fields=("k2", "k3")):
                 score += 1.6
-            elif _structured_field_contains(item=item, token=token, fields=("k1", "scene", "region_slot")):
+            elif _structured_field_contains(item=item, token=token, fields=("k1", "scene", "region_slot", "pos", "sub")):
                 score += 1.0
             elif token in combined:
                 score += 0.6
@@ -700,6 +739,11 @@ class MemorySearchIndex:
             clean_memory_summary(str(item.get("k1") or "")),
             clean_memory_summary(str(item.get("k2") or "")),
             clean_memory_summary(str(item.get("k3") or "")),
+            clean_memory_summary(str(item.get("pos") or "")),
+            clean_memory_summary(str(item.get("sub") or "")),
+            clean_memory_summary(str(item.get("subj") or "")),
+            clean_memory_summary(str(item.get("ctx") or "")),
+            clean_memory_summary(str(item.get("bg") or "")),
         ]
         code_key = "|".join(bit for bit in code_bits if bit)
         if not info and not code_key:
@@ -707,7 +751,14 @@ class MemorySearchIndex:
         return f"{region}|{code_key}|{info}".lower()
 
     def _augment_info_with_code_details(self, *, item: dict, info: str) -> str:
-        values = [str(item.get("k1") or ""), str(item.get("k2") or ""), str(item.get("k3") or "")]
+        values = [
+            str(item.get("subj") or ""),
+            str(item.get("ctx") or ""),
+            str(item.get("bg") or ""),
+            str(item.get("k1") or ""),
+            str(item.get("k2") or ""),
+            str(item.get("k3") or ""),
+        ]
         values = [value for value in values if value]
         if not values or len(info) >= 18:
             return info
@@ -717,6 +768,21 @@ class MemorySearchIndex:
         if "：" in info:
             return f"{info}，{'，'.join(extra[:2])}"
         return f"{info} {' '.join(extra[:2])}"
+
+    def _compact_query_item(self, item: dict) -> dict:
+        payload = {
+            "id": str(item.get("chunk_id") or ""),
+            "t": str(item.get("time") or self._format_timestamp(float(item.get("timestamp") or 0.0))),
+            "info": clean_memory_summary(str(item.get("info") or "")),
+            "score": round(float(item.get("score") or 0.0), 4),
+        }
+        code = clean_memory_summary(str(item.get("code") or ""))
+        region = clean_memory_summary(str(item.get("region") or ""))
+        if code:
+            payload["code"] = code
+        if region:
+            payload["reg"] = region
+        return payload
 
     def _format_timestamp(self, timestamp: float) -> str:
         return datetime.fromtimestamp(timestamp, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -823,8 +889,20 @@ def _is_short_non_title_fragment(text: str) -> bool:
 
 
 def _parse_code_fields(code: str) -> dict[str, str]:
-    fields = {"scene": "", "region_slot": "", "k1": "", "k2": "", "k3": ""}
-    key_map = {"scn": "scene", "reg": "region_slot", "k1": "k1", "k2": "k2", "k3": "k3"}
+    fields = {"scene": "", "region_slot": "", "k1": "", "k2": "", "k3": "", "pos": "", "sub": "", "subj": "", "ctx": "", "bg": ""}
+    key_map = {
+        "scn": "scene",
+        "scene": "scene",
+        "reg": "region_slot",
+        "k1": "k1",
+        "k2": "k2",
+        "k3": "k3",
+        "pos": "pos",
+        "sub": "sub",
+        "subj": "subj",
+        "ctx": "ctx",
+        "bg": "bg",
+    }
     for part in str(code or "").split("|"):
         if "=" not in part:
             continue
@@ -857,9 +935,11 @@ def _structured_semantic_bonus(*, item: dict, question: str) -> float:
         token = token.strip()
         if len(token) < 2:
             continue
-        if _structured_field_contains(item=item, token=token, fields=("k2", "k3")):
+        if _structured_field_contains(item=item, token=token, fields=("subj", "ctx", "bg")):
+            bonus += 1.8
+        elif _structured_field_contains(item=item, token=token, fields=("k2", "k3")):
             bonus += 1.4
-        elif _structured_field_contains(item=item, token=token, fields=("k1",)):
+        elif _structured_field_contains(item=item, token=token, fields=("k1", "pos", "sub")):
             bonus += 0.9
     condensed = re.sub(r"\s+", "", str(question or "").lower())
     for slot_value in _structured_slot_values(item):
@@ -873,14 +953,14 @@ def _structured_detail_match(*, item: dict, question: str) -> bool:
     for slot_value in _structured_slot_values(item):
         if len(slot_value) < 3:
             continue
-        if slot_value in condensed and (item.get("k2") or item.get("k3")):
+        if slot_value in condensed and (item.get("k2") or item.get("k3") or item.get("subj") or item.get("ctx") or item.get("bg")):
             return True
     return False
 
 
 def _structured_slot_values(item: dict) -> list[str]:
     values: list[str] = []
-    for key in ("k1", "k2", "k3"):
+    for key in ("k1", "k2", "k3", "pos", "sub", "subj", "ctx", "bg"):
         raw = str(item.get(key) or "").strip()
         if not raw:
             continue

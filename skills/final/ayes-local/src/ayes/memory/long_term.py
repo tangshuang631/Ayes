@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from ayes.events.models import TimelineEvent
 from ayes.memory.content_signal import is_memory_worthy_event, rank_memory_events, summarize_memory_event
+from ayes.memory.search_index import _parse_code_fields
 
 
 def build_long_term_summary(*, task_id: str, events: Iterable[TimelineEvent]) -> dict:
@@ -25,6 +26,29 @@ def build_long_term_summary(*, task_id: str, events: Iterable[TimelineEvent]) ->
         "summary": "；".join(texts) if texts else "该时间段内无高价值摘要",
         "event_count": len(collected),
         "event_ids": [event.event_id for event in collected],
+        "main_content_snapshot": snapshot,
+    }
+
+
+def build_long_term_summary_from_short_rows(*, task_id: str, rows: List[dict], window_start: float, window_end: float) -> dict:
+    normalized_rows = [row for row in rows if str(row.get("info") or "").strip()]
+    if not normalized_rows:
+        raise ValueError("无法对空短期事实列表生成长期摘要")
+    unique_texts: list[str] = []
+    for row in normalized_rows:
+        info = " ".join(str(row.get("info") or "").split())
+        if not info or info in unique_texts:
+            continue
+        unique_texts.append(info)
+    snapshot = _build_snapshot_from_short_rows(normalized_rows)
+    return {
+        "summary_id": f"lts_{uuid4().hex}",
+        "task_id": task_id,
+        "window_start": window_start,
+        "window_end": window_end,
+        "summary": "；".join(unique_texts[:5]) if unique_texts else "该时间段内无高价值摘要",
+        "event_count": len(normalized_rows),
+        "event_ids": [],
         "main_content_snapshot": snapshot,
     }
 
@@ -83,4 +107,20 @@ def _build_main_content_snapshot(events: List[TimelineEvent]) -> dict:
         "attention_role": str(attention.get("role") or ""),
         "attention_weight": attention.get("weight"),
         "source": str(observation.get("source") or event.source or ""),
+    }
+
+
+def _build_snapshot_from_short_rows(rows: List[dict]) -> dict:
+    latest = rows[-1]
+    code_fields = _parse_code_fields(str(latest.get("code") or ""))
+    return {
+        "timestamp": latest.get("timestamp"),
+        "event_id": "",
+        "text": str(latest.get("info") or ""),
+        "visual_summary": "",
+        "region_id": str(latest.get("region") or ""),
+        "region_name": str(latest.get("region") or ""),
+        "attention_role": "main_content" if str(code_fields.get("region_slot") or "") == "main" else "",
+        "attention_weight": 1.0 if str(code_fields.get("region_slot") or "") == "main" else 0.0,
+        "source": "short_term_file",
     }

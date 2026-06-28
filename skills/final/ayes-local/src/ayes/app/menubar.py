@@ -227,6 +227,60 @@ def _post_json(base_url: str, path: str, payload: dict[str, Any]) -> dict:
         return json.loads(response.read().decode("utf-8") or "{}")
 
 
+def _build_settings_save_payloads(
+    *,
+    task_id: str,
+    interval_ms: int,
+    quality: str,
+    save_ocr_screenshots: bool,
+    latest_frame_hotkey: str,
+    monitor_context_hotkey: str,
+    memory_compact_every_n_events: int,
+    alert_enabled: bool,
+    alert_webhook_url: str,
+    alert_message_template: str,
+    is_task_specific: bool,
+) -> dict[str, Any]:
+    sampling_body: dict[str, Any] = {
+        "interval_ms": interval_ms,
+        "quality": quality,
+        "save_ocr_screenshots": save_ocr_screenshots,
+    }
+    if is_task_specific and task_id:
+        sampling_body["task_id"] = task_id
+    memory_policy = None
+    if is_task_specific and task_id:
+        memory_policy = {
+            "path": f"/api/tasks/{task_id}/memory-policy",
+            "body": {"memory_compact_every_n_events": memory_compact_every_n_events},
+        }
+    task_alert = None
+    if is_task_specific and task_id:
+        task_alert = {
+            "path": f"/api/tasks/{task_id}/alert",
+            "body": {
+                "enabled": alert_enabled,
+                "webhook_url": str(alert_webhook_url or "").strip(),
+                "message_template": str(alert_message_template or "").strip(),
+            },
+        }
+    app_settings = None
+    if not is_task_specific:
+        app_settings = {
+            "path": "/api/control/settings",
+            "body": {
+                "latest_frame_hotkey": latest_frame_hotkey,
+                "monitor_context_hotkey": monitor_context_hotkey,
+            },
+        }
+    return {
+        "sampling": {"path": "/api/control/sampling", "body": sampling_body},
+        "memory_policy": memory_policy,
+        "task_alert": task_alert,
+        "app_settings": app_settings,
+    }
+
+
 def _recent_task_title(task: dict[str, Any]) -> str:
     task_name = _safe_text(task.get("display_name"), "") or _safe_text(task.get("task_id"), "未知任务")
     roi = task.get("roi") if isinstance(task.get("roi"), dict) else {}
@@ -512,9 +566,14 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         self.settings_hotkey_field = None
         self.settings_context_hotkey_field = None
         self.settings_memory_compact_field = None
+        self.settings_alert_enabled_checkbox = None
+        self.settings_alert_webhook_field = None
+        self.settings_alert_template_field = None
         self.settings_error_label = None
         self.settings_capturing_hotkey = None
         self.settings_hotkey_capture_monitor = None
+        self.settings_task_id = ""
+        self.settings_is_task_specific = False
         self.hotkey_monitor = None
         self.current_hotkey = None
         self.context_hotkey_monitor = None
@@ -785,6 +844,8 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         subprocess.run(["open", f"{self.base_url}/#roi-editor"], check=False)
 
     def openSettings_(self, sender):
+        self.settings_task_id = ""
+        self.settings_is_task_specific = False
         try:
             status_payload = self._request_status()
             sampling_payload = _request_json(self.base_url, "/api/control/sampling")
@@ -799,6 +860,9 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
                 latest_frame_hotkey="",
                 monitor_context_hotkey="",
                 memory_compact_every_n_events=500,
+                alert_enabled=False,
+                alert_webhook_url="",
+                alert_message_template="",
                 error=str(exc),
             )
             return
@@ -822,6 +886,59 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
             latest_frame_hotkey=str(settings.get("latest_frame_hotkey") or ""),
             monitor_context_hotkey=str(settings.get("monitor_context_hotkey") or ""),
             memory_compact_every_n_events=int(memory_policy.get("memory_compact_every_n_events") or 500),
+            alert_enabled=False,
+            alert_webhook_url="",
+            alert_message_template="",
+            error="",
+        )
+
+    def openTaskSettings_(self, sender):
+        task_id = str(sender.representedObject() or "").strip()
+        if not task_id:
+            return
+        self.settings_task_id = task_id
+        self.settings_is_task_specific = True
+        try:
+            settings_payload = _request_json(self.base_url, f"/api/control/task-settings?task_id={task_id}")
+        except Exception as exc:
+            self._show_settings_panel(
+                task_id=task_id,
+                target_line="无法读取任务专属设置",
+                interval_ms=DEFAULT_SAMPLING_INTERVAL_MS,
+                quality="standard",
+                save_ocr_screenshots=False,
+                latest_frame_hotkey="",
+                monitor_context_hotkey="",
+                memory_compact_every_n_events=500,
+                alert_enabled=False,
+                alert_webhook_url="",
+                alert_message_template="",
+                error=str(exc),
+            )
+            return
+        settings = settings_payload.get("settings") or {}
+        sampling = settings.get("sampling") or {}
+        memory_policy = settings.get("memory_policy") or {}
+        alert_settings = settings.get("alert") or {}
+        summary_target = None
+        tasks = list(settings.get("tasks") or [])
+        for task in tasks:
+            if isinstance(task, dict) and str(task.get("task_id") or "").strip() == task_id:
+                summary_target = task.get("target")
+                break
+        target_line = _summarize_target(summary_target)
+        self._show_settings_panel(
+            task_id=task_id,
+            target_line=target_line,
+            interval_ms=int(sampling.get("interval_ms") or DEFAULT_SAMPLING_INTERVAL_MS),
+            quality=str(sampling.get("quality") or "standard"),
+            save_ocr_screenshots=bool(sampling.get("save_ocr_screenshots", False)),
+            latest_frame_hotkey=str((settings.get("task_hotkeys") or {}).get("latest_frame_hotkey") or ""),
+            monitor_context_hotkey=str((settings.get("task_hotkeys") or {}).get("monitor_context_hotkey") or ""),
+            memory_compact_every_n_events=int(memory_policy.get("memory_compact_every_n_events") or 500),
+            alert_enabled=bool(alert_settings.get("enabled", False)),
+            alert_webhook_url=str(alert_settings.get("webhook_url") or ""),
+            alert_message_template=str(alert_settings.get("message_template") or ""),
             error="",
         )
 
@@ -890,10 +1007,16 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         latest_frame_hotkey: str,
         monitor_context_hotkey: str,
         memory_compact_every_n_events: int,
+        alert_enabled: bool,
+        alert_webhook_url: str,
+        alert_message_template: str,
         error: str,
     ) -> None:
+        is_task_specific = bool(self.settings_is_task_specific)
+        panel_height = 660 if is_task_specific else 540
+        y_offset = 120 if is_task_specific else 0
         panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, 480, 540),
+            NSMakeRect(0, 0, 480, panel_height),
             NSWindowStyleMaskTitled | NSWindowStyleMaskClosable,
             NSBackingStoreBuffered,
             False,
@@ -902,18 +1025,18 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
         panel.setBackgroundColor_(NSColor.whiteColor())
         content = panel.contentView()
 
-        content.addSubview_(_make_label("Ayes 设置", x=24, y=492, w=220, h=28, bold=True))
-        content.addSubview_(_make_muted_label("桌面控制面板，配置直接写入当前任务。", x=24, y=468, w=410))
-        content.addSubview_(_make_label(f"任务：{task_id}", x=24, y=432, w=420))
-        content.addSubview_(_make_label(target_line, x=24, y=406, w=420))
-        content.addSubview_(_make_label("采样间隔", x=24, y=366, w=100, bold=True))
-        self.settings_interval_field = _make_text_field(_format_interval_seconds(interval_ms), x=124, y=362, w=96)
+        content.addSubview_(_make_label("Ayes 设置", x=24, y=492 + y_offset, w=220, h=28, bold=True))
+        content.addSubview_(_make_muted_label("桌面控制面板，配置直接写入当前任务。", x=24, y=468 + y_offset, w=410))
+        content.addSubview_(_make_label(f"任务：{task_id}", x=24, y=432 + y_offset, w=420))
+        content.addSubview_(_make_label(target_line, x=24, y=406 + y_offset, w=420))
+        content.addSubview_(_make_label("采样间隔", x=24, y=366 + y_offset, w=100, bold=True))
+        self.settings_interval_field = _make_text_field(_format_interval_seconds(interval_ms), x=124, y=362 + y_offset, w=96)
         content.addSubview_(self.settings_interval_field)
-        content.addSubview_(_make_label("秒", x=230, y=366, w=30))
-        content.addSubview_(_make_muted_label("范围 0.5 秒到 3600 秒。默认 6 秒，保存后截图、OCR、变化检测同步更新。", x=24, y=336, w=430))
+        content.addSubview_(_make_label("秒", x=230, y=366 + y_offset, w=30))
+        content.addSubview_(_make_muted_label("范围 0.5 秒到 3600 秒。默认 6 秒，保存后截图、OCR、变化检测同步更新。", x=24, y=336 + y_offset, w=430))
 
-        content.addSubview_(_make_label("采样质量", x=24, y=298, w=100, bold=True))
-        self.settings_quality_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(124, 292, 180, 30), False)
+        content.addSubview_(_make_label("采样质量", x=24, y=298 + y_offset, w=100, bold=True))
+        self.settings_quality_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(124, 292 + y_offset, 180, 30), False)
         quality_items = [
             ("原始质量", "original"),
             ("标准质量 · 1920", "standard"),
@@ -927,42 +1050,56 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
                 self.settings_quality_popup.selectItem_(self.settings_quality_popup.lastItem())
         content.addSubview_(self.settings_quality_popup)
 
-        self.settings_save_ocr_checkbox = NSButton.alloc().initWithFrame_(NSMakeRect(120, 252, 260, 28))
+        self.settings_save_ocr_checkbox = NSButton.alloc().initWithFrame_(NSMakeRect(120, 252 + y_offset, 260, 28))
         self.settings_save_ocr_checkbox.setButtonType_(NSSwitchButton)
         self.settings_save_ocr_checkbox.setTitle_("保存事件证据截图")
         self.settings_save_ocr_checkbox.setState_(1 if save_ocr_screenshots else 0)
         content.addSubview_(self.settings_save_ocr_checkbox)
-        content.addSubview_(_make_muted_label("关闭后只保留记忆、事件和日志；手动导出/告警证据可再临时保存。", x=24, y=224, w=430))
+        content.addSubview_(_make_muted_label("关闭后只保留记忆、事件和日志；手动导出/告警证据可再临时保存。", x=24, y=224 + y_offset, w=430))
 
-        content.addSubview_(_make_label("记忆合并", x=24, y=186, w=100, bold=True))
-        self.settings_memory_compact_field = _make_text_field(str(memory_compact_every_n_events), x=124, y=182, w=96)
+        content.addSubview_(_make_label("记忆合并", x=24, y=186 + y_offset, w=100, bold=True))
+        self.settings_memory_compact_field = _make_text_field(str(memory_compact_every_n_events), x=124, y=182 + y_offset, w=96)
         content.addSubview_(self.settings_memory_compact_field)
-        content.addSubview_(_make_label("条", x=230, y=186, w=30))
-        content.addSubview_(_make_muted_label("每 N 条短期记忆合并相邻重复段；范围 100-5000，默认 500。", x=24, y=156, w=430))
+        content.addSubview_(_make_label("条", x=230, y=186 + y_offset, w=30))
+        content.addSubview_(_make_muted_label("每 N 条短期记忆合并相邻重复段；范围 100-5000，默认 500。", x=24, y=156 + y_offset, w=430))
 
-        content.addSubview_(_make_label("截图快捷键", x=24, y=120, w=100, bold=True))
-        self.settings_hotkey_field = _make_text_field(latest_frame_hotkey, x=124, y=116, w=150)
+        content.addSubview_(_make_label("截图快捷键", x=24, y=120 + y_offset, w=100, bold=True))
+        self.settings_hotkey_field = _make_text_field(latest_frame_hotkey, x=124, y=116 + y_offset, w=150)
         self.settings_hotkey_field.setEditable_(False)
         self.settings_hotkey_field.setSelectable_(False)
         content.addSubview_(self.settings_hotkey_field)
-        hotkey_record_button = _make_button("录制", x=284, y=116, w=54, h=28)
+        hotkey_record_button = _make_button("录制", x=284, y=116 + y_offset, w=54, h=28)
         hotkey_record_button.setTarget_(self)
         hotkey_record_button.setAction_("beginHotkeyCapture:")
         hotkey_record_button.setRepresentedObject_("latest_frame_hotkey")
         content.addSubview_(hotkey_record_button)
-        content.addSubview_(_make_muted_label("例：cmd+shift+9。仅菜单栏运行且监控中生效；留空关闭。", x=24, y=90, w=430))
+        content.addSubview_(_make_muted_label("例：cmd+shift+9。仅菜单栏运行且监控中生效；留空关闭。", x=24, y=90 + y_offset, w=430))
 
-        content.addSubview_(_make_label("提问快捷键", x=24, y=58, w=100, bold=True))
-        self.settings_context_hotkey_field = _make_text_field(monitor_context_hotkey, x=124, y=54, w=150)
+        content.addSubview_(_make_label("提问快捷键", x=24, y=58 + y_offset, w=100, bold=True))
+        self.settings_context_hotkey_field = _make_text_field(monitor_context_hotkey, x=124, y=54 + y_offset, w=150)
         self.settings_context_hotkey_field.setEditable_(False)
         self.settings_context_hotkey_field.setSelectable_(False)
         content.addSubview_(self.settings_context_hotkey_field)
-        context_record_button = _make_button("录制", x=284, y=54, w=54, h=28)
+        context_record_button = _make_button("录制", x=284, y=54 + y_offset, w=54, h=28)
         context_record_button.setTarget_(self)
         context_record_button.setAction_("beginHotkeyCapture:")
         context_record_button.setRepresentedObject_("monitor_context_hotkey")
         content.addSubview_(context_record_button)
-        content.addSubview_(_make_muted_label("例：cmd+shift+8。粘贴短提示：Ayes context mode。", x=24, y=28, w=430))
+        content.addSubview_(_make_muted_label("例：cmd+shift+8。粘贴短提示：Ayes context mode。", x=24, y=28 + y_offset, w=430))
+
+        if is_task_specific:
+            content.addSubview_(_make_label("企业微信 Webhook", x=24, y=92, w=120, bold=True))
+            self.settings_alert_webhook_field = _make_text_field(alert_webhook_url, x=150, y=88, w=300)
+            content.addSubview_(self.settings_alert_webhook_field)
+            self.settings_alert_enabled_checkbox = NSButton.alloc().initWithFrame_(NSMakeRect(146, 54, 180, 28))
+            self.settings_alert_enabled_checkbox.setButtonType_(NSSwitchButton)
+            self.settings_alert_enabled_checkbox.setTitle_("启用任务通知")
+            self.settings_alert_enabled_checkbox.setState_(1 if alert_enabled else 0)
+            content.addSubview_(self.settings_alert_enabled_checkbox)
+            content.addSubview_(_make_label("通知提示语", x=24, y=22, w=100, bold=True))
+            default_template = "任务 {task_id} 命中：{summary}"
+            self.settings_alert_template_field = _make_text_field(alert_message_template or default_template, x=150, y=18, w=300)
+            content.addSubview_(self.settings_alert_template_field)
 
         self.settings_error_label = _make_muted_label(error, x=24, y=6, w=280)
         if error:
@@ -991,6 +1128,8 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
             self.settings_panel.close()
         self.settings_panel = None
         self.settings_capturing_hotkey = None
+        self.settings_task_id = ""
+        self.settings_is_task_specific = False
         if self.settings_hotkey_capture_monitor is not None:
             NSEvent.removeMonitor_(self.settings_hotkey_capture_monitor)
             self.settings_hotkey_capture_monitor = None
@@ -1008,19 +1147,29 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
             if self.settings_quality_popup is not None and self.settings_quality_popup.selectedItem() is not None:
                 quality = str(self.settings_quality_popup.selectedItem().representedObject() or "standard")
             save_ocr_screenshots = bool(self.settings_save_ocr_checkbox.state()) if self.settings_save_ocr_checkbox is not None else False
-            _post_json(self.base_url, "/api/control/sampling", {"interval_ms": interval_ms, "quality": quality, "save_ocr_screenshots": save_ocr_screenshots})
-            _post_json(
-                self.base_url,
-                "/api/control/settings",
-                {"latest_frame_hotkey": latest_frame_hotkey, "monitor_context_hotkey": monitor_context_hotkey},
+            request_payloads = _build_settings_save_payloads(
+                task_id=str(self.settings_task_id or "").strip(),
+                interval_ms=interval_ms,
+                quality=quality,
+                save_ocr_screenshots=save_ocr_screenshots,
+                latest_frame_hotkey=latest_frame_hotkey,
+                monitor_context_hotkey=monitor_context_hotkey,
+                memory_compact_every_n_events=int(str(self.settings_memory_compact_field.stringValue()).strip()) if self.settings_memory_compact_field is not None else 500,
+                alert_enabled=bool(self.settings_alert_enabled_checkbox.state()) if self.settings_alert_enabled_checkbox is not None else False,
+                alert_webhook_url=str(self.settings_alert_webhook_field.stringValue()) if self.settings_alert_webhook_field is not None else "",
+                alert_message_template=str(self.settings_alert_template_field.stringValue()) if self.settings_alert_template_field is not None else "",
+                is_task_specific=bool(self.settings_is_task_specific),
             )
-            status_payload = self._request_status()
-            task_id = str(status_payload.get("task_id") or "")
-            if task_id and self.settings_memory_compact_field is not None:
-                compact_every = int(str(self.settings_memory_compact_field.stringValue()).strip())
-                if compact_every < 100 or compact_every > 5000:
-                    raise ValueError("记忆合并阈值必须在 100 到 5000 之间")
-                _post_json(self.base_url, f"/api/tasks/{task_id}/memory-policy", {"memory_compact_every_n_events": compact_every})
+            compact_every = int(str(self.settings_memory_compact_field.stringValue()).strip()) if self.settings_memory_compact_field is not None else 500
+            if compact_every < 100 or compact_every > 5000:
+                raise ValueError("记忆合并阈值必须在 100 到 5000 之间")
+            _post_json(self.base_url, request_payloads["sampling"]["path"], request_payloads["sampling"]["body"])
+            if request_payloads["app_settings"] is not None:
+                _post_json(self.base_url, request_payloads["app_settings"]["path"], request_payloads["app_settings"]["body"])
+            if request_payloads["memory_policy"] is not None:
+                _post_json(self.base_url, request_payloads["memory_policy"]["path"], request_payloads["memory_policy"]["body"])
+            if request_payloads["task_alert"] is not None:
+                _post_json(self.base_url, request_payloads["task_alert"]["path"], request_payloads["task_alert"]["body"])
         except Exception as exc:
             if self.settings_error_label is not None:
                 self.settings_error_label.setStringValue_(str(exc))
@@ -1030,6 +1179,8 @@ class _MenuBarController(NSObject):  # pragma: no cover - macOS UI runtime
             self.settings_panel.close()
         self.settings_panel = None
         self.settings_capturing_hotkey = None
+        self.settings_task_id = ""
+        self.settings_is_task_specific = False
         if self.settings_hotkey_capture_monitor is not None:
             NSEvent.removeMonitor_(self.settings_hotkey_capture_monitor)
             self.settings_hotkey_capture_monitor = None

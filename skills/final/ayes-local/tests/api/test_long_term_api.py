@@ -1,7 +1,9 @@
 from fastapi.testclient import TestClient
+import time
 from uuid import uuid4
 
 from ayes.api.server import app, state
+from ayes.app.state import AppState
 from ayes.config.models import WatchSpec
 from ayes.storage.sqlite_store import SQLiteStore
 
@@ -47,7 +49,7 @@ def test_long_term_timeline_endpoint_supports_hours_scope() -> None:
     assert "items" in payload
 
 
-def test_clear_runner_flushes_only_pending_long_term_events() -> None:
+def test_clear_runner_does_not_flush_recent_short_memory_to_long_term() -> None:
     task_id = f"task_long_term_flush_{uuid4().hex}"
     spec = WatchSpec.from_dict(
         {
@@ -69,14 +71,15 @@ def test_clear_runner_flushes_only_pending_long_term_events() -> None:
     runner.run_once(now=100.0)
     state._flush_long_term_summary(force=False)
     first_items = state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
-    assert len(first_items) == 1
+    assert first_items == []
     state.clear_runner()
     second_items = state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
-    assert len(second_items) == 1
+    assert second_items == []
 
 
-def test_periodic_long_term_summary_uses_summary_interval_minutes() -> None:
+def test_long_term_summary_waits_until_short_facts_are_at_least_three_days_old() -> None:
     task_id = f"task_long_term_periodic_{uuid4().hex}"
+    local_state = AppState()
     spec = WatchSpec.from_dict(
         {
             "spec_version": "1.0",
@@ -93,14 +96,69 @@ def test_periodic_long_term_summary_uses_summary_interval_minutes() -> None:
             },
         }
     )
-    runner = state.set_runner(spec, task_id=task_id)
-    runner.run_once(now=100.0)
-    state._flush_long_term_summary(force=False)
-    runner.run_once(now=170.0)
-    state._flush_long_term_summary(force=False)
-    items = state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
-    assert len(items) >= 2
-    state.clear_runner()
+    runner = local_state.set_runner(spec, task_id=task_id)
+    now = time.time()
+    short_path = local_state.memory_file_store.short_event_path(task_id=task_id, timestamp=now)
+    short_path.parent.mkdir(parents=True, exist_ok=True)
+    short_path.write_text(
+        f'{{"time":"{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 60))}","info":"页面：今天的新内容","code":"scn=pg|reg=main|k1=今天的新内容"}}\n',
+        encoding="utf-8",
+    )
+    runner.run_once(now=now)
+    local_state._flush_long_term_summary(force=True)
+    assert local_state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20) == []
+
+    old_time = now - (3 * 24 * 60 * 60) - 60
+    old_path = local_state.memory_file_store.short_event_path(task_id=task_id, timestamp=old_time)
+    old_path.parent.mkdir(parents=True, exist_ok=True)
+    old_path.write_text(
+        f'{{"time":"{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(old_time))}","info":"页面：三天前可沉淀内容","code":"scn=pg|reg=main|k1=三天前可沉淀内容"}}\n',
+        encoding="utf-8",
+    )
+    local_state._flush_long_term_summary(force=True)
+    items = local_state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
+    assert len(items) == 1
+    assert "三天前可沉淀内容" in items[0]["summary"]
+    assert "今天的新内容" not in items[0]["summary"]
+    local_state.clear_runner()
+
+
+def test_flush_long_term_summary_prefers_short_fact_rows_over_raw_event_noise() -> None:
+    local_state = AppState()
+    task_id = f"task_long_term_from_short_{uuid4().hex}"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+            "memory": {
+                "long_term": {
+                    "enabled": True,
+                    "retain_hours": 24,
+                    "max_retain_hours": 72,
+                    "summary_interval_minutes": 1,
+                }
+            },
+        }
+    )
+    runner = local_state.set_runner(spec, task_id=task_id)
+    now = time.time()
+    old_time = now - (3 * 24 * 60 * 60) - 60
+    short_path = local_state.memory_file_store.short_event_path(task_id=task_id, timestamp=now)
+    short_path.parent.mkdir(parents=True, exist_ok=True)
+    short_path.write_text(
+        f'{{"time":"{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(old_time - 30))}","info":"页面：Apifox 登录页","code":"scn=pg|reg=main|k1=Apifox|k2=登录页"}}\n'
+        f'{{"time":"{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(old_time - 10))}","info":"表单：手机号输入框，确认按钮","code":"scn=frm|reg=main|k1=手机号输入框|k2=确认按钮"}}\n',
+        encoding="utf-8",
+    )
+    runner.run_once(now=now)
+    local_state._flush_long_term_summary(force=True)
+    items = local_state.sqlite_store.list_long_term_summaries(task_id=task_id, limit=20)
+    assert items
+    assert "Apifox 登录页" in items[-1]["summary"]
+    assert "手机号输入框" in items[-1]["summary"]
+    local_state.clear_runner()
 
 
 def test_sqlite_store_deletes_expired_long_term_summaries(tmp_path) -> None:

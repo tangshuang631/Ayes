@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from ayes.api.server import app, state
 from ayes.config.models import WatchSpec
 from ayes.events.factory import build_event
-from ayes.events.models import EventTarget, Observability
+from ayes.events.models import EventTarget, EventVisual, Observability, Region
 
 
 client = TestClient(app)
@@ -104,6 +104,60 @@ def test_event_sink_compacts_short_memory_when_threshold_reached() -> None:
     compact_path = state.memory_file_store.compact_segments_path(task_id=task_id, timestamp=1792944000.0)
     assert compact_path.exists()
     assert "Apifox 登录页" in compact_path.read_text(encoding="utf-8")
+
+
+def test_event_sink_indexes_only_memory_fact_not_raw_event_noise() -> None:
+    task_id = f"task_memory_fact_index_{uuid4().hex}"
+    spec = WatchSpec.from_dict(
+        {
+            "spec_version": "1.0",
+            "mode": "observe",
+            "target": {"type": "screen", "screen_id": 1},
+            "watch_intent": {"enabled": False},
+        }
+    )
+    state.set_runner(spec, task_id=task_id)
+    readable = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=1792944000.0,
+        source="ocr",
+        event_type="text_change",
+        priority="medium",
+        confidence=0.92,
+        target=EventTarget(type="process", process_name="Chrome", window_title="Apifox 登录页"),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="Apifox 登录页",
+    )
+    noisy = build_event(
+        task_id=task_id,
+        spec_version="1.0",
+        task_mode="observe",
+        timestamp=1792944030.0,
+        source="ocr",
+        event_type="text_change",
+        priority="low",
+        confidence=0.2,
+        target=EventTarget(type="screen", screen_id=1),
+        observability=Observability(True, True, True, True, "ok"),
+        summary="OCR 低质量文本已降权 (vision)",
+    )
+    noisy = noisy.__class__(
+        **{
+            **noisy.__dict__,
+            "region": Region(region_id="auto_bottom_bar", name="自动底部栏"),
+            "visual": EventVisual(attributes={"text_quality_score": 0.2, "text_quality_noisy": True}),
+        }
+    )
+
+    state._event_sink(readable)
+    state._event_sink(noisy)
+
+    result = state.search_index.query(task_id=task_id, question="Apifox 页面", minutes=240, now=1792944600.0)
+    encoded = str(result)
+    assert "页面：Apifox 登录页" in encoded
+    assert "OCR 低质量文本已降权" not in encoded
 
 
 def test_apply_memory_cleanup_deletes_expired_short_and_long_memory() -> None:

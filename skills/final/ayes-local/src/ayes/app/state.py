@@ -24,13 +24,15 @@ from ayes.config.models import (
 )
 from ayes.logs.store import LogStore
 from ayes.memory.file_store import TaskMemoryFileStore
-from ayes.memory.long_term import build_long_term_summary
+from ayes.memory.long_term import build_long_term_summary_from_short_rows
 from ayes.memory.search_index import MemorySearchIndex
 from ayes.storage.sqlite_store import SQLiteStore
 from ayes.targets.discovery import create_window_discovery
 
 
 class AppState:
+    LONG_TERM_SHORT_FACT_MIN_AGE_SECONDS = 3 * 24 * 60 * 60
+
     def __init__(self) -> None:
         self.runtime_dir = runtime_root()
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -351,12 +353,14 @@ class AppState:
 
     def _event_sink(self, event) -> None:
         self.sqlite_store.insert_event(event)
-        self.memory_file_store.append_short_event(event)
+        fact = self.memory_file_store.fact_from_event(event)
+        self.memory_file_store.append_short_event(event, fact=fact)
         self._maybe_compact_short_memory(task_id=event.task_id, timestamp=event.timestamp, force=False)
-        try:
-            self.search_index.index_event(event)
-        except Exception as exc:
-            self.last_error = f"memory_index_failed: {exc}"
+        if fact is not None:
+            try:
+                self.search_index.index_fact(fact)
+            except Exception as exc:
+                self.last_error = f"memory_index_failed: {exc}"
 
     def _maybe_compact_short_memory(self, *, task_id: str, timestamp: float, force: bool = False) -> Optional[dict]:
         policy = self.get_task_memory_policy(task_id)
@@ -855,10 +859,27 @@ class AppState:
                 return
         if self._last_long_term_event_index >= len(events):
             return
-        pending_events = events[self._last_long_term_event_index :]
-        if not pending_events:
+        window_start = float(self._last_long_term_summary_at if self._last_long_term_summary_at is not None else 0.0)
+        mature_until = latest_event_at - self.LONG_TERM_SHORT_FACT_MIN_AGE_SECONDS
+        if mature_until <= window_start:
+            self._prune_expired_long_term_summaries(task_id=self.current_task_id, now=latest_event_at)
             return
-        summary = build_long_term_summary(task_id=self.current_task_id, events=pending_events)
+        window_end = mature_until
+        short_rows = self.memory_file_store.list_short_fact_rows(
+            task_id=self.current_task_id,
+            since_timestamp=window_start,
+            until_timestamp=window_end,
+            limit=500,
+        )
+        if not short_rows:
+            self._prune_expired_long_term_summaries(task_id=self.current_task_id, now=latest_event_at)
+            return
+        summary = build_long_term_summary_from_short_rows(
+            task_id=self.current_task_id,
+            rows=short_rows,
+            window_start=window_start,
+            window_end=window_end,
+        )
         self.sqlite_store.insert_long_term_summary(
             summary_id=summary["summary_id"],
             task_id=summary["task_id"],
@@ -1077,6 +1098,7 @@ class AppState:
             "memory_policy": memory_policy,
             "app_settings": self.get_app_settings(),
             "task_hotkeys": hotkeys,
+            "alert": asdict(task_spec.alert) if task_spec is not None else None,
             "vision_settings": asdict(task_spec.vision) if task_spec is not None else self.get_vision_enhancement_settings(),
             "vision_effective": effective_vision or self.build_vision_effective_summary(),
             "tasks": self.list_tasks(limit=10),

@@ -67,6 +67,7 @@ def cleanup_storage(
     legacy: bool = False,
     vacuum: bool = False,
     rebuild_index: bool = False,
+    empty_evidence: bool = False,
 ) -> Dict[str, Any]:
     runtime = Path(runtime_dir).resolve()
     task_ids = [task_id] if task_id else [str(task.get("task_id") or "") for task in sqlite_store.list_tasks(limit=10000)]
@@ -80,6 +81,7 @@ def cleanup_storage(
         "legacy": _empty_delete_result(),
         "index_rebuild": {"indexed_chunks": 0, "task_count": 0, "tasks": []},
         "sqlite_vacuum": None,
+        "empty_evidence": _empty_delete_result(),
     }
     for item_task_id in task_ids:
         task_dirs = _find_task_dirs(runtime_dir=runtime, task_id=item_task_id)
@@ -92,6 +94,8 @@ def cleanup_storage(
                 _merge_delete_result(cleanup["logs"], _delete_path(task_dir / "logs"))
             if memory:
                 _merge_delete_result(cleanup["memory"], _delete_path(task_dir / "memory"))
+            if empty_evidence:
+                _merge_delete_result(cleanup["empty_evidence"], _delete_empty_dir(task_dir / "screenshots" / "evidence"))
         if index:
             result = search_index.delete_task_index(item_task_id)
             _merge_delete_result(cleanup["index"], result)
@@ -179,6 +183,28 @@ def _delete_path(path: Path) -> Dict[str, Any]:
     except OSError as exc:
         result["errors"].append({"path": str(path), "error": str(exc)})
         result["deleted_bytes"] = 0
+    return result
+
+
+def _delete_empty_dir(path: Path) -> Dict[str, Any]:
+    result = _empty_delete_result()
+    result["paths"] = []
+    if not path.exists() or not path.is_dir():
+        return result
+    try:
+        next(path.iterdir())
+        return result
+    except StopIteration:
+        pass
+    except OSError as exc:
+        result["errors"].append({"path": str(path), "error": str(exc)})
+        return result
+    try:
+        path.rmdir()
+        result["deleted_paths"] = 1
+        result["paths"].append(str(path))
+    except OSError as exc:
+        result["errors"].append({"path": str(path), "error": str(exc)})
     return result
 
 

@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from ayes.events.models import TimelineEvent
 from ayes.app.task_paths import date_from_timestamp, safe_task_segment, task_runtime_paths
+from ayes.memory.facts import MemoryFact, MemoryFactExtractor
 
 
 class TaskMemoryFileStore:
@@ -19,6 +20,7 @@ class TaskMemoryFileStore:
         self.runtime_dir = Path(runtime_dir).resolve()
         self.task_path_resolver = task_path_resolver
         self._last_short_by_path: dict[str, tuple[str, float]] = {}
+        self.fact_extractor = MemoryFactExtractor()
 
     def task_dir(self, task_id: str, *, timestamp: float | None = None) -> Path:
         if self.task_path_resolver is not None:
@@ -41,14 +43,19 @@ class TaskMemoryFileStore:
         date_text = date_from_timestamp(timestamp)
         return self.task_dir(safe_task_id, timestamp=timestamp) / "compact" / f"{date_text}-{safe_task_id}-segments.jsonl"
 
-    def append_short_event(self, event: TimelineEvent) -> Path:
+    def append_short_event(self, event: TimelineEvent, *, fact: Optional[MemoryFact] = None) -> Path:
         path = self.short_event_path(task_id=event.task_id, timestamp=event.timestamp)
-        payload = self._compact_short_event(event)
-        if payload is not None:
+        if fact is None:
+            fact = self.fact_from_event(event)
+        if fact is not None:
+            payload = fact.to_short_payload(time_text=self._format_timestamp(event.timestamp))
             if self._is_duplicate_short_payload(path=path, payload=payload, timestamp=event.timestamp):
                 return path
             self._append_jsonl(path, payload)
         return path
+
+    def fact_from_event(self, event: TimelineEvent) -> Optional[MemoryFact]:
+        return self.fact_extractor.extract(event)
 
     def append_long_summary(self, payload: Dict[str, Any]) -> Path:
         task_id = str(payload.get("task_id") or "unknown")
@@ -66,7 +73,7 @@ class TaskMemoryFileStore:
             output.write("\n")
 
     def _is_duplicate_short_payload(self, *, path: Path, payload: Dict[str, Any], timestamp: float) -> bool:
-        info = str(payload.get("info") or "")
+        info = str(payload.get("code") or payload.get("info") or "")
         region = str(payload.get("region") or "")
         if region:
             info = f"{region}\n{info}"
@@ -133,15 +140,17 @@ class TaskMemoryFileStore:
             return None
         info = self._prefer_fact_like_info(event, info)
         info = self._compact_list_like_info(event, info)
-        if self._is_low_information_fragment(event, info):
+        full_info = info
+        if self._is_low_information_fragment(event, full_info):
             return None
-        if self._is_medium_quality_noise(event, info):
+        if self._is_medium_quality_noise(event, full_info):
             return None
+        code = self._build_compact_info_code(full_info, region=event.region.name or event.region.region_id or "") if self._should_emit_compact_code(full_info) else ""
+        info = self._short_info_from_code(full_info, code=code)
         payload = {
             "time": self._format_timestamp(event.timestamp),
             "info": info,
         }
-        code = self._build_compact_info_code(info, region=event.region.name or event.region.region_id or "") if self._should_emit_compact_code(info) else ""
         if code:
             payload["code"] = code
         region = self._compact_region_name(event)
@@ -443,7 +452,7 @@ class TaskMemoryFileStore:
         }.get(prefix, prefix.lower())
         parts = [part.strip() for part in re.split(r"[，,；;]", rest) if part.strip()]
         compact_parts = parts[:3]
-        region_alias = "main"
+        region_alias = "roi"
         if "顶部" in region:
             region_alias = "top"
         elif "左侧" in region:
@@ -452,12 +461,61 @@ class TaskMemoryFileStore:
             region_alias = "right"
         elif "底部" in region:
             region_alias = "bottom"
+        elif "主内容" in region:
+            region_alias = "main"
         elif "全目标" in region:
             region_alias = "full"
-        slots = [f"scn={scene_alias}", f"reg={region_alias}"]
-        for index, part in enumerate(compact_parts, start=1):
-            slots.append(f"k{index}={part}")
+        slots = [f"scene={scene_alias}", f"reg={region_alias}"]
+        pos = self._position_slot(region=region, parts=compact_parts)
+        if pos:
+            slots.append(f"pos={pos}")
+        sub = self._subregion_slot(parts=compact_parts)
+        if sub:
+            slots.append(f"sub={sub}")
+        for slot_name, part in zip(["subj", "ctx", "bg"], compact_parts):
+            value = self._compact_slot_value(part)
+            if value:
+                slots.append(f"{slot_name}={value}")
         return "|".join(slots)
+
+    def _short_info_from_code(self, info: str, *, code: str) -> str:
+        if not code or "：" not in info:
+            return info
+        prefix, rest = info.split("：", 1)
+        first = next((part.strip() for part in re.split(r"[，,；;]", rest) if part.strip()), "")
+        first = self._compact_slot_value(first)
+        if not first:
+            return info
+        return self._trim_info(f"{prefix}：{first}")
+
+    def _compact_slot_value(self, value: str) -> str:
+        text = self._trim_info(str(value or "").strip(" ，。,.；;"))
+        for old in ["标题为", "标题：", "标题:", "显示", "包含"]:
+            if text.startswith(old):
+                text = text.replace(old, "", 1).strip()
+        return self._trim_info(text)
+
+    def _position_slot(self, *, region: str, parts: list[str]) -> str:
+        haystack = " ".join([region, *parts])
+        if "顶部" in region or "上方" in haystack or "顶栏" in haystack:
+            return "top"
+        if "底部" in region or "下方" in haystack or "底栏" in haystack:
+            return "bottom"
+        if "左侧" in region:
+            return "left"
+        if "右侧" in region:
+            return "right"
+        if "中央" in haystack or "中部" in haystack or "主内容" in region:
+            return "center"
+        return ""
+
+    def _subregion_slot(self, *, parts: list[str]) -> str:
+        haystack = " ".join(parts)
+        if "主内容左" in haystack or "左半" in haystack:
+            return "main_left"
+        if "主内容右" in haystack or "右半" in haystack:
+            return "main_right"
+        return ""
 
     def _should_emit_compact_code(self, info: str) -> bool:
         text = str(info or "").strip()
@@ -540,6 +598,32 @@ class TaskMemoryFileStore:
                 rows.append(payload)
         return rows
 
+    def list_short_fact_rows(
+        self,
+        *,
+        task_id: str,
+        since_timestamp: float = 0.0,
+        until_timestamp: float | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        rows: list[dict] = []
+        root = self.runtime_dir / "tasks"
+        safe_task_id = safe_task_segment(task_id)
+        for path in sorted(root.glob(f"**/{safe_task_id}/memory/short/*.jsonl"), reverse=True):
+            for payload in reversed(self._read_jsonl(path)):
+                timestamp = self._parse_time(payload.get("time"))
+                if timestamp < since_timestamp:
+                    continue
+                if until_timestamp is not None and timestamp > until_timestamp:
+                    continue
+                fact = self._normalize_short_fact_row(payload, timestamp=timestamp)
+                if fact is None:
+                    continue
+                rows.append(fact)
+                if len(rows) >= limit:
+                    return sorted(rows, key=lambda item: float(item.get("timestamp") or 0.0))
+        return sorted(rows, key=lambda item: float(item.get("timestamp") or 0.0))
+
     def _build_adjacent_segments(self, rows: list[dict]) -> list[dict]:
         segments: list[dict] = []
         current: Optional[dict] = None
@@ -569,6 +653,29 @@ class TaskMemoryFileStore:
         if current is not None:
             segments.append(current)
         return segments
+
+    def _normalize_short_fact_row(self, payload: dict, *, timestamp: float) -> Optional[dict]:
+        info = self._trim_info(str(payload.get("info") or ""))
+        if not info or self._looks_like_gibberish(info):
+            return None
+        code = self._trim_info(str(payload.get("code") or ""))
+        region = self._trim_info(str(payload.get("region") or ""))
+        return {
+            "timestamp": timestamp,
+            "time": str(payload.get("time") or ""),
+            "info": info,
+            "code": code,
+            "region": region,
+        }
+
+    def _parse_time(self, value: object) -> float:
+        text = str(value or "").strip()
+        if not text:
+            return 0.0
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
 
     def _normalize_segment_key(self, *, info: str, region: str) -> str:
         return "\n".join([self._normalize_segment_info(region), self._normalize_segment_info(info)])

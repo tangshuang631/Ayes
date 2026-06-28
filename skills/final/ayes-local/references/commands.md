@@ -70,7 +70,7 @@ ayes-agent-local roi list --task-id 2026-06-25__price_watch
 ayes-agent-local roi create --task-id 2026-06-25__price_watch --roi-name 价格监控 --region "roi_price|价格监控|120|240|360|160|target"
 ayes-agent-local roi update --task-id 2026-06-25__price_watch --roi-task-id 2026-06-25__price_watch__roi_价格监控 --enabled false
 ayes-agent-local roi delete --task-id 2026-06-25__price_watch --roi-task-id 2026-06-25__price_watch__roi_价格监控
-ayes-agent-local task-alert --task-id 2026-06-25__price_watch__roi_价格监控 --enabled true --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx" --message-title "价格提醒"
+ayes-agent-local task-alert --task-id 2026-06-25__price_watch__roi_价格监控 --enabled true --webhook-url "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx" --message-title "价格提醒" --message-template "任务 {task_id} 命中：{summary}"
 ayes-agent-local switch-task --task-id 2026-06-25__price_watch
 ayes-agent-local delete-task --task-id 2026-06-25__old_watch
 ayes-agent-local control status
@@ -93,15 +93,16 @@ ayes-agent-local task --task-id task_web
 - `storage status`：查看运行目录、SQLite、每个任务截图/记忆/日志/索引/配置目录占用摘要；只返回大小和路径摘要，不读取原始日志正文或记忆正文
 - `storage cleanup --legacy --vacuum`：清理 runtime 根目录旧遗留文件并执行 SQLite VACUUM，适合安装升级后收尾
 - `storage cleanup --task-id ... --screenshots --logs --index --rebuild-index --vacuum`：清理某任务截图、日志和旧索引，然后从 `memory/compact`、`memory/short`、`memory/long` 重建轻量检索索引并压缩 SQLite
+- `storage cleanup --task-id ... --empty-evidence`：只删除空的 `screenshots/evidence/` 目录；不会删除 `screenshots/latest/`，也不会删除已有证据图片
 - `storage cleanup --all`：清理截图、日志、索引和 legacy；不会隐式删除 `memory/`
 - `storage cleanup --memory`：显式删除任务记忆目录，仅在用户明确要求“删除记忆/历史”时使用
 - `sampling`：读取或更新当前任务采样策略；默认 6 秒，截图 / OCR / 变化检测会同步调整
 - `sampling --task-id`：读取或更新指定主任务/ROI 子任务的采样策略，不需要先切换当前任务
 - `sampling --interval-sec 0.5-3600`：按秒更新当前任务采样间隔，允许范围 0.5 秒到 1 小时
 - `sampling --quality original|standard|space_saver|ultra_saver`：设置采样图质量；`standard` 最长边 1920，`space_saver` 最长边 1280，`ultra_saver` 最长边 960
-- `sampling --save-ocr-screenshots false`：关闭逐事件证据截图落盘，只保留记忆、事件、日志和少量 `screenshots/latest/` 最新帧；截图快捷键仍可使用 latest 临时帧
+- `sampling --save-ocr-screenshots false`：关闭逐事件证据截图落盘，只保留记忆、事件、日志和少量 `screenshots/latest/` 最新帧；截图快捷键仍可使用 latest 临时帧。此时 `screenshots/evidence/` 为空是正常的，可用 `storage cleanup --empty-evidence` 清掉空目录
 - `roi list/create/update/delete`：通过 agent 对话列出、创建、命名、启用/禁用或删除某个主任务下的 ROI 子任务；ROI 子任务有独立 `task_id` 和独立目录树
-- `task-alert`：读取或更新某个主任务/ROI 子任务的企业微信 webhook、消息标题和模板
+- `task-alert`：读取或更新某个主任务/ROI 子任务的企业微信 webhook、启用状态、消息标题和消息模板；用户通过 agent 对话说“给这个任务配置 webhook/通知提示语”时，优先用这个命令写入任务专属配置，不写全局配置
 - `switch-task`：把历史任务恢复为当前任务
 - `delete-task`：删除指定任务及其长短期记忆、日志与长期摘要
 - `control status/pause-all/resume-all`：给 agent 和菜单栏共享同一套后台暂停/恢复状态入口

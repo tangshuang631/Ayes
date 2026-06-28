@@ -17,8 +17,10 @@ from ayes.app.state import AppState
 from ayes.app.paths import repo_root, runtime_root
 from ayes.api.contracts import (
     build_activity_payload,
+    build_activity_payload_from_fact_rows,
     build_agent_contract_payload,
     build_memory_items_payload,
+    build_memory_items_payload_from_fact_rows,
     build_observe_live_payload,
     build_preview_overlay,
     build_query_result_payload,
@@ -35,7 +37,9 @@ from ayes.config.models import (
 )
 from ayes.events.models import EventTarget, EventText, EventTextBlock, EventVisual, Observability, Region, TimelineEvent, WatchMatch
 from ayes.memory.content_signal import content_signal_score
+from ayes.memory.long_term import build_long_term_summary_from_short_rows
 from ayes.memory.short_term import QueryResult
+from ayes.time_utils import format_local_clock
 from ayes.planner.service import WatchSpecPlanner
 from ayes.storage.maintenance import build_storage_status, cleanup_storage
 from ayes.targets.preview import TargetPreviewService
@@ -285,7 +289,7 @@ def _build_content_query_result_from_short_files(*, task_id: str, minutes: int, 
         return None
     events.sort(key=lambda event: (content_signal_score(event, question=question), event.timestamp), reverse=True)
     selected = sorted(events[:5], key=lambda event: event.timestamp)
-    answer = "；".join(f"{event.summary}@{datetime.fromtimestamp(event.timestamp).strftime('%H:%M:%S')}" for event in selected)
+    answer = "；".join(f"{event.summary}@{format_local_clock(event.timestamp)}" for event in selected)
     return QueryResult(
         answer=answer,
         confidence=0.82,
@@ -347,6 +351,20 @@ def _build_long_term_query_result_from_store(*, task_id: str, hours: int, keywor
         confidence=0.78,
         matched_events=matched_events[-5:],
         memory_layers_used=["long_term_persisted"],
+    )
+
+
+def _build_long_term_summary_from_short_memory_files(*, task_id: str, hours: int) -> Optional[dict]:
+    now = time.time()
+    since_timestamp = now - (hours * 60 * 60)
+    rows = state.memory_file_store.list_short_fact_rows(task_id=task_id, since_timestamp=since_timestamp, limit=500)
+    if not rows:
+        return None
+    return build_long_term_summary_from_short_rows(
+        task_id=task_id,
+        rows=rows,
+        window_start=max(since_timestamp, float(rows[0].get("timestamp") or since_timestamp)),
+        window_end=float(rows[-1].get("timestamp") or now),
     )
 
 
@@ -936,6 +954,10 @@ def get_memory_items(
     resolved_task_id = _resolve_task_id(task_id)
     if not resolved_task_id:
         return JSONResponse({"task_id": None, "minutes": minutes, "limit": limit, "compact": compact, "count": 0, "items": []})
+    since_timestamp = time.time() - (minutes * 60)
+    fact_rows = state.memory_file_store.list_short_fact_rows(task_id=resolved_task_id, since_timestamp=since_timestamp, limit=limit)
+    if fact_rows:
+        return JSONResponse(build_memory_items_payload_from_fact_rows(items=fact_rows, task_id=resolved_task_id, minutes=minutes, limit=limit))
     items = state.sqlite_store.query_events(
         task_id=resolved_task_id,
         minutes=minutes,
@@ -962,6 +984,11 @@ def get_activity_summary(
                 has_screenshot_evidence=False,
             )
         )
+    fact_rows = state.memory_file_store.list_short_fact_rows(
+        task_id=resolved_task_id,
+        since_timestamp=observed_at - (minutes * 60),
+        limit=20,
+    )
     items = state.sqlite_store.query_events(
         task_id=resolved_task_id,
         minutes=minutes,
@@ -969,6 +996,16 @@ def get_activity_summary(
         now=observed_at,
     )
     has_screenshot_evidence = bool(state.last_screenshot_path)
+    if fact_rows:
+        return JSONResponse(
+            build_activity_payload_from_fact_rows(
+                items=fact_rows,
+                task_id=resolved_task_id,
+                minutes=minutes,
+                observed_at=observed_at,
+                has_screenshot_evidence=has_screenshot_evidence,
+            )
+        )
     return JSONResponse(
         build_activity_payload(
             items=items,
@@ -996,6 +1033,7 @@ def query_question(
         question=question,
         minutes=minutes,
         limit=limit,
+        compact_items=True,
     )
     if index_payload.get("items"):
         payload = dict(index_payload)
@@ -1486,6 +1524,7 @@ def run_storage_cleanup(payload: dict = Body(default={})) -> JSONResponse:
         legacy=bool(payload.get("legacy", False)),
         vacuum=bool(payload.get("vacuum", False)),
         rebuild_index=bool(payload.get("rebuild_index", False)),
+        empty_evidence=bool(payload.get("empty_evidence", False)),
     )
     return JSONResponse({"status": "ok", "cleanup": cleanup})
 

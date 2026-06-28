@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import re
 from typing import Iterable, List, Optional
 
 from ayes.events.models import TimelineEvent
 from ayes.memory.content_signal import rank_memory_events, summarize_memory_event
+from ayes.time_utils import format_local_clock
 
 
 @dataclass(frozen=True)
@@ -290,4 +290,4 @@ def operator_label(operator: str) -> str:
 
 
 def format_human_time(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%H:%M:%S")
+    return format_local_clock(timestamp)
